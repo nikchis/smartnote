@@ -96,7 +96,7 @@ func TestSyncStateAndRestore(t *testing.T) {
 	}
 
 	var count int
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM note_versions WHERE note_id = ?", gone.ID.String()).Scan(&count); err != nil || count != 0 {
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM note_version WHERE note_uuid = ?", gone.ID.String()).Scan(&count); err != nil || count != 0 {
 		t.Errorf("versions of the deleted note = %d, %v", count, err)
 	}
 }

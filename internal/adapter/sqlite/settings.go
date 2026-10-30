@@ -18,7 +18,7 @@ func (s *Store) LoadSettings(ctx context.Context) (domain.ConnectionSettings, er
 	err := s.unlocked(func(db *sql.DB, dek []byte) error {
 		var sealed []byte
 
-		err := db.QueryRowContext(ctx, "SELECT settings FROM connection WHERE id = 1").Scan(&sealed)
+		err := db.QueryRowContext(ctx, "SELECT settings FROM connection WHERE connection_id = 1").Scan(&sealed)
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && sealed == nil) {
 			return nil
 		}
@@ -60,8 +60,8 @@ func (s *Store) SaveSettings(ctx context.Context, settings domain.ConnectionSett
 			return err
 		}
 
-		_, err = db.ExecContext(ctx, `INSERT INTO connection (id, settings) VALUES (1, ?)
-			ON CONFLICT (id) DO UPDATE SET settings = excluded.settings`, sealed)
+		_, err = db.ExecContext(ctx, `INSERT INTO connection (connection_id, settings) VALUES (1, ?)
+			ON CONFLICT (connection_id) DO UPDATE SET settings = excluded.settings`, sealed)
 
 		return err
 	})
@@ -85,7 +85,7 @@ func (s *Store) LoadKey(ctx context.Context) (domain.KeyPair, bool, error) {
 			public string
 		)
 
-		err := db.QueryRowContext(ctx, "SELECT private_key, public_key FROM ssh_key WHERE id = 1").Scan(&sealed, &public)
+		err := db.QueryRowContext(ctx, "SELECT private_key, public_key FROM ssh_key WHERE ssh_key_id = 1").Scan(&sealed, &public)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -118,8 +118,8 @@ func (s *Store) SaveKey(ctx context.Context, k domain.KeyPair) error {
 			return err
 		}
 
-		_, err = db.ExecContext(ctx, `INSERT INTO ssh_key (id, private_key, public_key) VALUES (1, ?, ?)
-			ON CONFLICT (id) DO UPDATE SET private_key = excluded.private_key, public_key = excluded.public_key`,
+		_, err = db.ExecContext(ctx, `INSERT INTO ssh_key (ssh_key_id, private_key, public_key) VALUES (1, ?, ?)
+			ON CONFLICT (ssh_key_id) DO UPDATE SET private_key = excluded.private_key, public_key = excluded.public_key`,
 			sealed, k.PublicAuthorized)
 
 		return err

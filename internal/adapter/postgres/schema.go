@@ -21,30 +21,30 @@ const formatVersion = 1
 const schemaLockKey = "smartnote.schema"
 
 // storageTables are the tables of the remote storage.
-var storageTables = []string{"smartnote.meta", "smartnote.notes", "smartnote.sync_state"}
+var storageTables = []string{"smartnote.meta", "smartnote.note", "smartnote.sync_state"}
 
 // ddl creates the tables of spec §5.2 in an existing smartnote schema.
 const ddl = `
 CREATE TABLE IF NOT EXISTS smartnote.meta (
-  id             smallint PRIMARY KEY CHECK (id = 1),
-  server_id      uuid     NOT NULL,
+  meta_id        smallint PRIMARY KEY CHECK (meta_id = 1),
+  server_uuid    uuid     NOT NULL,
   format_version integer  NOT NULL,
   kdf_params     jsonb    NOT NULL,
   kdf_salt       bytea    NOT NULL,
   key_check      bytea    NOT NULL
 );
-CREATE TABLE IF NOT EXISTS smartnote.notes (
-  note_id uuid        PRIMARY KEY,
-  updated timestamptz NOT NULL,
-  name    bytea       NOT NULL,
-  info    bytea       NOT NULL
+CREATE TABLE IF NOT EXISTS smartnote.note (
+  note_uuid uuid        PRIMARY KEY,
+  updated   timestamptz NOT NULL,
+  name      bytea       NOT NULL,
+  info      bytea       NOT NULL
 );
 CREATE TABLE IF NOT EXISTS smartnote.sync_state (
-  id         smallint    PRIMARY KEY CHECK (id = 1),
-  revision   bigint      NOT NULL,
-  updated_at timestamptz NOT NULL
+  sync_state_id smallint    PRIMARY KEY CHECK (sync_state_id = 1),
+  revision      bigint      NOT NULL,
+  updated_at    timestamptz NOT NULL
 );
-INSERT INTO smartnote.sync_state (id, revision, updated_at) VALUES (1, 0, now()) ON CONFLICT DO NOTHING;`
+INSERT INTO smartnote.sync_state (sync_state_id, revision, updated_at) VALUES (1, 0, now()) ON CONFLICT DO NOTHING;`
 
 // Key derivation and the key check (spec §5.3).
 const (
@@ -55,7 +55,7 @@ const (
 func aadKeyCheck() sealbox.AAD { return sealbox.AAD{Table: "meta", Column: "key_check", RowID: "1"} }
 
 func aadNote(column, id string) sealbox.AAD {
-	return sealbox.AAD{Table: "notes", Column: column, RowID: id}
+	return sealbox.AAD{Table: "note", Column: column, RowID: id}
 }
 
 // meta is the row of smartnote.meta.

@@ -42,7 +42,7 @@ type querier interface {
 }
 
 func listNotes(ctx context.Context, q querier, dek []byte) (_ []domain.Note, err error) {
-	rows, err := q.QueryContext(ctx, "SELECT note_id, updated, name, info FROM notes")
+	rows, err := q.QueryContext(ctx, "SELECT note_uuid, updated, name, info FROM note")
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func (s *Store) GetNote(ctx context.Context, id uuid.UUID) (domain.Note, error) 
 	var n domain.Note
 
 	err := s.unlocked(func(db *sql.DB, dek []byte) error {
-		row := db.QueryRowContext(ctx, "SELECT note_id, updated, name, info FROM notes WHERE note_id = ?", id.String())
+		row := db.QueryRowContext(ctx, "SELECT note_uuid, updated, name, info FROM note WHERE note_uuid = ?", id.String())
 
 		var err error
 
@@ -132,7 +132,7 @@ func insertNote(ctx context.Context, q querier, dek []byte, n domain.Note) error
 		return err
 	}
 
-	_, err = q.ExecContext(ctx, "INSERT INTO notes (note_id, updated, name, info) VALUES (?, ?, ?, ?)",
+	_, err = q.ExecContext(ctx, "INSERT INTO note (note_uuid, updated, name, info) VALUES (?, ?, ?, ?)",
 		id, toMillis(n.Updated), name, info)
 
 	return err
@@ -156,7 +156,7 @@ func updateNoteWithVersion(ctx context.Context, q querier, dek []byte, n domain.
 		return err
 	}
 
-	if err := execOne(ctx, q, "UPDATE notes SET updated = ?, name = ?, info = ? WHERE note_id = ?",
+	if err := execOne(ctx, q, "UPDATE note SET updated = ?, name = ?, info = ? WHERE note_uuid = ?",
 		toMillis(n.Updated), name, info, n.ID.String()); err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func insertVersion(ctx context.Context, q querier, dek []byte, v domain.NoteVers
 		return err
 	}
 
-	_, err = q.ExecContext(ctx, "INSERT INTO note_versions (version_id, note_id, created, info) VALUES (?, ?, ?, ?)",
+	_, err = q.ExecContext(ctx, "INSERT INTO note_version (note_version_uuid, note_uuid, created, info) VALUES (?, ?, ?, ?)",
 		vid, nid, toMillis(v.Created), info)
 
 	return err
@@ -194,7 +194,7 @@ func updateNoteName(ctx context.Context, q querier, dek []byte, id uuid.UUID, na
 		return err
 	}
 
-	return execOne(ctx, q, "UPDATE notes SET updated = ?, name = ? WHERE note_id = ?", toMillis(updated), sealed, id.String())
+	return execOne(ctx, q, "UPDATE note SET updated = ?, name = ? WHERE note_uuid = ?", toMillis(updated), sealed, id.String())
 }
 
 // DeleteNote removes note id; its versions go with it (ON DELETE CASCADE).
@@ -208,7 +208,7 @@ func (s *Store) DeleteNote(ctx context.Context, id uuid.UUID) error {
 }
 
 func deleteNote(ctx context.Context, q querier, id uuid.UUID) error {
-	return execOne(ctx, q, "DELETE FROM notes WHERE note_id = ?", id.String())
+	return execOne(ctx, q, "DELETE FROM note WHERE note_uuid = ?", id.String())
 }
 
 // ListVersions returns the previous texts of note noteID. A version moved to
@@ -218,7 +218,7 @@ func (s *Store) ListVersions(ctx context.Context, noteID uuid.UUID) ([]domain.No
 
 	err := s.unlocked(func(db *sql.DB, dek []byte) (err error) {
 		rows, err := db.QueryContext(ctx,
-			"SELECT version_id, note_id, created, info FROM note_versions WHERE note_id = ?", noteID.String())
+			"SELECT note_version_uuid, note_uuid, created, info FROM note_version WHERE note_uuid = ?", noteID.String())
 		if err != nil {
 			return err
 		}

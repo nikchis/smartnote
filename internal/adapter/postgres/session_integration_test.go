@@ -163,7 +163,7 @@ func revision(t *testing.T, cfg *pgx.ConnConfig) int64 {
 	t.Helper()
 
 	var r int64
-	adminQueryRow(t, cfg, []any{&r}, "SELECT revision FROM smartnote.sync_state WHERE id = 1")
+	adminQueryRow(t, cfg, []any{&r}, "SELECT revision FROM smartnote.sync_state WHERE sync_state_id = 1")
 
 	return r
 }
@@ -172,7 +172,7 @@ func noteCount(t *testing.T, cfg *pgx.ConnConfig) int {
 	t.Helper()
 
 	var n int
-	adminQueryRow(t, cfg, []any{&n}, "SELECT count(*) FROM smartnote.notes")
+	adminQueryRow(t, cfg, []any{&n}, "SELECT count(*) FROM smartnote.note")
 
 	return n
 }
@@ -404,10 +404,10 @@ func TestBackupServerReplacedSameRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	adminExec(t, cfg, "UPDATE smartnote.meta SET server_id = $1", uuid.NewString())
+	adminExec(t, cfg, "UPDATE smartnote.meta SET server_uuid = $1", uuid.NewString())
 
 	for range 2 {
-		adminExec(t, cfg, "INSERT INTO smartnote.notes VALUES ($1, now(), '\\x00', '\\x00')", uuid.NewString())
+		adminExec(t, cfg, "INSERT INTO smartnote.note VALUES ($1, now(), '\\x00', '\\x00')", uuid.NewString())
 	}
 
 	if _, err := s.Backup(ctx, []domain.Note{testNote("a", "b")}, serverA, 1); !errors.Is(err, domain.ErrRemoteChanged) {
@@ -594,8 +594,8 @@ func TestTamperedRow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	adminExec(t, cfg, `UPDATE smartnote.notes n SET info = o.info FROM smartnote.notes o
-		WHERE n.note_id <> o.note_id`)
+	adminExec(t, cfg, `UPDATE smartnote.note n SET info = o.info FROM smartnote.note o
+		WHERE n.note_uuid <> o.note_uuid`)
 
 	if _, err := s.Snapshot(ctx); !errors.Is(err, errNoteDoesNotOpen) {
 		t.Errorf("Snapshot = %v, want errNoteDoesNotOpen", err)
@@ -620,10 +620,67 @@ func TestServerKDFOutOfRange(t *testing.T) {
 	}
 }
 
+// TestKeyNaming checks the naming rule: the primary key of table t is t_id
+// when it is an integer and t_uuid when it is a uuid.
+func TestKeyNaming(t *testing.T) {
+	cfg := newDatabase(t)
+	mustOpen(t, cfg, usecase.OpenCreate)
+
+	conn := connect(t, cfg)
+	defer func() {
+		if err := conn.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	rows, err := conn.Query(context.Background(), `SELECT c.relname, a.attname, format_type(a.atttypid, NULL)
+		FROM pg_index i
+		JOIN pg_class c ON c.oid = i.indrelid
+		JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)
+		WHERE i.indisprimary AND c.relnamespace = 'smartnote'::regnamespace`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keys := map[string][]string{}
+
+	for rows.Next() {
+		var table, column, typ string
+		if err := rows.Scan(&table, &column, &typ); err != nil {
+			t.Fatal(err)
+		}
+
+		want := table + "_id"
+		if typ == "uuid" {
+			want = table + "_uuid"
+		}
+
+		if column != want {
+			t.Errorf("table %s: key %s %s, want %s", table, column, typ, want)
+		}
+
+		keys[table] = append(keys[table], column)
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(keys) != len(storageTables) {
+		t.Errorf("primary keys %v, want one for each of %v", keys, storageTables)
+	}
+
+	for table, columns := range keys {
+		if len(columns) != 1 {
+			t.Errorf("table %s: primary key %v, want one column", table, columns)
+		}
+	}
+}
+
 // A storage that lost a table is damaged: recreating the table empty would
 // make an empty snapshot look genuine and let Restore delete local notes.
 func TestPartialSchemaRefused(t *testing.T) {
-	for _, table := range []string{"notes", "sync_state", "meta"} {
+	for _, table := range []string{"note", "sync_state", "meta"} {
 		t.Run(table, func(t *testing.T) {
 			cfg := newDatabase(t)
 
@@ -669,7 +726,7 @@ func TestNoPlaintextInTables(t *testing.T) {
 
 	var dump string
 	adminQueryRow(t, cfg, []any{&dump}, `SELECT string_agg(encode(name, 'escape') || encode(info, 'escape'), '')
-		FROM smartnote.notes`)
+		FROM smartnote.note`)
 
 	var meta string
 	adminQueryRow(t, cfg, []any{&meta}, `SELECT encode(key_check, 'escape') FROM smartnote.meta`)

@@ -67,7 +67,7 @@ func TestNotesCRUDAndCascade(t *testing.T) {
 	}
 
 	var count int
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM note_versions").Scan(&count); err != nil || count != 0 {
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM note_version").Scan(&count); err != nil || count != 0 {
 		t.Errorf("versions after delete = %d, %v; want 0", count, err)
 	}
 }
@@ -95,7 +95,7 @@ func TestNotesMissingID(t *testing.T) {
 	}
 
 	var count int
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM note_versions").Scan(&count); err != nil || count != 0 {
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM note_version").Scan(&count); err != nil || count != 0 {
 		t.Errorf("versions = %d, %v; the failed update kept a version", count, err)
 	}
 }
@@ -116,7 +116,7 @@ func TestVersionBoundToNote(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := s.db.ExecContext(ctx, "UPDATE note_versions SET note_id = ?", b.ID.String()); err != nil {
+	if _, err := s.db.ExecContext(ctx, "UPDATE note_version SET note_uuid = ?", b.ID.String()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -137,7 +137,7 @@ func TestFieldMovedToOtherNote(t *testing.T) {
 		}
 	}
 
-	if _, err := s.db.ExecContext(ctx, "UPDATE notes SET info = (SELECT info FROM notes WHERE note_id = ?) WHERE note_id = ?",
+	if _, err := s.db.ExecContext(ctx, "UPDATE note SET info = (SELECT info FROM note WHERE note_uuid = ?) WHERE note_uuid = ?",
 		a.ID.String(), b.ID.String()); err != nil {
 		t.Fatal(err)
 	}

@@ -34,45 +34,46 @@ const (
 // schema is the DDL of spec §5.1.
 const schema = `
 CREATE TABLE meta (
-	key   TEXT PRIMARY KEY,
-	value BLOB NOT NULL
+	meta_id INTEGER PRIMARY KEY,
+	key     TEXT NOT NULL UNIQUE,
+	value   BLOB NOT NULL
 );
-CREATE TABLE notes (
-	note_id TEXT PRIMARY KEY,
-	updated INTEGER NOT NULL,
-	name    BLOB NOT NULL,
-	info    BLOB NOT NULL
+CREATE TABLE note (
+	note_uuid TEXT PRIMARY KEY,
+	updated   INTEGER NOT NULL,
+	name      BLOB NOT NULL,
+	info      BLOB NOT NULL
 );
-CREATE TABLE note_versions (
-	version_id TEXT PRIMARY KEY,
-	note_id    TEXT NOT NULL REFERENCES notes (note_id) ON DELETE CASCADE,
-	created    INTEGER NOT NULL,
-	info       BLOB NOT NULL
+CREATE TABLE note_version (
+	note_version_uuid TEXT PRIMARY KEY,
+	note_uuid         TEXT NOT NULL REFERENCES note (note_uuid) ON DELETE CASCADE,
+	created           INTEGER NOT NULL,
+	info              BLOB NOT NULL
 );
-CREATE INDEX note_versions_note_id ON note_versions (note_id);
+CREATE INDEX note_version_note_uuid ON note_version (note_uuid);
 CREATE TABLE connection (
-	id                 INTEGER PRIMARY KEY CHECK (id = 1),
+	connection_id      INTEGER PRIMARY KEY CHECK (connection_id = 1),
 	settings           BLOB,
-	server_id          TEXT,
+	server_uuid        TEXT,
 	last_sync_revision INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE ssh_key (
-	id          INTEGER PRIMARY KEY CHECK (id = 1),
+	ssh_key_id  INTEGER PRIMARY KEY CHECK (ssh_key_id = 1),
 	private_key BLOB NOT NULL,
 	public_key  TEXT NOT NULL
 );`
 
 // requiredTables are checked on Unlock, so a damaged schema reads as a
 // corrupt storage rather than as a later "no such table".
-var requiredTables = []string{tableMeta, tableNotes, tableNoteVersions, tableConnection, tableSSHKey}
+var requiredTables = []string{tableMeta, tableNote, tableNoteVersion, tableConnection, tableSSHKey}
 
 // Table names, also the Table part of the AADs.
 const (
-	tableMeta         = "meta"
-	tableNotes        = "notes"
-	tableNoteVersions = "note_versions"
-	tableConnection   = "connection"
-	tableSSHKey       = "ssh_key"
+	tableMeta        = "meta"
+	tableNote        = "note"
+	tableNoteVersion = "note_version"
+	tableConnection  = "connection"
+	tableSSHKey      = "ssh_key"
 )
 
 // AADs of the sealed fields (spec §4).
@@ -87,11 +88,11 @@ func aadPrivateKey() sealbox.AAD {
 }
 
 func aadNote(column, id string) sealbox.AAD {
-	return sealbox.AAD{Table: tableNotes, Column: column, RowID: id}
+	return sealbox.AAD{Table: tableNote, Column: column, RowID: id}
 }
 
 func aadVersion(versionID, noteID string) sealbox.AAD {
-	return sealbox.AAD{Table: tableNoteVersions, Column: "info", RowID: versionID, OwnerID: noteID}
+	return sealbox.AAD{Table: tableNoteVersion, Column: "info", RowID: versionID, OwnerID: noteID}
 }
 
 // dsn returns the URI for path: the file must exist (mode=rw), foreign keys

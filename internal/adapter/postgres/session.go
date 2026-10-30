@@ -159,7 +159,7 @@ func (s *Session) ensureStorage(ctx context.Context, o Options) (m meta, key []b
 			return err
 		}
 
-		if _, err := tx.Exec(ctx, `INSERT INTO smartnote.meta (id, server_id, format_version, kdf_params, kdf_salt, key_check)
+		if _, err := tx.Exec(ctx, `INSERT INTO smartnote.meta (meta_id, server_uuid, format_version, kdf_params, kdf_salt, key_check)
 			VALUES (1, $1, $2, $3, $4, $5)`, m.ServerID.String(), m.FormatVersion, kdf, m.Salt, m.KeyCheck); err != nil {
 			return fmt.Errorf("write meta: %w", err)
 		}
@@ -218,8 +218,8 @@ func readMeta(ctx context.Context, q queryRower) (meta, bool, error) {
 		kdf      []byte
 	)
 
-	err := q.QueryRow(ctx, `SELECT server_id::text, format_version, kdf_params::text, kdf_salt, key_check
-		FROM smartnote.meta WHERE id = 1`).Scan(&serverID, &m.FormatVersion, &kdf, &m.Salt, &m.KeyCheck)
+	err := q.QueryRow(ctx, `SELECT server_uuid::text, format_version, kdf_params::text, kdf_salt, key_check
+		FROM smartnote.meta WHERE meta_id = 1`).Scan(&serverID, &m.FormatVersion, &kdf, &m.Salt, &m.KeyCheck)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return meta{}, false, nil
 	}
@@ -261,11 +261,11 @@ func (s *Session) Snapshot(ctx context.Context) (usecase.RemoteSnapshot, error) 
 	err := inTx(ctx, s.conn, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
 		var serverID string
 
-		if err := tx.QueryRow(ctx, "SELECT revision FROM smartnote.sync_state WHERE id = 1").Scan(&snap.Revision); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT revision FROM smartnote.sync_state WHERE sync_state_id = 1").Scan(&snap.Revision); err != nil {
 			return fmt.Errorf("read revision: %w", err)
 		}
 
-		if err := tx.QueryRow(ctx, "SELECT server_id::text FROM smartnote.meta WHERE id = 1").Scan(&serverID); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT server_uuid::text FROM smartnote.meta WHERE meta_id = 1").Scan(&serverID); err != nil {
 			return fmt.Errorf("read server id: %w", err)
 		}
 
@@ -292,7 +292,7 @@ func (s *Session) Snapshot(ctx context.Context) (usecase.RemoteSnapshot, error) 
 }
 
 func (s *Session) readNotes(ctx context.Context, tx pgx.Tx) ([]domain.Note, error) {
-	rows, err := tx.Query(ctx, "SELECT note_id::text, updated, name, info FROM smartnote.notes")
+	rows, err := tx.Query(ctx, "SELECT note_uuid::text, updated, name, info FROM smartnote.note")
 	if err != nil {
 		return nil, fmt.Errorf("read notes: %w", err)
 	}
@@ -345,11 +345,11 @@ func (s *Session) Backup(ctx context.Context, notes []domain.Note, expectedServe
 			serverID string
 		)
 
-		if err := tx.QueryRow(ctx, "SELECT revision FROM smartnote.sync_state WHERE id = 1 FOR UPDATE").Scan(&current); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT revision FROM smartnote.sync_state WHERE sync_state_id = 1 FOR UPDATE").Scan(&current); err != nil {
 			return fmt.Errorf("lock revision: %w", err)
 		}
 
-		if err := tx.QueryRow(ctx, "SELECT server_id::text FROM smartnote.meta WHERE id = 1").Scan(&serverID); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT server_uuid::text FROM smartnote.meta WHERE meta_id = 1").Scan(&serverID); err != nil {
 			return fmt.Errorf("read server id: %w", err)
 		}
 
@@ -370,12 +370,12 @@ func (s *Session) Backup(ctx context.Context, notes []domain.Note, expectedServe
 			ids[i] = n.ID.String()
 		}
 
-		if _, err := tx.Exec(ctx, "DELETE FROM smartnote.notes WHERE note_id <> ALL($1::uuid[])", ids); err != nil {
+		if _, err := tx.Exec(ctx, "DELETE FROM smartnote.note WHERE note_uuid <> ALL($1::uuid[])", ids); err != nil {
 			return fmt.Errorf("delete notes: %w", err)
 		}
 
 		if err := tx.QueryRow(ctx, `UPDATE smartnote.sync_state SET revision = revision + 1, updated_at = now()
-			WHERE id = 1 RETURNING revision`).Scan(&revision); err != nil {
+			WHERE sync_state_id = 1 RETURNING revision`).Scan(&revision); err != nil {
 			return fmt.Errorf("bump revision: %w", err)
 		}
 
@@ -402,8 +402,8 @@ func (s *Session) upsert(ctx context.Context, tx pgx.Tx, notes []domain.Note) (e
 			return err
 		}
 
-		batch.Queue(`INSERT INTO smartnote.notes (note_id, updated, name, info) VALUES ($1::uuid, $2, $3, $4)
-			ON CONFLICT (note_id) DO UPDATE SET updated = excluded.updated, name = excluded.name, info = excluded.info`,
+		batch.Queue(`INSERT INTO smartnote.note (note_uuid, updated, name, info) VALUES ($1::uuid, $2, $3, $4)
+			ON CONFLICT (note_uuid) DO UPDATE SET updated = excluded.updated, name = excluded.name, info = excluded.info`,
 			n.ID.String(), n.Updated, name, info)
 	}
 

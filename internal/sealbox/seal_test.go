@@ -8,7 +8,7 @@ import (
 
 func testKey(b byte) []byte { return bytes.Repeat([]byte{b}, KeySize) }
 
-var noteAAD = AAD{Table: "notes", Column: "info", RowID: "u1"}
+var noteAAD = AAD{Table: "note", Column: "info", RowID: "u1"}
 
 func TestAAD_bytes(t *testing.T) {
 	tests := []struct {
@@ -16,8 +16,8 @@ func TestAAD_bytes(t *testing.T) {
 		aad  AAD
 		want string
 	}{
-		{name: "without owner", aad: AAD{Table: "notes", Column: "info", RowID: "u1"}, want: "smartnote|1|notes|info|u1"},
-		{name: "with owner", aad: AAD{Table: "note_versions", Column: "info", RowID: "u1", OwnerID: "n1"}, want: "smartnote|1|note_versions|info|u1|n1"},
+		{name: "without owner", aad: AAD{Table: "note", Column: "info", RowID: "u1"}, want: "smartnote|1|note|info|u1"},
+		{name: "with owner", aad: AAD{Table: "note_version", Column: "info", RowID: "u1", OwnerID: "n1"}, want: "smartnote|1|note_version|info|u1|n1"},
 		{name: "meta row", aad: AAD{Table: "meta", Column: "wrapped_dek", RowID: "1"}, want: "smartnote|1|meta|wrapped_dek|1"},
 	}
 	for _, tt := range tests {
@@ -41,12 +41,12 @@ var ambiguousAADs = []struct {
 }{
 	{name: "zero", aad: AAD{}},
 	{name: "no table", aad: AAD{Column: "info", RowID: "u1"}},
-	{name: "no column", aad: AAD{Table: "notes", RowID: "u1"}},
-	{name: "no row id", aad: AAD{Table: "notes", Column: "info"}},
+	{name: "no column", aad: AAD{Table: "note", RowID: "u1"}},
+	{name: "no row id", aad: AAD{Table: "note", Column: "info"}},
 	{name: "separator in table", aad: AAD{Table: "notes|info", Column: "a", RowID: "b"}},
-	{name: "separator in column", aad: AAD{Table: "notes", Column: "info|a", RowID: "b"}},
-	{name: "separator in row id", aad: AAD{Table: "notes", Column: "info", RowID: "a|b"}},
-	{name: "separator in owner id", aad: AAD{Table: "notes", Column: "info", RowID: "a", OwnerID: "b|c"}},
+	{name: "separator in column", aad: AAD{Table: "note", Column: "info|a", RowID: "b"}},
+	{name: "separator in row id", aad: AAD{Table: "note", Column: "info", RowID: "a|b"}},
+	{name: "separator in owner id", aad: AAD{Table: "note", Column: "info", RowID: "a", OwnerID: "b|c"}},
 }
 
 func TestSealRejectsAmbiguousAAD(t *testing.T) {
@@ -60,7 +60,7 @@ func TestSealRejectsAmbiguousAAD(t *testing.T) {
 }
 
 func TestOpenRejectsAmbiguousAAD(t *testing.T) {
-	sealed, err := Seal(testKey(1), []byte("x"), AAD{Table: "notes", Column: "info", RowID: "a", OwnerID: "b"})
+	sealed, err := Seal(testKey(1), []byte("x"), AAD{Table: "note", Column: "info", RowID: "a", OwnerID: "b"})
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
@@ -143,12 +143,12 @@ func TestSealRejectsBadKey(t *testing.T) {
 }
 
 func TestOpenRejects(t *testing.T) {
-	sealed, err := Seal(testKey(1), []byte("secret note"), AAD{Table: "note_versions", Column: "info", RowID: "v1", OwnerID: "n1"})
+	sealed, err := Seal(testKey(1), []byte("secret note"), AAD{Table: "note_version", Column: "info", RowID: "v1", OwnerID: "n1"})
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
 
-	aad := AAD{Table: "note_versions", Column: "info", RowID: "v1", OwnerID: "n1"}
+	aad := AAD{Table: "note_version", Column: "info", RowID: "v1", OwnerID: "n1"}
 
 	tampered := bytes.Clone(sealed)
 	tampered[len(tampered)-20] ^= 0x01
@@ -162,10 +162,10 @@ func TestOpenRejects(t *testing.T) {
 		aad    AAD
 	}{
 		{name: "changed ciphertext byte", key: testKey(1), sealed: tampered, aad: aad},
-		{name: "other row id", key: testKey(1), sealed: sealed, aad: AAD{Table: "note_versions", Column: "info", RowID: "v2", OwnerID: "n1"}},
-		{name: "other owner id", key: testKey(1), sealed: sealed, aad: AAD{Table: "note_versions", Column: "info", RowID: "v1", OwnerID: "n2"}},
-		{name: "no owner id", key: testKey(1), sealed: sealed, aad: AAD{Table: "note_versions", Column: "info", RowID: "v1"}},
-		{name: "other column", key: testKey(1), sealed: sealed, aad: AAD{Table: "note_versions", Column: "name", RowID: "v1", OwnerID: "n1"}},
+		{name: "other row id", key: testKey(1), sealed: sealed, aad: AAD{Table: "note_version", Column: "info", RowID: "v2", OwnerID: "n1"}},
+		{name: "other owner id", key: testKey(1), sealed: sealed, aad: AAD{Table: "note_version", Column: "info", RowID: "v1", OwnerID: "n2"}},
+		{name: "no owner id", key: testKey(1), sealed: sealed, aad: AAD{Table: "note_version", Column: "info", RowID: "v1"}},
+		{name: "other column", key: testKey(1), sealed: sealed, aad: AAD{Table: "note_version", Column: "name", RowID: "v1", OwnerID: "n1"}},
 		{name: "other key", key: testKey(2), sealed: sealed, aad: aad},
 		{name: "short key", key: testKey(1)[:16], sealed: sealed, aad: aad},
 		{name: "empty input", key: testKey(1), sealed: nil, aad: aad},

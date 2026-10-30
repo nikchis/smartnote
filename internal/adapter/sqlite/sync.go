@@ -46,7 +46,7 @@ func readSyncState(ctx context.Context, q querier) (uuid.UUID, int64, error) {
 		revision int64
 	)
 
-	err := q.QueryRowContext(ctx, "SELECT server_id, last_sync_revision FROM connection WHERE id = 1").Scan(&serverID, &revision)
+	err := q.QueryRowContext(ctx, "SELECT server_uuid, last_sync_revision FROM connection WHERE connection_id = 1").Scan(&serverID, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return uuid.Nil, 0, nil
 	}
@@ -118,8 +118,8 @@ func (s *Store) SetSyncState(ctx context.Context, serverID uuid.UUID, revision i
 }
 
 func writeSyncState(ctx context.Context, q querier, serverID uuid.UUID, revision int64) error {
-	_, err := q.ExecContext(ctx, `INSERT INTO connection (id, server_id, last_sync_revision) VALUES (1, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET server_id = excluded.server_id, last_sync_revision = excluded.last_sync_revision`,
+	_, err := q.ExecContext(ctx, `INSERT INTO connection (connection_id, server_uuid, last_sync_revision) VALUES (1, ?, ?)
+		ON CONFLICT (connection_id) DO UPDATE SET server_uuid = excluded.server_uuid, last_sync_revision = excluded.last_sync_revision`,
 		serverID.String(), revision)
 
 	return err

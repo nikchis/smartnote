@@ -362,6 +362,73 @@ func TestKDFParamsOutOfRange(t *testing.T) {
 	}
 }
 
+// TestKeyNaming checks the naming rule: the primary key of table t is t_id
+// when it is an integer and t_uuid when it holds a UUID.
+func TestKeyNaming(t *testing.T) {
+	ctx := context.Background()
+	s, _ := createTest(t)
+
+	tables, err := tableNames(ctx, s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(tables) != len(requiredTables) {
+		t.Errorf("tables = %v, want %v", tables, requiredTables)
+	}
+
+	for table := range tables {
+		keys := primaryKey(t, s.db, table)
+		if len(keys) != 1 {
+			t.Errorf("table %s: primary key %v, want one column", table, keys)
+			continue
+		}
+
+		want := table + "_uuid"
+		if keys[0].typ == "INTEGER" {
+			want = table + "_id"
+		}
+
+		if keys[0].name != want {
+			t.Errorf("table %s: key %s %s, want %s", table, keys[0].name, keys[0].typ, want)
+		}
+	}
+}
+
+type column struct{ name, typ string }
+
+// primaryKey returns the primary key columns of table.
+func primaryKey(t *testing.T, db *sql.DB, table string) []column {
+	t.Helper()
+
+	rows, err := db.QueryContext(context.Background(), "SELECT name, type FROM pragma_table_info(?) WHERE pk > 0", table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	var cols []column
+
+	for rows.Next() {
+		var c column
+		if err := rows.Scan(&c.name, &c.typ); err != nil {
+			t.Fatal(err)
+		}
+
+		cols = append(cols, c)
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	return cols
+}
+
 func TestUnknownFormatVersion(t *testing.T) {
 	_, dir := createTest(t)
 	rawExec(t, dir, "UPDATE meta SET value = ? WHERE key = 'format_version'", []byte("2"))
@@ -382,7 +449,7 @@ func TestBrokenMeta(t *testing.T) {
 		{name: "salt of 15 bytes", query: "UPDATE meta SET value = ? WHERE key = 'kdf_salt'", args: []any{make([]byte, 15)}},
 		{name: "kdf params not json", query: "UPDATE meta SET value = ? WHERE key = 'kdf_params'", args: []any{[]byte("{")}},
 		{name: "no salt", query: "DELETE FROM meta WHERE key = 'kdf_salt'"},
-		{name: "no notes table", query: "DROP TABLE note_versions; DROP TABLE notes"},
+		{name: "no note table", query: "DROP TABLE note_version; DROP TABLE note"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
