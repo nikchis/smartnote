@@ -1,0 +1,7 @@
+[
+  { "name": "ascii", "text": "abc", "utf16": 3 },
+  { "name": "cyrillic", "text": "Привет", "utf16": 6 },
+  { "name": "emoji surrogate pair", "text": "😀", "utf16": 2 },
+  { "name": "crlf counts as one unit", "text": "a\r\nb", "utf16": 3 },
+  { "name": "combining accent", "text": "é", "utf16": 2 }
+]
