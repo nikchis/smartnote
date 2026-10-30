@@ -33,8 +33,9 @@ type syncFixture struct {
 	changes *ChangeTracker
 	gate    *Gate
 
-	mu     sync.Mutex
-	states []State
+	mu       sync.Mutex
+	states   []State
+	warnings []error
 }
 
 func newSyncFixture(t *testing.T, local LocalSnapshot, srv *fakeServer) *syncFixture {
@@ -57,6 +58,11 @@ func newSyncFixture(t *testing.T, local LocalSnapshot, srv *fakeServer) *syncFix
 			defer f.mu.Unlock()
 			f.states = append(f.states, st)
 		},
+		Warn: func(err error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.warnings = append(f.warnings, err)
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +82,7 @@ func (f *syncFixture) lastState() State {
 
 func TestNewSyncNil(t *testing.T) {
 	full := SyncDeps{Local: &fakeSyncState{}, Settings: &fakeSettings{}, Remote: &fakeServer{},
-		Changes: &ChangeTracker{}, IDs: seqIDs(), Gate: &Gate{}}
+		Changes: &ChangeTracker{}, IDs: seqIDs(), Gate: &Gate{}, Warn: func(error) {}}
 	tests := []struct {
 		name   string
 		modify func(*SyncDeps)
@@ -87,6 +93,7 @@ func TestNewSyncNil(t *testing.T) {
 		{name: "changes", modify: func(d *SyncDeps) { d.Changes = nil }},
 		{name: "ids", modify: func(d *SyncDeps) { d.IDs = nil }},
 		{name: "gate", modify: func(d *SyncDeps) { d.Gate = nil }},
+		{name: "warn", modify: func(d *SyncDeps) { d.Warn = nil }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -245,11 +252,47 @@ func TestConnectServerIDChanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	if got := f.local.setCalls; len(got) != 1 || got[0] != (syncStateCall{serverB, 0}) {
-		t.Errorf("SetSyncState calls = %v, want [{B 0}]", got)
+	if len(f.local.setCalls) != 0 {
+		t.Errorf("SetSyncState calls = %v, want none: the reset to (B, 0) stays in memory", f.local.setCalls)
 	}
 	if out.Status != StatusRemoteNewer {
-		t.Errorf("Status = %q, want remote_newer", out.Status)
+		t.Errorf("Status = %q, want remote_newer: revision 1 is newer than the reset 0", out.Status)
+	}
+	if err := f.sync.CommitRestore(context.Background()); err != nil {
+		t.Fatalf("CommitRestore: %v", err)
+	}
+	if f.local.snap.ServerID != serverB || f.local.snap.Revision != 1 {
+		t.Errorf("local sync state = (%v, %d), want (B, 1)", f.local.snap.ServerID, f.local.snap.Revision)
+	}
+}
+
+func TestServerSwitchKeepsRevision(t *testing.T) {
+	notes := []domain.Note{note(1, "a", "x")}
+	srv := &fakeServer{serverID: serverB, revision: 1, notes: []domain.Note{note(9, "other", "y")}}
+	f := newSyncFixture(t, LocalSnapshot{Notes: notes, Revision: 5, ServerID: serverA}, srv)
+	ctx := context.Background()
+
+	out, err := f.sync.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect to B: %v", err)
+	}
+	if out.Status != StatusRemoteNewer {
+		t.Fatalf("Connect to B = %q, want remote_newer", out.Status)
+	}
+	f.sync.CancelPending()
+
+	srv.mu.Lock()
+	srv.serverID, srv.revision, srv.notes = serverA, 5, notes
+	srv.mu.Unlock()
+	out, err = f.sync.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect back to A: %v", err)
+	}
+	if out.Status != StatusInSync {
+		t.Errorf("Connect back to A = %q, want in_sync", out.Status)
+	}
+	if len(f.local.setCalls) != 0 || f.local.snap.Revision != 5 || f.local.snap.ServerID != serverA {
+		t.Errorf("local sync state = (%v, %d), calls %v; want (A, 5) untouched", f.local.snap.ServerID, f.local.snap.Revision, f.local.setCalls)
 	}
 }
 
@@ -559,16 +602,21 @@ func TestWrongPhraseKeepsConnectedFalseNoWrites(t *testing.T) {
 func TestConnectedState(t *testing.T) {
 	tests := []struct {
 		name          string
+		inject        func(f *syncFixture, err error)
 		err           error
 		wantConnected bool
 	}{
-		{name: "network error", err: errors.New("ssh: handshake failed"), wantConnected: false},
-		{name: "timeout", err: context.DeadlineExceeded, wantConnected: false},
-		{name: "wrong phrase", err: domain.ErrWrongSyncPhrase, wantConnected: true},
-		{name: "validation", err: &domain.ValidationError{Field: "ssh_port", Reason: "x"}, wantConnected: true},
-		{name: "remote changed", err: domain.ErrRemoteChanged, wantConnected: true},
-		{name: "host key unknown", err: &domain.HostKeyUnknownError{Fingerprint: "SHA256:x"}, wantConnected: true},
-		{name: "host key mismatch", err: &domain.HostKeyMismatchError{Expected: "a", Got: "b"}, wantConnected: true},
+		{name: "network error", inject: failOpen, err: errors.New("ssh: handshake failed"), wantConnected: false},
+		{name: "timeout", inject: failOpen, err: context.DeadlineExceeded, wantConnected: false},
+		{name: "host key unknown", inject: failOpen, err: &domain.HostKeyUnknownError{Fingerprint: "SHA256:x"}, wantConnected: false},
+		{name: "host key mismatch", inject: failOpen, err: &domain.HostKeyMismatchError{Expected: "a", Got: "b"}, wantConnected: false},
+		{name: "wrong phrase", inject: failOpen, err: domain.ErrWrongSyncPhrase, wantConnected: true},
+		{name: "validation", inject: failOpen, err: &domain.ValidationError{Field: "ssh_port", Reason: "x"}, wantConnected: true},
+		{name: "remote changed", inject: failOpen, err: domain.ErrRemoteChanged, wantConnected: true},
+		{name: "unsupported format", inject: failOpen, err: domain.ErrUnsupportedFormat, wantConnected: true},
+		{name: "canceled", inject: failOpen, err: context.Canceled, wantConnected: true},
+		{name: "local storage error", inject: failLocalSnapshot, err: errors.New("sqlite: disk I/O error"), wantConnected: true},
+		{name: "local storage timeout", inject: failLocalSnapshot, err: context.DeadlineExceeded, wantConnected: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -578,7 +626,7 @@ func TestConnectedState(t *testing.T) {
 			if _, err := f.sync.Connect(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			srv.openErr = tt.err
+			tt.inject(f, tt.err)
 			if _, err := f.sync.PrepareBackup(context.Background()); !errors.Is(err, tt.err) {
 				t.Fatalf("PrepareBackup = %v, want %v", err, tt.err)
 			}
@@ -588,6 +636,10 @@ func TestConnectedState(t *testing.T) {
 		})
 	}
 }
+
+func failOpen(f *syncFixture, err error) { f.srv.openErr = err }
+
+func failLocalSnapshot(f *syncFixture, err error) { f.local.snapErr = err }
 
 func TestPrepareWithEmptySettings(t *testing.T) {
 	srv := &fakeServer{}
@@ -685,5 +737,217 @@ func TestOnStateCalled(t *testing.T) {
 		if states[i] == states[i-1] {
 			t.Errorf("state %d repeats %+v", i, states[i])
 		}
+	}
+}
+
+// restoreWithNotes returns a fixture whose local side is a note store shared
+// with Notes; the server has a newer text of note 1.
+func restoreWithNotes(t *testing.T) (*syncFixture, *fakeNoteStore, *Notes) {
+	t.Helper()
+	srv := &fakeServer{serverID: serverA, revision: 5, notes: []domain.Note{note(1, "a", "server")}}
+	f := newSyncFixture(t, LocalSnapshot{Revision: 4, ServerID: serverA}, srv)
+	store := newFakeNoteStore(note(1, "a", "local"))
+	f.local.notes = store
+	notes, err := NewNotes(store, fixedClock(t1), seqIDs(), f.changes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, store, notes
+}
+
+// waitBriefly returns the value from ch if it arrives within 50 ms and puts it back.
+func waitBriefly(ch chan error) {
+	select {
+	case err := <-ch:
+		ch <- err
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestCommitRestoreWaitsForEdit(t *testing.T) {
+	f, store, notes := restoreWithNotes(t)
+	ctx := context.Background()
+	if _, err := f.sync.PrepareRestore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	saved := make(chan error, 1)
+	f.local.onApply = func() {
+		go func() {
+			_, err := notes.Save(ctx, testID(1), "a", "edited")
+			saved <- err
+		}()
+		waitBriefly(saved) // the edit must wait for the Restore, not run inside it
+	}
+
+	if err := f.sync.CommitRestore(ctx); err != nil {
+		t.Fatalf("CommitRestore: %v", err)
+	}
+	if err := <-saved; err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if got := store.notes[testID(1)].Info; got != "edited" {
+		t.Errorf("note text = %q, want the edit saved after the Restore", got)
+	}
+	if !f.sync.State().Dirty {
+		t.Error("Dirty = false after an edit")
+	}
+}
+
+func TestCommitRestoreAfterUnmarkedWrite(t *testing.T) {
+	f, store, notes := restoreWithNotes(t)
+	ctx := context.Background()
+	if _, err := f.sync.PrepareRestore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	restored := make(chan error, 1)
+	store.onWrite = func() { // the edit is written, MarkChanged has not run yet
+		store.mu.Lock()
+		store.onWrite = nil
+		store.mu.Unlock()
+		go func() { restored <- f.sync.CommitRestore(ctx) }()
+		waitBriefly(restored)
+	}
+
+	if _, err := notes.Save(ctx, testID(1), "a", "edited"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := <-restored; !errors.Is(err, domain.ErrLocalChanged) {
+		t.Errorf("CommitRestore = %v, want ErrLocalChanged", err)
+	}
+	if got := store.notes[testID(1)].Info; got != "edited" {
+		t.Errorf("note text = %q, want the edit kept", got)
+	}
+}
+
+func TestEditPublishesState(t *testing.T) {
+	f, _, notes := restoreWithNotes(t)
+	if _, err := f.sync.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.sync.CommitRestore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.lastState().Dirty {
+		t.Fatal("dirty before the edit")
+	}
+
+	if _, err := notes.Save(context.Background(), testID(1), "a", "edited"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.lastState(); !got.Dirty || !got.Connected {
+		t.Errorf("last published state = %+v, want connected and dirty", got)
+	}
+}
+
+func TestCloseErrorAfterCommittedBackup(t *testing.T) {
+	f := diverged(t)
+	ctx := context.Background()
+	f.changes.MarkChanged()
+	if _, err := f.sync.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.sync.PrepareBackup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.closeErr = errors.New("tunnel closed")
+
+	if err := f.sync.CommitBackup(ctx); err != nil {
+		t.Fatalf("CommitBackup = %v, want success: the server committed", err)
+	}
+	if st := f.sync.State(); !st.Connected || st.Dirty {
+		t.Errorf("State = %+v, want connected and clean", st)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.warnings) != 1 || !strings.Contains(f.warnings[0].Error(), "tunnel closed") {
+		t.Errorf("warnings = %v, want the close error", f.warnings)
+	}
+}
+
+func TestCloseErrorJoinedToFailure(t *testing.T) {
+	f := diverged(t)
+	f.srv.snapshotErr = errors.New("snapshot failed")
+	f.srv.closeErr = errors.New("tunnel closed")
+
+	_, err := f.sync.PrepareBackup(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "snapshot failed") || !strings.Contains(err.Error(), "tunnel closed") {
+		t.Errorf("PrepareBackup = %v, want both errors", err)
+	}
+	if len(f.warnings) != 0 {
+		t.Errorf("warnings = %v, want none", f.warnings)
+	}
+}
+
+func TestLocalRevisionWrittenAfterDeadline(t *testing.T) {
+	f := diverged(t)
+	if _, err := f.sync.PrepareBackup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.srv.afterBackup = cancel // the operation budget ends right after the server commit
+
+	if err := f.sync.CommitBackup(ctx); err != nil {
+		t.Fatalf("CommitBackup: %v", err)
+	}
+	if len(f.local.setCalls) != 1 || f.local.setCalls[0] != (syncStateCall{serverA, 4}) {
+		t.Errorf("SetSyncState calls = %v, want [{A 4}]", f.local.setCalls)
+	}
+}
+
+func TestRemoteNotesValidated(t *testing.T) {
+	tests := []struct {
+		name  string
+		notes []domain.Note
+	}{
+		{name: "nil id", notes: []domain.Note{{Name: "a", Info: "x"}}},
+		{name: "duplicate id", notes: []domain.Note{note(1, "a", "x"), note(1, "b", "y")}},
+		{name: "empty name", notes: []domain.Note{note(1, "", "x")}},
+		{name: "text too long", notes: []domain.Note{note(1, "a", strings.Repeat("x", domain.MaxInfoLen+1))}},
+		{name: "crlf", notes: []domain.Note{note(1, "a", "x\r\ny")}},
+	}
+	ops := map[string]func(*Sync) error{
+		"Connect":        func(s *Sync) error { _, err := s.Connect(context.Background()); return err },
+		"PrepareBackup":  func(s *Sync) error { _, err := s.PrepareBackup(context.Background()); return err },
+		"PrepareRestore": func(s *Sync) error { _, err := s.PrepareRestore(context.Background()); return err },
+	}
+	for _, tt := range tests {
+		for opName, op := range ops {
+			t.Run(tt.name+"/"+opName, func(t *testing.T) {
+				srv := &fakeServer{serverID: serverA, revision: 9, notes: tt.notes}
+				f := newSyncFixture(t, LocalSnapshot{Notes: []domain.Note{note(2, "local", "x")}, ServerID: serverA}, srv)
+				if err := op(f.sync); !errors.Is(err, domain.ErrUnsupportedFormat) {
+					t.Fatalf("%s = %v, want ErrUnsupportedFormat", opName, err)
+				}
+				if f.local.writes() != 0 || len(srv.backups) != 0 {
+					t.Errorf("writes: local %d, server %d; want none", f.local.writes(), len(srv.backups))
+				}
+				if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrNoPendingOperation) {
+					t.Errorf("CommitRestore = %v, want ErrNoPendingOperation", err)
+				}
+			})
+		}
+	}
+}
+
+func TestResetConnection(t *testing.T) {
+	f := diverged(t)
+	f.srv.mu.Lock()
+	f.srv.revision = 9
+	f.srv.mu.Unlock()
+	if out, err := f.sync.Connect(context.Background()); err != nil || out.Status != StatusRemoteNewer {
+		t.Fatalf("Connect = %v, %v; want remote_newer", out.Status, err)
+	}
+
+	f.sync.ResetConnection()
+
+	if st := f.sync.State(); st.Connected || st.RestoreAvailable {
+		t.Errorf("State = %+v, want not connected, no Restore", st)
+	}
+	if got := f.lastState(); got.Connected || got.RestoreAvailable {
+		t.Errorf("last published state = %+v", got)
+	}
+	if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrNoPendingOperation) {
+		t.Errorf("CommitRestore = %v, want ErrNoPendingOperation", err)
 	}
 }

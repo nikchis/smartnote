@@ -68,14 +68,14 @@ func (k *Keys) Import(ctx context.Context, data []byte, passphrase string) error
 }
 
 // PublicKey returns the stored public key in authorized_keys format, or
-// domain.ErrStorageMissing when there is no key.
+// domain.ErrKeyMissing when there is no key.
 func (k *Keys) PublicKey(ctx context.Context) (string, error) {
 	pair, ok, err := k.store.LoadKey(ctx)
 	if err != nil {
 		return "", fmt.Errorf("load ssh key: %w", err)
 	}
 	if !ok {
-		return "", fmt.Errorf("no ssh key: %w", domain.ErrStorageMissing)
+		return "", fmt.Errorf("public key: %w", domain.ErrKeyMissing)
 	}
 	return pair.PublicAuthorized, nil
 }

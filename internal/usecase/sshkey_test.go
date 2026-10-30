@@ -30,8 +30,8 @@ func TestKeysGenerateAndPublicKey(t *testing.T) {
 	if has, err := k.HasKey(ctx); err != nil || has {
 		t.Fatalf("HasKey before Generate = %v, %v; want false, nil", has, err)
 	}
-	if _, err := k.PublicKey(ctx); !errors.Is(err, domain.ErrStorageMissing) {
-		t.Errorf("PublicKey without a key = %v, want ErrStorageMissing", err)
+	if _, err := k.PublicKey(ctx); !errors.Is(err, domain.ErrKeyMissing) {
+		t.Errorf("PublicKey without a key = %v, want ErrKeyMissing", err)
 	}
 	if err := k.Generate(ctx); err != nil {
 		t.Fatalf("Generate: %v", err)

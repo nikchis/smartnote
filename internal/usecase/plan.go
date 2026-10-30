@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"bytes"
+	"fmt"
 	"slices"
 
 	"github.com/google/uuid"
@@ -129,4 +130,28 @@ func sortedByID(notes []domain.Note) []domain.Note {
 	out := slices.Clone(notes)
 	slices.SortFunc(out, func(a, b domain.Note) int { return bytes.Compare(a.ID[:], b.ID[:]) })
 	return out
+}
+
+// checkRemoteNotes returns domain.ErrUnsupportedFormat unless every server note
+// has a unique non-nil ID and is a normalized, valid note: a newer or broken
+// client could have written notes this version cannot keep. The error names
+// the position and the rule, never the content.
+func checkRemoteNotes(notes []domain.Note) error {
+	seen := make(map[uuid.UUID]struct{}, len(notes))
+	for i, n := range notes {
+		if n.ID == uuid.Nil {
+			return fmt.Errorf("%w: note %d has no id", domain.ErrUnsupportedFormat, i)
+		}
+		if _, dup := seen[n.ID]; dup {
+			return fmt.Errorf("%w: note %d repeats an id", domain.ErrUnsupportedFormat, i)
+		}
+		seen[n.ID] = struct{}{}
+		if n.Normalized() != n {
+			return fmt.Errorf("%w: note %d is not normalized", domain.ErrUnsupportedFormat, i)
+		}
+		if err := n.Validate(); err != nil {
+			return fmt.Errorf("%w: note %d: %w", domain.ErrUnsupportedFormat, i, err)
+		}
+	}
+	return nil
 }

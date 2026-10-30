@@ -9,25 +9,36 @@ import (
 )
 
 func newTestConnection(t *testing.T, saved domain.ConnectionSettings, srv *fakeServer) (*Connection, *fakeSettings, *Gate) {
-	t.Helper()
-	settings := &fakeSettings{s: saved}
-	gate := &Gate{}
-	c, err := NewConnection(settings, srv, gate)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c, settings, gate, _ := newTestConnectionResets(t, saved, srv)
 	return c, settings, gate
 }
 
+// newTestConnectionResets also returns a counter of settings-changed calls.
+func newTestConnectionResets(t *testing.T, saved domain.ConnectionSettings, srv *fakeServer) (*Connection, *fakeSettings, *Gate, *int) {
+	t.Helper()
+	settings := &fakeSettings{s: saved}
+	gate := &Gate{}
+	resets := new(int)
+	c, err := NewConnection(settings, srv, gate, func() { *resets++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, settings, gate, resets
+}
+
 func TestNewConnectionNil(t *testing.T) {
-	if _, err := NewConnection(nil, &fakeServer{}, &Gate{}); err == nil {
+	noop := func() {}
+	if _, err := NewConnection(nil, &fakeServer{}, &Gate{}, noop); err == nil {
 		t.Error("nil settings: want an error")
 	}
-	if _, err := NewConnection(&fakeSettings{}, nil, &Gate{}); err == nil {
+	if _, err := NewConnection(&fakeSettings{}, nil, &Gate{}, noop); err == nil {
 		t.Error("nil remote: want an error")
 	}
-	if _, err := NewConnection(&fakeSettings{}, &fakeServer{}, nil); err == nil {
+	if _, err := NewConnection(&fakeSettings{}, &fakeServer{}, nil, noop); err == nil {
 		t.Error("nil gate: want an error")
+	}
+	if _, err := NewConnection(&fakeSettings{}, &fakeServer{}, &Gate{}, nil); err == nil {
+		t.Error("nil settings-changed callback: want an error")
 	}
 }
 
@@ -202,5 +213,56 @@ func TestTrustHostKeyEmpty(t *testing.T) {
 	assertField(t, c.TrustHostKey(context.Background(), ""), "trusted_host_key")
 	if len(settings.saved) != 0 {
 		t.Error("an empty key was saved")
+	}
+}
+
+func TestSettingsWritesBusy(t *testing.T) {
+	c, settings, gate, resets := newTestConnectionResets(t, completeSettings(), &fakeServer{})
+	leave, err := gate.Enter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leave()
+	ctx := context.Background()
+
+	writes := map[string]func() error{
+		"Save":         func() error { return c.Save(ctx, completeSettings()) },
+		"TrustHostKey": func() error { return c.TrustHostKey(ctx, "ssh-ed25519 AAAA") },
+		"ResetHostKey": func() error { return c.ResetHostKey(ctx) },
+	}
+	for name, write := range writes {
+		if err := write(); !errors.Is(err, domain.ErrBusy) {
+			t.Errorf("%s = %v, want ErrBusy", name, err)
+		}
+	}
+	if len(settings.saved) != 0 || *resets != 0 {
+		t.Errorf("saved %d times, reset %d times; want none", len(settings.saved), *resets)
+	}
+}
+
+func TestSettingsWritesResetConnection(t *testing.T) {
+	c, _, _, resets := newTestConnectionResets(t, completeSettings(), &fakeServer{})
+	ctx := context.Background()
+
+	if err := c.Save(ctx, completeSettings()); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.TrustHostKey(ctx, "ssh-ed25519 AAAA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ResetHostKey(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if *resets != 3 {
+		t.Errorf("settings-changed calls = %d, want 3", *resets)
+	}
+	if _, err := c.Test(ctx, completeSettings()); err != nil {
+		t.Fatal(err)
+	}
+	s := completeSettings()
+	s.SSHPort = 0
+	_ = c.Save(ctx, s)
+	if *resets != 3 {
+		t.Errorf("settings-changed calls = %d after Test and a rejected Save, want 3", *resets)
 	}
 }

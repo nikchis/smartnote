@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -88,7 +89,10 @@ type State struct {
 	Connected, Dirty, RestoreAvailable, Busy bool
 }
 
-// SyncDeps are the dependencies of Sync. OnState may be nil.
+// SyncDeps are the dependencies of Sync. OnState may be nil; calls to it are
+// serialized, and it must not call Sync methods other than State. Warn
+// receives errors that do not fail an operation, such as closing a session
+// after it succeeded, so that they reach the log.
 type SyncDeps struct {
 	Local    SyncStateStore
 	Settings SettingsStore
@@ -97,13 +101,20 @@ type SyncDeps struct {
 	IDs      IDGenerator
 	Gate     *Gate
 	OnState  func(State)
+	Warn     func(error)
 }
+
+// localWriteTimeout bounds the local revision write after a server commit,
+// which no longer depends on the operation's own deadline.
+var localWriteTimeout = 5 * time.Second
 
 // Sync runs the connect check, Backup and Restore of v1 with revisions
 // (spec §6.2–§6.6). It keeps one pending plan between Prepare and Commit for
 // the whole app. Every method with the server enters the shared Gate.
 type Sync struct {
 	d SyncDeps
+
+	publishMu sync.Mutex // orders OnState calls; taken before mu
 
 	mu               sync.Mutex
 	connected        bool
@@ -114,7 +125,8 @@ type Sync struct {
 	published        State
 }
 
-// NewSync returns a Sync over d.
+// NewSync returns a Sync over d. It also makes d.Changes publish the state
+// after every local edit; one tracker serves one Sync.
 func NewSync(d SyncDeps) (*Sync, error) {
 	switch {
 	case d.Local == nil:
@@ -129,8 +141,12 @@ func NewSync(d SyncDeps) (*Sync, error) {
 		return nil, nilDependency("NewSync", "ids")
 	case d.Gate == nil:
 		return nil, nilDependency("NewSync", "gate")
+	case d.Warn == nil:
+		return nil, nilDependency("NewSync", "warn")
 	}
-	return &Sync{d: d}, nil
+	s := &Sync{d: d}
+	d.Changes.setOnChange(s.publish)
+	return s, nil
 }
 
 // State returns the current state.
@@ -150,7 +166,10 @@ func (s *Sync) stateLocked() State {
 }
 
 // publish calls OnState if the state differs from the last one published.
+// Calls are serialized, so the last one carries the current state.
 func (s *Sync) publish() {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
 	s.mu.Lock()
 	st := s.stateLocked()
 	changed := st != s.published
@@ -181,29 +200,60 @@ func (s *Sync) begin() (end func(), err error) {
 	}, nil
 }
 
-// afterRemote records the result of an operation with the server: success
-// connects, an error disconnects unless it shows the server was reached or the
-// input was wrong.
+// afterRemote records the result of an operation with the server (spec §6.1):
+// success connects, an error that shows the server is unreachable or not the
+// trusted one disconnects, any other error leaves the state as it was.
 func (s *Sync) afterRemote(err error) {
-	if err != nil && keepsConnection(err) {
-		s.publish()
-		return
+	switch {
+	case err == nil:
+		s.update(func() { s.connected = true })
+	case disconnects(err):
+		s.update(func() { s.connected = false })
 	}
-	s.update(func() { s.connected = err == nil })
 }
 
-func keepsConnection(err error) bool {
-	if errors.Is(err, domain.ErrWrongSyncPhrase) || errors.Is(err, domain.ErrRemoteChanged) {
-		return true
+// disconnects reports whether err is not_connected, a timeout, an unknown or
+// changed host key, or an SSH or database error. Errors of the local storage,
+// a canceled operation and the domain errors a reachable server returns do not.
+func disconnects(err error) bool {
+	if _, ok := errors.AsType[localError](err); ok {
+		return false
 	}
-	if _, ok := errors.AsType[*domain.ValidationError](err); ok {
+	switch {
+	case errors.Is(err, domain.ErrNotConnected), errors.Is(err, context.DeadlineExceeded):
 		return true
+	case errors.Is(err, context.Canceled):
+		return false
 	}
 	if _, ok := errors.AsType[*domain.HostKeyUnknownError](err); ok {
 		return true
 	}
-	_, ok := errors.AsType[*domain.HostKeyMismatchError](err)
-	return ok
+	if _, ok := errors.AsType[*domain.HostKeyMismatchError](err); ok {
+		return true
+	}
+	for _, e := range []error{domain.ErrValidation, domain.ErrWrongSyncPhrase, domain.ErrRemoteChanged,
+		domain.ErrUnsupportedFormat, domain.ErrLocalChanged} {
+		if errors.Is(err, e) {
+			return false
+		}
+	}
+	return true
+}
+
+// localError marks an error of the local storage, which says nothing about
+// the server.
+type localError struct{ err error }
+
+func (e localError) Error() string { return e.err.Error() }
+func (e localError) Unwrap() error { return e.err }
+
+// ResetConnection forgets what the last operation learned about the server:
+// the connection settings or the trusted key changed.
+func (s *Sync) ResetConnection() {
+	s.update(func() {
+		s.connected, s.restoreAvailable = false, false
+		s.pendingBackup, s.pendingRestore = nil, nil
+	})
 }
 
 // CancelPending drops the plan kept between Prepare and Commit.
@@ -244,16 +294,12 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 	if err != nil {
 		return ConnectOutcome{}, err
 	}
-	defer closeSession(sess, &err)
+	defer s.closeSession(sess, &err)
 
 	gen := s.d.Changes.Generation()
-	local, err := s.d.Local.LocalSnapshot(ctx)
+	local, remote, err := s.snapshots(ctx, sess)
 	if err != nil {
-		return ConnectOutcome{}, fmt.Errorf("local snapshot: %w", err)
-	}
-	remote, err := sess.Snapshot(ctx)
-	if err != nil {
-		return ConnectOutcome{}, fmt.Errorf("remote snapshot: %w", err)
+		return ConnectOutcome{}, err
 	}
 
 	if sess.Created() {
@@ -263,17 +309,18 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 		return ConnectOutcome{Status: StatusCreated}, nil
 	}
 
+	// Another server: compare as if never synchronized with it. The reset
+	// stays in memory until a Backup, a Restore or an in-sync result writes
+	// the new pair, so a short visit to another server keeps the old revision.
+	stored := local
 	if local.ServerID != remote.ServerID {
-		if err := s.d.Local.SetSyncState(ctx, remote.ServerID, 0); err != nil {
-			return ConnectOutcome{}, fmt.Errorf("reset sync state: %w", err)
-		}
 		local.ServerID, local.Revision = remote.ServerID, 0
 	}
 
 	if !Diff(local.Notes, remote.Notes) {
-		if local.Revision != remote.Revision {
+		if stored.ServerID != remote.ServerID || stored.Revision != remote.Revision {
 			if err := s.d.Local.SetSyncState(ctx, remote.ServerID, remote.Revision); err != nil {
-				return ConnectOutcome{}, fmt.Errorf("align revision: %w", err)
+				return ConnectOutcome{}, fmt.Errorf("align revision: %w", localError{err})
 			}
 		}
 		s.d.Changes.ClearIf(gen)
@@ -289,6 +336,23 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 	plan := PlanRestore(local, remote, s.d.IDs, gen)
 	s.update(func() { s.restoreAvailable, s.pendingRestore = true, &plan })
 	return ConnectOutcome{Status: StatusRemoteNewer, Restore: plan.Counts}, nil
+}
+
+// snapshots reads the local snapshot, then the server's, and checks that the
+// server notes are ones this version can store (spec §6.2).
+func (s *Sync) snapshots(ctx context.Context, sess RemoteSession) (LocalSnapshot, RemoteSnapshot, error) {
+	local, err := s.d.Local.LocalSnapshot(ctx)
+	if err != nil {
+		return LocalSnapshot{}, RemoteSnapshot{}, fmt.Errorf("local snapshot: %w", localError{err})
+	}
+	remote, err := sess.Snapshot(ctx)
+	if err != nil {
+		return LocalSnapshot{}, RemoteSnapshot{}, fmt.Errorf("remote snapshot: %w", err)
+	}
+	if err := checkRemoteNotes(remote.Notes); err != nil {
+		return LocalSnapshot{}, RemoteSnapshot{}, fmt.Errorf("remote snapshot: %w", err)
+	}
+	return local, remote, nil
 }
 
 // PrepareBackup reads both snapshots, keeps a Backup plan and returns its counts.
@@ -314,16 +378,12 @@ func (s *Sync) prepareBackup(ctx context.Context) (plan BackupPlan, err error) {
 	if err != nil {
 		return BackupPlan{}, err
 	}
-	defer closeSession(sess, &err)
+	defer s.closeSession(sess, &err)
 
 	gen := s.d.Changes.Generation()
-	local, err := s.d.Local.LocalSnapshot(ctx)
+	local, remote, err := s.snapshots(ctx, sess)
 	if err != nil {
-		return BackupPlan{}, fmt.Errorf("local snapshot: %w", err)
-	}
-	remote, err := sess.Snapshot(ctx)
-	if err != nil {
-		return BackupPlan{}, fmt.Errorf("remote snapshot: %w", err)
+		return BackupPlan{}, err
 	}
 	return PlanBackup(local, remote, gen), nil
 }
@@ -358,19 +418,23 @@ func (s *Sync) commitBackup(ctx context.Context, plan BackupPlan) (err error) {
 	if err != nil {
 		return err
 	}
-	defer closeSession(sess, &err)
+	defer s.closeSession(sess, &err)
 	return s.backup(ctx, sess, plan)
 }
 
 // backup writes plan to the server, then the new revision locally, and clears
-// the change flag if nothing was edited since the plan's snapshot.
+// the change flag if nothing was edited since the plan's snapshot. Once the
+// server has committed, the local write gets its own short deadline instead
+// of what is left of the operation's.
 func (s *Sync) backup(ctx context.Context, sess RemoteSession, plan BackupPlan) error {
 	rev, err := sess.Backup(ctx, plan.Notes, plan.ServerID, plan.ExpectedRevision)
 	if err != nil {
 		return fmt.Errorf("backup: %w", err)
 	}
-	if err := s.d.Local.SetSyncState(ctx, plan.ServerID, rev); err != nil {
-		return fmt.Errorf("store revision: %w", err)
+	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), localWriteTimeout)
+	defer cancel()
+	if err := s.d.Local.SetSyncState(lctx, plan.ServerID, rev); err != nil {
+		return fmt.Errorf("store revision: %w", localError{err})
 	}
 	s.d.Changes.ClearIf(plan.Generation)
 	s.update(func() { s.restoreAvailable = false })
@@ -401,26 +465,22 @@ func (s *Sync) prepareRestore(ctx context.Context) (plan RestorePlan, err error)
 	if err != nil {
 		return RestorePlan{}, err
 	}
-	defer closeSession(sess, &err)
+	defer s.closeSession(sess, &err)
 	if sess.Empty() {
 		return RestorePlan{}, fmt.Errorf("remote storage is empty: %w", domain.ErrRemoteChanged)
 	}
 
 	gen := s.d.Changes.Generation()
-	local, err := s.d.Local.LocalSnapshot(ctx)
+	local, remote, err := s.snapshots(ctx, sess)
 	if err != nil {
-		return RestorePlan{}, fmt.Errorf("local snapshot: %w", err)
-	}
-	remote, err := sess.Snapshot(ctx)
-	if err != nil {
-		return RestorePlan{}, fmt.Errorf("remote snapshot: %w", err)
+		return RestorePlan{}, err
 	}
 	return PlanRestore(local, remote, s.d.IDs, gen), nil
 }
 
-// CommitRestore applies the plan from Connect or PrepareRestore locally. If a
-// note was edited since its snapshot it returns domain.ErrLocalChanged and
-// writes nothing.
+// CommitRestore applies the plan from Connect or PrepareRestore locally, with
+// local edits held off. If a note was edited since the plan's snapshot it
+// returns domain.ErrLocalChanged and writes nothing.
 func (s *Sync) CommitRestore(ctx context.Context) error {
 	end, err := s.begin()
 	if err != nil {
@@ -435,13 +495,12 @@ func (s *Sync) CommitRestore(ctx context.Context) error {
 	if plan == nil {
 		return fmt.Errorf("commit restore: %w", domain.ErrNoPendingOperation)
 	}
-	if s.d.Changes.Generation() != plan.Generation {
-		return fmt.Errorf("commit restore: %w", domain.ErrLocalChanged)
-	}
-	if err := s.d.Local.ApplyRestore(ctx, *plan, plan.Revision, plan.ServerID); err != nil {
+	err = s.d.Changes.ApplyIfUnchanged(plan.Generation, func() error {
+		return s.d.Local.ApplyRestore(ctx, *plan, plan.Revision, plan.ServerID)
+	})
+	if err != nil {
 		return fmt.Errorf("commit restore: %w", err)
 	}
-	s.d.Changes.ClearIf(plan.Generation)
 	s.update(func() { s.restoreAvailable = false })
 	return nil
 }
@@ -451,7 +510,7 @@ func (s *Sync) CommitRestore(ctx context.Context) error {
 func (s *Sync) open(ctx context.Context, mode OpenMode) (RemoteSession, error) {
 	settings, err := s.d.Settings.LoadSettings(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load settings: %w", err)
+		return nil, fmt.Errorf("load settings: %w", localError{err})
 	}
 	if settings.IsEmpty() {
 		return nil, domain.ErrNotConnected
@@ -463,8 +522,23 @@ func (s *Sync) open(ctx context.Context, mode OpenMode) (RemoteSession, error) {
 	return sess, nil
 }
 
-// closeSession closes sess and adds a close error to *err.
-func closeSession(sess RemoteSession, err *error) {
+// closeSession closes sess. A close error joins *err when the operation
+// failed; after a success it goes to Warn and the operation stays successful.
+func (s *Sync) closeSession(sess RemoteSession, err *error) {
+	cerr := sess.Close()
+	if cerr == nil {
+		return
+	}
+	cerr = fmt.Errorf("close remote session: %w", cerr)
+	if *err != nil {
+		*err = errors.Join(*err, cerr)
+		return
+	}
+	s.d.Warn(cerr)
+}
+
+// joinCloseError closes sess and adds a close error to *err.
+func joinCloseError(sess RemoteSession, err *error) {
 	if cerr := sess.Close(); cerr != nil {
 		*err = errors.Join(*err, fmt.Errorf("close remote session: %w", cerr))
 	}

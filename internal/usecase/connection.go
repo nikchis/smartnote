@@ -14,15 +14,19 @@ type TestResult struct {
 }
 
 // Connection loads, tests and saves the connection settings and the trusted
-// server key.
+// server key. Every method but Load enters the Gate shared with Sync, so no
+// setting changes during an operation with the server.
 type Connection struct {
 	settings SettingsStore
 	remote   RemoteConnector
 	gate     *Gate
+	changed  func()
 }
 
-// NewConnection returns a Connection; g is the Gate shared with Sync.
-func NewConnection(s SettingsStore, r RemoteConnector, g *Gate) (*Connection, error) {
+// NewConnection returns a Connection; g is the Gate shared with Sync, and
+// changed runs after the settings or the trusted key are saved (main connects
+// it to Sync.ResetConnection).
+func NewConnection(s SettingsStore, r RemoteConnector, g *Gate, changed func()) (*Connection, error) {
 	switch {
 	case s == nil:
 		return nil, nilDependency("NewConnection", "settings")
@@ -30,8 +34,10 @@ func NewConnection(s SettingsStore, r RemoteConnector, g *Gate) (*Connection, er
 		return nil, nilDependency("NewConnection", "remote")
 	case g == nil:
 		return nil, nilDependency("NewConnection", "gate")
+	case changed == nil:
+		return nil, nilDependency("NewConnection", "changed")
 	}
-	return &Connection{settings: s, remote: r, gate: g}, nil
+	return &Connection{settings: s, remote: r, gate: g, changed: changed}, nil
 }
 
 // Load returns the saved settings.
@@ -62,7 +68,7 @@ func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res
 	if err != nil {
 		return TestResult{}, fmt.Errorf("test connection: %w", err)
 	}
-	defer closeSession(sess, &err)
+	defer joinCloseError(sess, &err)
 	return TestResult{Empty: sess.Empty()}, nil
 }
 
@@ -72,10 +78,12 @@ func (c *Connection) Save(ctx context.Context, s domain.ConnectionSettings) erro
 	if err := s.Validate(); err != nil {
 		return err
 	}
-	if err := c.settings.SaveSettings(ctx, s.WithDefaults()); err != nil {
-		return fmt.Errorf("save settings: %w", err)
-	}
-	return nil
+	return c.write(func() error {
+		if err := c.settings.SaveSettings(ctx, s.WithDefaults()); err != nil {
+			return fmt.Errorf("save settings: %w", err)
+		}
+		return nil
+	})
 }
 
 // TrustHostKey stores authorizedKey as the trusted server key in the saved settings.
@@ -92,13 +100,29 @@ func (c *Connection) ResetHostKey(ctx context.Context) error {
 }
 
 func (c *Connection) setHostKey(ctx context.Context, key string) error {
-	s, err := c.settings.LoadSettings(ctx)
+	return c.write(func() error {
+		s, err := c.settings.LoadSettings(ctx)
+		if err != nil {
+			return fmt.Errorf("load settings: %w", err)
+		}
+		s.TrustedHostKey = key
+		if err := c.settings.SaveSettings(ctx, s); err != nil {
+			return fmt.Errorf("save settings: %w", err)
+		}
+		return nil
+	})
+}
+
+// write runs save inside the Gate and reports the change after a success.
+func (c *Connection) write(save func() error) error {
+	leave, err := c.gate.Enter()
 	if err != nil {
-		return fmt.Errorf("load settings: %w", err)
+		return err
 	}
-	s.TrustedHostKey = key
-	if err := c.settings.SaveSettings(ctx, s); err != nil {
-		return fmt.Errorf("save settings: %w", err)
+	defer leave()
+	if err := save(); err != nil {
+		return err
 	}
+	c.changed()
 	return nil
 }

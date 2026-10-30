@@ -21,6 +21,7 @@ var (
 	ErrStorageExists         = errors.New("local storage already exists")
 	ErrStorageMissing        = errors.New("local storage does not exist")
 	ErrKeyPassphraseRequired = errors.New("key passphrase required")
+	ErrKeyMissing            = errors.New("no ssh key")
 	ErrNoPendingOperation    = errors.New("no pending operation")
 )
 

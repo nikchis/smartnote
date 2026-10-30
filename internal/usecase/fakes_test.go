@@ -16,13 +16,15 @@ import (
 var errStore = errors.New("store failure")
 
 // fakeNoteStore keeps notes in a map and versions in a slice. fail, when set,
-// is returned by every write.
+// is returned by every write; onWrite, when set, runs at the end of every
+// write, outside the lock.
 type fakeNoteStore struct {
 	mu       sync.Mutex
 	notes    map[uuid.UUID]domain.Note
 	versions []domain.NoteVersion
 	writes   int
 	fail     error
+	onWrite  func()
 }
 
 func newFakeNoteStore(notes ...domain.Note) *fakeNoteStore {
@@ -58,7 +60,18 @@ func (s *fakeNoteStore) write() error {
 	return s.fail
 }
 
+// hook runs onWrite after a write released the lock.
+func (s *fakeNoteStore) hook() {
+	s.mu.Lock()
+	h := s.onWrite
+	s.mu.Unlock()
+	if h != nil {
+		h()
+	}
+}
+
 func (s *fakeNoteStore) InsertNote(_ context.Context, n domain.Note) error {
+	defer s.hook() // runs after the deferred Unlock
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.write(); err != nil {
@@ -69,6 +82,7 @@ func (s *fakeNoteStore) InsertNote(_ context.Context, n domain.Note) error {
 }
 
 func (s *fakeNoteStore) UpdateNoteWithVersion(_ context.Context, n domain.Note, prev domain.NoteVersion) error {
+	defer s.hook() // runs after the deferred Unlock
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.write(); err != nil {
@@ -80,6 +94,7 @@ func (s *fakeNoteStore) UpdateNoteWithVersion(_ context.Context, n domain.Note, 
 }
 
 func (s *fakeNoteStore) UpdateNoteName(_ context.Context, id uuid.UUID, name string, updated time.Time) error {
+	defer s.hook() // runs after the deferred Unlock
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.write(); err != nil {
@@ -92,6 +107,7 @@ func (s *fakeNoteStore) UpdateNoteName(_ context.Context, id uuid.UUID, name str
 }
 
 func (s *fakeNoteStore) DeleteNote(_ context.Context, id uuid.UUID) error {
+	defer s.hook() // runs after the deferred Unlock
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.write(); err != nil {
@@ -195,29 +211,69 @@ type syncStateCall struct {
 	Revision int64
 }
 
-// fakeSyncState is the local side of synchronization. onSnapshot, when set,
-// runs inside LocalSnapshot, as a concurrent edit would.
+// fakeSyncState is the local side of synchronization. When notes is set,
+// snapshots read it and ApplyRestore writes the plan into it, as one local
+// database would. onSnapshot runs inside LocalSnapshot and onApply inside
+// ApplyRestore, as a concurrent edit would; snapErr fails LocalSnapshot and
+// setCtxErr records the context error SetSyncState saw.
 type fakeSyncState struct {
 	mu         sync.Mutex
 	snap       LocalSnapshot
+	notes      *fakeNoteStore
 	setCalls   []syncStateCall
 	restores   []RestorePlan
 	onSnapshot func()
+	onApply    func()
+	snapErr    error
+	setCtxErr  []error
 }
 
-func (f *fakeSyncState) LocalSnapshot(context.Context) (LocalSnapshot, error) {
+func (f *fakeSyncState) LocalSnapshot(ctx context.Context) (LocalSnapshot, error) {
 	f.mu.Lock()
-	hook := f.onSnapshot
+	hook, notes, snapErr := f.onSnapshot, f.notes, f.snapErr
 	snap := f.snap
 	snap.Notes = slices.Clone(snap.Notes)
 	f.mu.Unlock()
 	if hook != nil {
 		hook()
 	}
+	if snapErr != nil {
+		return LocalSnapshot{}, snapErr
+	}
+	if notes != nil {
+		list, err := notes.ListNotes(ctx)
+		if err != nil {
+			return LocalSnapshot{}, err
+		}
+		snap.Notes = list
+	}
 	return snap, nil
 }
 
 func (f *fakeSyncState) ApplyRestore(_ context.Context, p RestorePlan, revision int64, serverID uuid.UUID) error {
+	f.mu.Lock()
+	hook, notes := f.onApply, f.notes
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if notes != nil {
+		notes.mu.Lock()
+		for _, n := range p.Insert {
+			notes.notes[n.ID] = n
+		}
+		for _, c := range p.Text {
+			notes.notes[c.Note.ID] = c.Note
+			notes.versions = append(notes.versions, c.Previous)
+		}
+		for _, n := range p.Rename {
+			notes.notes[n.ID] = n
+		}
+		for _, id := range p.Delete {
+			delete(notes.notes, id)
+		}
+		notes.mu.Unlock()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.restores = append(f.restores, p)
@@ -225,9 +281,13 @@ func (f *fakeSyncState) ApplyRestore(_ context.Context, p RestorePlan, revision 
 	return nil
 }
 
-func (f *fakeSyncState) SetSyncState(_ context.Context, serverID uuid.UUID, revision int64) error {
+func (f *fakeSyncState) SetSyncState(ctx context.Context, serverID uuid.UUID, revision int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.setCtxErr = append(f.setCtxErr, ctx.Err())
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.setCalls = append(f.setCalls, syncStateCall{serverID, revision})
 	f.snap.Revision, f.snap.ServerID = revision, serverID
 	return nil
@@ -260,9 +320,11 @@ type fakeServer struct {
 	// snapshotGate, when set, blocks Snapshot until it is closed; snapshotEntered is closed on entry.
 	snapshotGate    chan struct{}
 	snapshotEntered chan struct{}
-	backupErr       error // returned by Backup before any change
-	backupAckLost   bool  // Backup applies the change, then returns an error
-	backupBlocks    bool  // Backup waits for the context to end
+	backupErr       error  // returned by Backup before any change
+	backupAckLost   bool   // Backup applies the change, then returns an error
+	backupBlocks    bool   // Backup waits for the context to end
+	afterBackup     func() // runs after a successful Backup, before it returns
+	closeErr        error  // returned by Close
 
 	opens    []OpenMode
 	settings []domain.ConnectionSettings
@@ -346,6 +408,9 @@ func (s *fakeSession) Backup(ctx context.Context, notes []domain.Note, expectedS
 	if s.srv.backupAckLost {
 		return 0, errAckLost
 	}
+	if h := s.srv.afterBackup; h != nil {
+		h()
+	}
 	return s.srv.revision, nil
 }
 
@@ -353,7 +418,7 @@ func (s *fakeSession) Close() error {
 	s.srv.mu.Lock()
 	defer s.srv.mu.Unlock()
 	s.srv.closed++
-	return nil
+	return s.srv.closeErr
 }
 
 // fakeKeyStore keeps one key pair.

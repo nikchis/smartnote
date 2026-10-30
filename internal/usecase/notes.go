@@ -27,8 +27,8 @@ type NoteStore interface {
 	ListVersions(ctx context.Context, noteID uuid.UUID) ([]domain.NoteVersion, error)
 }
 
-// Notes lists, creates, saves and deletes notes. Every successful write marks
-// a local change.
+// Notes lists, creates, saves and deletes notes. Every write runs under the
+// ChangeTracker edit lock and, when it succeeds, marks a local change.
 type Notes struct {
 	store   NoteStore
 	clock   Clock
@@ -70,10 +70,12 @@ func (n *Notes) Create(ctx context.Context, name, info string) (domain.Note, err
 	if err := note.Validate(); err != nil {
 		return domain.Note{}, err
 	}
-	if err := n.store.InsertNote(ctx, note); err != nil {
+	err := n.changes.Edit(func() (bool, error) {
+		return true, n.store.InsertNote(ctx, note)
+	})
+	if err != nil {
 		return domain.Note{}, fmt.Errorf("create note: %w", err)
 	}
-	n.changes.MarkChanged()
 	return note, nil
 }
 
@@ -85,34 +87,40 @@ func (n *Notes) Save(ctx context.Context, id uuid.UUID, name, info string) (doma
 	if err := note.Validate(); err != nil {
 		return domain.Note{}, err
 	}
-	cur, err := n.store.GetNote(ctx, id)
+	var saved domain.Note
+	err := n.changes.Edit(func() (bool, error) {
+		cur, err := n.store.GetNote(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		if note.Name == cur.Name && note.Info == cur.Info {
+			saved = cur
+			return false, nil
+		}
+		note.Updated = n.clock()
+		if note.Info != cur.Info {
+			prev := domain.NoteVersion{ID: n.ids(), NoteID: id, Created: cur.Updated, Info: cur.Info}
+			err = n.store.UpdateNoteWithVersion(ctx, note, prev)
+		} else {
+			err = n.store.UpdateNoteName(ctx, id, note.Name, note.Updated)
+		}
+		saved = note
+		return true, err
+	})
 	if err != nil {
 		return domain.Note{}, fmt.Errorf("save note: %w", err)
 	}
-	if note.Name == cur.Name && note.Info == cur.Info {
-		return cur, nil
-	}
-
-	note.Updated = n.clock()
-	if note.Info != cur.Info {
-		prev := domain.NoteVersion{ID: n.ids(), NoteID: id, Created: cur.Updated, Info: cur.Info}
-		err = n.store.UpdateNoteWithVersion(ctx, note, prev)
-	} else {
-		err = n.store.UpdateNoteName(ctx, id, note.Name, note.Updated)
-	}
-	if err != nil {
-		return domain.Note{}, fmt.Errorf("save note: %w", err)
-	}
-	n.changes.MarkChanged()
-	return note, nil
+	return saved, nil
 }
 
 // Delete removes note id with its versions.
 func (n *Notes) Delete(ctx context.Context, id uuid.UUID) error {
-	if err := n.store.DeleteNote(ctx, id); err != nil {
+	err := n.changes.Edit(func() (bool, error) {
+		return true, n.store.DeleteNote(ctx, id)
+	})
+	if err != nil {
 		return fmt.Errorf("delete note: %w", err)
 	}
-	n.changes.MarkChanged()
 	return nil
 }
 
