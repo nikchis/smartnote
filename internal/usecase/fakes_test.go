@@ -167,3 +167,189 @@ var (
 	t0 = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	t1 = t0.Add(time.Hour)
 )
+
+// fakeSettings returns fixed connection settings.
+type fakeSettings struct {
+	mu    sync.Mutex
+	s     domain.ConnectionSettings
+	saved []domain.ConnectionSettings
+}
+
+func (f *fakeSettings) LoadSettings(context.Context) (domain.ConnectionSettings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.s, nil
+}
+
+func (f *fakeSettings) SaveSettings(_ context.Context, s domain.ConnectionSettings) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.s = s
+	f.saved = append(f.saved, s)
+	return nil
+}
+
+// syncStateCall is one SetSyncState call.
+type syncStateCall struct {
+	ServerID uuid.UUID
+	Revision int64
+}
+
+// fakeSyncState is the local side of synchronization. onSnapshot, when set,
+// runs inside LocalSnapshot, as a concurrent edit would.
+type fakeSyncState struct {
+	mu         sync.Mutex
+	snap       LocalSnapshot
+	setCalls   []syncStateCall
+	restores   []RestorePlan
+	onSnapshot func()
+}
+
+func (f *fakeSyncState) LocalSnapshot(context.Context) (LocalSnapshot, error) {
+	f.mu.Lock()
+	hook := f.onSnapshot
+	snap := f.snap
+	snap.Notes = slices.Clone(snap.Notes)
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return snap, nil
+}
+
+func (f *fakeSyncState) ApplyRestore(_ context.Context, p RestorePlan, revision int64, serverID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restores = append(f.restores, p)
+	f.snap.Revision, f.snap.ServerID = revision, serverID
+	return nil
+}
+
+func (f *fakeSyncState) SetSyncState(_ context.Context, serverID uuid.UUID, revision int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setCalls = append(f.setCalls, syncStateCall{serverID, revision})
+	f.snap.Revision, f.snap.ServerID = revision, serverID
+	return nil
+}
+
+func (f *fakeSyncState) writes() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.setCalls) + len(f.restores)
+}
+
+// backupCall is one RemoteSession.Backup call.
+type backupCall struct {
+	Notes            []domain.Note
+	ExpectedServerID uuid.UUID
+	ExpectedRevision int64
+}
+
+// fakeServer is the remote side shared by all sessions. The hooks change how
+// the next calls behave.
+type fakeServer struct {
+	mu       sync.Mutex
+	notes    []domain.Note
+	revision int64
+	serverID uuid.UUID
+	noSchema bool // meta is missing: OpenCreate creates it, OpenCheck reports Empty
+
+	openErr     error
+	snapshotErr error
+	// snapshotGate, when set, blocks Snapshot until it is closed; snapshotEntered is closed on entry.
+	snapshotGate    chan struct{}
+	snapshotEntered chan struct{}
+	backupErr       error // returned by Backup before any change
+	backupAckLost   bool  // Backup applies the change, then returns an error
+	backupBlocks    bool  // Backup waits for the context to end
+
+	opens   []OpenMode
+	backups []backupCall
+	closed  int
+}
+
+var errAckLost = errors.New("connection lost after COMMIT")
+
+func (f *fakeServer) Open(_ context.Context, _ domain.ConnectionSettings, mode OpenMode) (RemoteSession, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.opens = append(f.opens, mode)
+	if f.openErr != nil {
+		return nil, f.openErr
+	}
+	sess := &fakeSession{srv: f}
+	if f.noSchema {
+		switch mode {
+		case OpenCreate:
+			f.noSchema = false
+			sess.created = true
+		case OpenCheck:
+			sess.empty = true
+		}
+	}
+	return sess, nil
+}
+
+type fakeSession struct {
+	srv            *fakeServer
+	created, empty bool
+}
+
+func (s *fakeSession) Created() bool { return s.created }
+func (s *fakeSession) Empty() bool   { return s.empty }
+
+func (s *fakeSession) Snapshot(ctx context.Context) (RemoteSnapshot, error) {
+	s.srv.mu.Lock()
+	gate, entered := s.srv.snapshotGate, s.srv.snapshotEntered
+	s.srv.mu.Unlock()
+	if entered != nil {
+		close(entered)
+	}
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return RemoteSnapshot{}, ctx.Err()
+		}
+	}
+	s.srv.mu.Lock()
+	defer s.srv.mu.Unlock()
+	if s.srv.snapshotErr != nil {
+		return RemoteSnapshot{}, s.srv.snapshotErr
+	}
+	return RemoteSnapshot{Notes: slices.Clone(s.srv.notes), Revision: s.srv.revision, ServerID: s.srv.serverID}, nil
+}
+
+func (s *fakeSession) Backup(ctx context.Context, notes []domain.Note, expectedServerID uuid.UUID, expectedRevision int64) (int64, error) {
+	s.srv.mu.Lock()
+	s.srv.backups = append(s.srv.backups, backupCall{slices.Clone(notes), expectedServerID, expectedRevision})
+	blocks := s.srv.backupBlocks
+	s.srv.mu.Unlock()
+	if blocks {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+
+	s.srv.mu.Lock()
+	defer s.srv.mu.Unlock()
+	if s.srv.backupErr != nil {
+		return 0, s.srv.backupErr
+	}
+	if expectedServerID != s.srv.serverID || expectedRevision != s.srv.revision {
+		return 0, domain.ErrRemoteChanged
+	}
+	s.srv.notes = slices.Clone(notes)
+	s.srv.revision++
+	if s.srv.backupAckLost {
+		return 0, errAckLost
+	}
+	return s.srv.revision, nil
+}
+
+func (s *fakeSession) Close() error {
+	s.srv.mu.Lock()
+	defer s.srv.mu.Unlock()
+	s.srv.closed++
+	return nil
+}
