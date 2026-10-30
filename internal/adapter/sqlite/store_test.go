@@ -180,7 +180,7 @@ func TestCreateIsAtomic(t *testing.T) {
 	}
 }
 
-func TestExistsFalseWithoutDEK(t *testing.T) {
+func TestExistsFalseWithoutData(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
@@ -192,23 +192,18 @@ func TestExistsFalseWithoutDEK(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{name: "database without meta", setup: func(t *testing.T, path string) {
-			rawExec(t, filepath.Dir(path), "CREATE TABLE other (x INTEGER)")
-		}},
-		{name: "meta without wrapped_dek", setup: func(t *testing.T, path string) {
-			rawExec(t, filepath.Dir(path), "CREATE TABLE meta (key TEXT PRIMARY KEY, value BLOB)")
+		{name: "database without tables", setup: func(t *testing.T, path string) {
+			if err := os.WriteFile(path, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			rawExec(t, filepath.Dir(path), "PRAGMA user_version = 1")
 		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-
-			path := filepath.Join(dir, dbFile)
-			if err := os.WriteFile(path, nil, 0o600); err != nil {
-				t.Fatal(err)
-			}
-
-			tt.setup(t, path)
+			tt.setup(t, filepath.Join(dir, dbFile))
 			s := openTest(t, dir)
 
 			ok, err := s.Exists(ctx)
@@ -217,11 +212,75 @@ func TestExistsFalseWithoutDEK(t *testing.T) {
 			}
 
 			if err := s.Create(ctx, "secret1"); err != nil {
-				t.Fatalf("Create over a storage without a key: %v", err)
+				t.Fatalf("Create over a storage without data: %v", err)
 			}
 
 			if ok, err := s.Exists(ctx); err != nil || !ok {
 				t.Errorf("Exists after Create = %v, %v", ok, err)
+			}
+		})
+	}
+}
+
+// A database that has tables but no data key is damaged, not missing:
+// replacing it would delete the notes it holds.
+func TestCorruptWithoutDEK(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "meta dropped", query: "DROP TABLE meta"},
+		{name: "wrapped_dek deleted", query: "DELETE FROM meta WHERE key = 'wrapped_dek'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, dir := createTest(t)
+
+			n := domain.Note{ID: testUUID(1), Name: "kept", Info: "text", Updated: time.UnixMilli(1000).UTC()}
+			if err := s.InsertNote(ctx, n); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			rawExec(t, dir, tt.query)
+
+			path := filepath.Join(dir, dbFile)
+
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			s = openTest(t, dir)
+
+			if _, err := s.Exists(ctx); !errors.Is(err, domain.ErrCorruptStorage) {
+				t.Errorf("Exists = %v, want ErrCorruptStorage", err)
+			}
+
+			if err := s.Create(ctx, "secret1"); !errors.Is(err, domain.ErrCorruptStorage) {
+				t.Errorf("Create = %v, want ErrCorruptStorage: the file must not be replaced", err)
+			}
+
+			if err := s.Unlock(ctx, "secret1"); !errors.Is(err, domain.ErrCorruptStorage) {
+				t.Errorf("Unlock = %v, want ErrCorruptStorage", err)
+			}
+
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !bytes.Equal(before, after) {
+				t.Error("the damaged storage was changed")
 			}
 		})
 	}
@@ -386,6 +445,31 @@ func TestUnicodePasswordNFC(t *testing.T) {
 	s2 := openTest(t, dir)
 	if err := s2.Unlock(ctx, "passéword"); err != nil {
 		t.Errorf("Unlock with the NFD form: %v", err)
+	}
+}
+
+func TestRelativePath(t *testing.T) {
+	ctx := context.Background()
+	wd := t.TempDir()
+	t.Chdir(wd)
+
+	s := openTest(t, "data")
+	if err := s.Create(ctx, "secret1"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	t.Chdir(t.TempDir()) // the store keeps its directory after a change of the working one
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if ok, err := s.Exists(ctx); err != nil || !ok {
+		t.Errorf("Exists after chdir = %v, %v", ok, err)
+	}
+
+	if _, err := os.Stat(filepath.Join(wd, "data", dbFile)); err != nil {
+		t.Errorf("database not under the working directory: %v", err)
 	}
 }
 

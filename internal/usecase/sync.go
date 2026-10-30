@@ -326,7 +326,10 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 		return ConnectOutcome{}, err
 	}
 
-	if sess.Created() {
+	// Only a server still in its initial state is backed up without a
+	// question: another device may have backed up since the schema was
+	// created, and the Backup's revision check holds it to revision 0.
+	if sess.Created() && remote.Revision == 0 && len(remote.Notes) == 0 {
 		if err := s.backup(ctx, sess, PlanBackup(local, remote, gen)); err != nil {
 			return ConnectOutcome{}, err
 		}

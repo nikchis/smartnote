@@ -35,13 +35,19 @@ type Store struct {
 	dek []byte  // nil while locked
 }
 
-// Open returns the store in dir, creating the directory with mode 0700. It
-// creates and removes no files; the caller holds the data directory lock.
+// Open returns the store in dir, creating the directory with mode 0700. A
+// relative dir is resolved against the working directory at Open. It creates
+// and removes no files; the caller holds the data directory lock.
 func Open(dir string) (*Store, error) { return OpenWithKDF(dir, sealbox.DefaultKDF()) }
 
 // OpenWithKDF is Open with the KDF parameters for new keys; tests pass cheap ones.
 func OpenWithKDF(dir string, p sealbox.KDFParams) (*Store, error) {
 	if err := p.Validate(); err != nil {
+		return nil, fmt.Errorf("open local storage: %w", err)
+	}
+	// The SQLite URI takes an absolute path; a relative one would read from the root.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
 		return nil, fmt.Errorf("open local storage: %w", err)
 	}
 
@@ -58,9 +64,10 @@ func OpenWithKDF(dir string, p sealbox.KDFParams) (*Store, error) {
 
 func (s *Store) path() string { return filepath.Join(s.dir, dbFile) }
 
-// Exists reports whether the storage has a sealed data key. A file that is
-// not a database returns domain.ErrCorruptStorage, so it is never mistaken
-// for a missing storage and replaced.
+// Exists reports whether the storage has a sealed data key. Only a missing
+// file, an empty one or a database without tables is a missing storage; a
+// file that is not a database, or a database with tables but no data key,
+// returns domain.ErrCorruptStorage, so it is never replaced.
 func (s *Store) Exists(ctx context.Context) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,8 +98,12 @@ func (s *Store) existsLocked(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	if !tables[tableMeta] {
+	if len(tables) == 0 {
 		return false, nil
+	}
+
+	if !tables[tableMeta] {
+		return false, corrupt("table %s is missing", tableMeta)
 	}
 
 	var n int
@@ -102,7 +113,11 @@ func (s *Store) existsLocked(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("check local storage: %w", mapOpenError(err))
 	}
 
-	return n > 0, nil
+	if n == 0 {
+		return false, corrupt("no %s", metaWrappedDEK)
+	}
+
+	return true, nil
 }
 
 // Create builds a new storage in local.db.tmp and renames it over local.db,
@@ -321,8 +336,12 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 		return nil, err
 	}
 
-	if !tables[tableMeta] {
+	if len(tables) == 0 {
 		return nil, domain.ErrStorageMissing
+	}
+
+	if !tables[tableMeta] {
+		return nil, corrupt("table %s is missing", tableMeta)
 	}
 
 	meta, err := readMeta(ctx, s.db)
@@ -332,7 +351,7 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 
 	wrapped, ok := meta[metaWrappedDEK]
 	if !ok {
-		return nil, domain.ErrStorageMissing
+		return nil, corrupt("no %s", metaWrappedDEK)
 	}
 
 	for _, t := range requiredTables {

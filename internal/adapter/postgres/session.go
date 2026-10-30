@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,7 +19,8 @@ import (
 
 // Options configure NewSession. KDF is used only when the storage is
 // created. Abort tears down the transport (the SSH client) when a context
-// ends, since an SSH channel has no deadlines; nil means nothing to tear down.
+// ends, since an SSH channel has no deadlines; it is called at most once, and
+// nil means nothing to tear down.
 type Options struct {
 	Mode   usecase.OpenMode
 	Phrase string
@@ -58,9 +60,9 @@ func NewSession(ctx context.Context, conn *pgx.Conn, o Options) (*Session, error
 		abort = func() {}
 	}
 
-	s := &Session{conn: conn, abort: abort}
+	s := &Session{conn: conn, abort: sync.OnceFunc(abort)}
 
-	stop := context.AfterFunc(ctx, abort)
+	stop := context.AfterFunc(ctx, s.abort)
 	defer stop()
 
 	if err := s.open(ctx, o); err != nil {
@@ -121,18 +123,23 @@ func (s *Session) ensureStorage(ctx context.Context, o Options) (m meta, key []b
 				return fmt.Errorf("create schema: %w", err)
 			}
 		}
-		// CREATE TABLE IF NOT EXISTS needs CREATE on the schema even when the
-		// table exists, so the DDL runs only when something is missing.
-		var missing bool
-		if err := tx.QueryRow(ctx, `SELECT to_regclass('smartnote.meta') IS NULL
-			OR to_regclass('smartnote.notes') IS NULL OR to_regclass('smartnote.sync_state') IS NULL`).Scan(&missing); err != nil {
-			return fmt.Errorf("check tables: %w", err)
+		// The tables are created only for a new storage, all at once. A
+		// storage that lost some of them is damaged: a recreated empty table
+		// would pass for real data. The DDL runs only when needed, since
+		// CREATE TABLE IF NOT EXISTS needs CREATE on the schema even then.
+		missing, err := missingTables(ctx, tx)
+		if err != nil {
+			return err
 		}
 
-		if missing {
+		switch len(missing) {
+		case 0:
+		case len(storageTables):
 			if _, err := tx.Exec(ctx, ddl); err != nil {
 				return fmt.Errorf("create tables: %w", err)
 			}
+		default:
+			return fmt.Errorf("%w: no table %s", errDamagedStorage, strings.Join(missing, ", "))
 		}
 
 		var found bool
@@ -167,6 +174,21 @@ func (s *Session) ensureStorage(ctx context.Context, o Options) (m meta, key []b
 	}
 
 	return m, key, created, nil
+}
+
+// missingTables returns the storage tables that do not exist.
+func missingTables(ctx context.Context, tx pgx.Tx) ([]string, error) {
+	rows, err := tx.Query(ctx, "SELECT t FROM unnest($1::text[]) AS t WHERE to_regclass(t) IS NULL", storageTables)
+	if err != nil {
+		return nil, fmt.Errorf("check tables: %w", err)
+	}
+
+	missing, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("check tables: %w", err)
+	}
+
+	return missing, nil
 }
 
 // readMetaIfAny reads meta without creating anything; a missing schema,
@@ -401,14 +423,18 @@ func (s *Session) upsert(ctx context.Context, tx pgx.Tx, notes []domain.Note) (e
 	return nil
 }
 
-// Close wipes the key, says goodbye to the server and calls Abort. Later
-// calls return the first result.
+// Close wipes the key, says goodbye to the server and calls Abort. The
+// goodbye gets closeTimeout; a transport without deadlines that stalls it is
+// aborted then. Later calls return the first result.
 func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
 		sealbox.Wipe(s.key)
 
 		ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 		defer cancel()
+
+		stop := context.AfterFunc(ctx, s.abort)
+		defer stop()
 
 		if err := s.conn.Close(ctx); err != nil {
 			s.closeErr = fmt.Errorf("close database connection: %w", err)
@@ -423,6 +449,9 @@ func (s *Session) Close() error {
 // errNoStorage is returned by Snapshot and Backup of an OpenCheck session
 // that found no storage.
 var errNoStorage = errors.New("remote storage is empty")
+
+// errDamagedStorage is returned by NewSession when the storage lost some of its tables.
+var errDamagedStorage = errors.New("remote storage is damaged")
 
 // inTx runs f in a transaction and commits it, or rolls it back on error.
 func inTx(ctx context.Context, conn *pgx.Conn, opts pgx.TxOptions, f func(tx pgx.Tx) error) (err error) {

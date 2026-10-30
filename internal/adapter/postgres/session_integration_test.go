@@ -620,6 +620,34 @@ func TestServerKDFOutOfRange(t *testing.T) {
 	}
 }
 
+// A storage that lost a table is damaged: recreating the table empty would
+// make an empty snapshot look genuine and let Restore delete local notes.
+func TestPartialSchemaRefused(t *testing.T) {
+	for _, table := range []string{"notes", "sync_state", "meta"} {
+		t.Run(table, func(t *testing.T) {
+			cfg := newDatabase(t)
+
+			s := mustOpen(t, cfg, usecase.OpenCreate)
+			if _, err := s.Backup(context.Background(), []domain.Note{testNote("n", "i")}, mustServerID(t, s), 0); err != nil {
+				t.Fatal(err)
+			}
+
+			adminExec(t, cfg, "DROP TABLE smartnote."+table)
+
+			if _, err := open(t, cfg, usecase.OpenCreate, testPhrase); err == nil || !strings.Contains(err.Error(), "smartnote."+table) {
+				t.Errorf("NewSession = %v, want an error naming smartnote.%s", err, table)
+			}
+
+			var recreated bool
+			adminQueryRow(t, cfg, []any{&recreated}, "SELECT to_regclass($1) IS NOT NULL", "smartnote."+table)
+
+			if recreated {
+				t.Errorf("smartnote.%s was recreated", table)
+			}
+		})
+	}
+}
+
 func TestServerFormatNewer(t *testing.T) {
 	cfg := newDatabase(t)
 	mustOpen(t, cfg, usecase.OpenCreate)
@@ -682,6 +710,74 @@ func TestCloseCallsAbortOnce(t *testing.T) {
 		Abort: func() { failedAborts.Add(1) }})
 	if !errors.Is(err, domain.ErrWrongSyncPhrase) || failedAborts.Load() != 1 {
 		t.Errorf("failed NewSession = %v, aborts %d; want ErrWrongSyncPhrase and 1", err, failedAborts.Load())
+	}
+}
+
+// stalledConn is a transport like an SSH channel: it has no deadlines, and
+// once stalled its writes block until it is closed.
+type stalledConn struct {
+	net.Conn
+	stalled atomic.Bool
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func (c *stalledConn) Write(b []byte) (int, error) {
+	if c.stalled.Load() {
+		<-c.closed
+		return 0, net.ErrClosed
+	}
+
+	return c.Conn.Write(b)
+}
+
+func (c *stalledConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func (*stalledConn) SetDeadline(time.Time) error      { return errors.New("deadline not supported") }
+func (*stalledConn) SetReadDeadline(time.Time) error  { return errors.New("deadline not supported") }
+func (*stalledConn) SetWriteDeadline(time.Time) error { return errors.New("deadline not supported") }
+
+func TestCloseAbortsStalledTransport(t *testing.T) {
+	cfg := newDatabase(t).Copy()
+
+	var conn *stalledConn
+
+	cfg.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+
+		conn = &stalledConn{Conn: c, closed: make(chan struct{})}
+
+		return conn, nil
+	}
+
+	s, err := NewSession(context.Background(), connect(t, cfg), Options{Mode: usecase.OpenCreate, Phrase: testPhrase, KDF: testKDF,
+		Abort: func() { _ = conn.Close() }})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn.stalled.Store(true)
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		_ = s.Close() // the goodbye cannot be sent; only returning matters
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(closeTimeout + 3*time.Second):
+		_ = conn.Close() // let the goroutine finish
+
+		t.Fatal("Close did not return after closeTimeout with a stalled transport")
 	}
 }
 

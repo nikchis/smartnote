@@ -20,6 +20,9 @@ const formatVersion = 1
 // schemaLockKey names the advisory lock that serializes schema creation.
 const schemaLockKey = "smartnote.schema"
 
+// storageTables are the tables of the remote storage.
+var storageTables = []string{"smartnote.meta", "smartnote.notes", "smartnote.sync_state"}
+
 // ddl creates the tables of spec §5.2 in an existing smartnote schema.
 const ddl = `
 CREATE TABLE IF NOT EXISTS smartnote.meta (

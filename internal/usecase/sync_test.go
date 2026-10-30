@@ -187,6 +187,31 @@ func TestConnectCreatedBacksUp(t *testing.T) {
 	}
 }
 
+// Another device can back up between the commit that creates the storage and
+// this session's snapshot; its data must not be overwritten without a question.
+func TestConnectCreatedButChangedSkipsBackup(t *testing.T) {
+	srv := &fakeServer{noSchema: true, serverID: serverA, revision: 1, notes: []domain.Note{note(2, "b", "y")}}
+	local := LocalSnapshot{Notes: []domain.Note{note(1, "a", "x")}}
+	f := newSyncFixture(t, local, srv)
+
+	out, err := f.sync.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	if len(srv.backups) != 0 {
+		t.Errorf("backups = %+v, want none", srv.backups)
+	}
+
+	if out.Status != StatusRemoteNewer || out.Restore.Deleted != 1 {
+		t.Errorf("outcome = %+v, want remote_newer deleting 1 local note", out)
+	}
+
+	if got := f.local.setCalls; len(got) != 0 {
+		t.Errorf("SetSyncState calls = %v, want none", got)
+	}
+}
+
 func TestConnectEmptyBothInSync(t *testing.T) {
 	srv := &fakeServer{serverID: serverA}
 	f := newSyncFixture(t, LocalSnapshot{}, srv)
