@@ -30,6 +30,10 @@ and what the three delivery-risk checks showed. Date: 2026-10-30, Ubuntu 26.04, 
   `build/` pass it to `go build` and to `wails3 generate bindings`.
 - Package metadata in `build/config.yml`, `build/linux/nfpm/nfpm.yaml`, `build/darwin/*.plist`
   and `build/windows/*` is still the template's ("My Company"); it is filled in before release.
+- The template's server-mode tasks (`build:server`, `run:server`, `build:docker`, `run:docker`)
+  and `build/docker/Dockerfile.server` are removed: Wails server mode serves the bound services
+  over HTTP with no authentication or Origin check, and the spec has no such mode. The unused
+  `build/linux/appimage/build.sh` is removed too; `wails3 generate appimage` builds the AppImage.
 
 ## Check 1: bindings and errors
 
@@ -62,8 +66,11 @@ The temporary service was removed.
 `frontend/index.html` carries the policy from the spec, section 7.3:
 
 ```
-default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'
+default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'
 ```
+
+`base-uri 'none'` and `form-action 'none'` were added after the check below, following the code
+review of tasks 1–3: the page has no `<base>` and no form that submits by navigation.
 
 A temporary listener for `securitypolicyviolation` reported every violation to Go, together with
 the computed colour of an element styled by a Svelte component `<style>` block. As a control,
