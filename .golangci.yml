@@ -1,0 +1,105 @@
+version: "2"
+
+run:
+  timeout: 5m
+  # Integration tests are linted with the rest of the code.
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - dogsled
+    - errcheck
+    - errorlint
+    - exhaustive
+    - funlen
+    - gochecknoinits
+    - goconst
+    - gocritic
+    - gocyclo
+    - goprintffuncname
+    - gosec
+    - govet
+    - ineffassign
+    - lll
+    - nakedret
+    - noctx
+    - nolintlint
+    - prealloc
+    - revive
+    - sqlclosecheck
+    - staticcheck
+    - unconvert
+    - unused
+    - whitespace
+    - wsl_v5
+
+  settings:
+    exhaustive:
+      # A switch with a default branch handles the other values on purpose.
+      default-signifies-exhaustive: true
+    funlen:
+      lines: 300
+      statements: 70
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - opinionated
+        - performance
+        - style
+      disabled-checks:
+        - dupImport
+        - commentedOutCode
+        - importShadow
+        - hugeParam
+        # Like hugeParam: copies of structs in loops do not show, and code may rely on a change of the loop
+        # variable not changing the source slice.
+        - rangeValCopy
+    gocyclo:
+      min-complexity: 25
+    lll:
+      line-length: 200
+    nolintlint:
+      allow-unused: false
+      # //nolint only with the linter name and a reason: //nolint:gosec // why this is safe
+      require-specific: true
+      require-explanation: true
+    prealloc:
+      # Report pre-allocation suggestions only on simple loops that have no returns/breaks/continues/gotos in them.
+      simple: false
+      # Report pre-allocation suggestions on range loops.
+      range-loops: false
+      # Report pre-allocation suggestions on for loops.
+      for-loops: true
+
+  exclusions:
+    paths:
+      - frontend/node_modules
+    # The exclusions golangci-lint v1 applied by default.
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - gocritic
+        text: "unnecessaryDefer:"
+      # Tests: fakes, in-process servers, tables of cases and fake secrets that must not reach the disk.
+      # Repeated literals and long functions are normal there, and the gosec findings (files in t.TempDir(),
+      # hard-coded test passwords) are properties of the tests, not of the app.
+      - path: _test\.go
+        linters:
+          - funlen
+          - goconst
+          - gocyclo
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
