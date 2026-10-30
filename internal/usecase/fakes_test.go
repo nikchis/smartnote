@@ -264,17 +264,19 @@ type fakeServer struct {
 	backupAckLost   bool  // Backup applies the change, then returns an error
 	backupBlocks    bool  // Backup waits for the context to end
 
-	opens   []OpenMode
-	backups []backupCall
-	closed  int
+	opens    []OpenMode
+	settings []domain.ConnectionSettings
+	backups  []backupCall
+	closed   int
 }
 
 var errAckLost = errors.New("connection lost after COMMIT")
 
-func (f *fakeServer) Open(_ context.Context, _ domain.ConnectionSettings, mode OpenMode) (RemoteSession, error) {
+func (f *fakeServer) Open(_ context.Context, s domain.ConnectionSettings, mode OpenMode) (RemoteSession, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.opens = append(f.opens, mode)
+	f.settings = append(f.settings, s)
 	if f.openErr != nil {
 		return nil, f.openErr
 	}
@@ -352,4 +354,36 @@ func (s *fakeSession) Close() error {
 	defer s.srv.mu.Unlock()
 	s.srv.closed++
 	return nil
+}
+
+// fakeKeyStore keeps one key pair.
+type fakeKeyStore struct {
+	key   domain.KeyPair
+	has   bool
+	saves int
+}
+
+func (f *fakeKeyStore) LoadKey(context.Context) (domain.KeyPair, bool, error) {
+	return f.key, f.has, nil
+}
+
+func (f *fakeKeyStore) SaveKey(_ context.Context, k domain.KeyPair) error {
+	f.key, f.has = k, true
+	f.saves++
+	return nil
+}
+
+// fakeKeyTool returns key or err from both methods and records Import input.
+type fakeKeyTool struct {
+	key        domain.KeyPair
+	err        error
+	imported   []byte
+	passphrase string
+}
+
+func (f *fakeKeyTool) Generate() (domain.KeyPair, error) { return f.key, f.err }
+
+func (f *fakeKeyTool) Import(data []byte, passphrase string) (domain.KeyPair, error) {
+	f.imported, f.passphrase = data, passphrase
+	return f.key, f.err
 }
