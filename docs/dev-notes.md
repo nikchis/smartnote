@@ -24,8 +24,8 @@ and what the three delivery-risk checks showed. Date: 2026-10-30, Ubuntu 26.04, 
   and `main` serves `fs.Sub(frontend.Dist, "dist")`.
 - `frontend/dist` must exist before Go code that imports `frontend` compiles; `make test`,
   `make lint` and `make integration` build the frontend first (`task common:build:frontend`).
-- The `Makefile` and `.golangci.yml` follow the layout of pdfgo-renderer: pinned golangci-lint in
-  `bin/`, `govulncheck` as a `tool` in `go.mod`, integration tests linted with the `integration` tag.
+- The `Makefile` pins golangci-lint in `bin/` and runs `govulncheck` as a `tool` in `go.mod`;
+  `.golangci.yml` lints the integration tests with the `integration` tag.
 - `go.mod` has `ignore ./frontend/node_modules`, so `./...` never walks npm packages
   (some ship `.go` files).
 - The root `Taskfile.yml` defines `MAIN_PKG: ./cmd/smartnote`; the platform Taskfiles under
