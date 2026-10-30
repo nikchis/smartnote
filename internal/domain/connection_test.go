@@ -1,7 +1,10 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -69,6 +72,8 @@ func TestConnectionSettings_Validate(t *testing.T) {
 		{name: "db host empty uses default", modify: func(s *ConnectionSettings) { s.DBHost = "" }},
 		{name: "sync phrase of 15 units", modify: func(s *ConnectionSettings) { s.SyncPhrase = strings.Repeat("p", MinSyncPhraseLen-1) }, wantField: "sync_phrase"},
 		{name: "sync phrase of 16 units", modify: func(s *ConnectionSettings) { s.SyncPhrase = strings.Repeat("p", MinSyncPhraseLen) }},
+		{name: "sync phrase of 8 nfd letters is 16 units but 8 after nfc", modify: func(s *ConnectionSettings) { s.SyncPhrase = strings.Repeat("\u0435\u0308", 8) }, wantField: "sync_phrase"},
+		{name: "sync phrase of 16 nfd letters", modify: func(s *ConnectionSettings) { s.SyncPhrase = strings.Repeat("\u0435\u0308", 16) }},
 		{name: "passwords are optional", modify: func(s *ConnectionSettings) { s.SSHPassword, s.DBPassword = "", "" }},
 	}
 	for _, tt := range tests {
@@ -145,5 +150,41 @@ func TestConnectionSettings_JSONNames(t *testing.T) {
 		if _, ok := got[k]; !ok {
 			t.Errorf("key %q missing in %s", k, data)
 		}
+	}
+}
+
+// secretSettings has a distinct marker in every field that must not reach a log.
+func secretSettings() ConnectionSettings {
+	return ConnectionSettings{
+		SSHHost: "host-marker", SSHPort: 22, SSHUser: "ssh-user-marker", SSHPassword: "ssh-password-marker",
+		DBHost: "127.0.0.1", DBPort: 5432, DBName: "db-name-marker", DBUser: "db-user-marker",
+		DBPassword: "db-password-marker", SyncPhrase: "sync-phrase-marker", TrustedHostKey: "host-key-marker",
+	}
+}
+
+var settingsMarkers = []string{"host-marker", "ssh-user-marker", "ssh-password-marker", "db-name-marker",
+	"db-user-marker", "db-password-marker", "sync-phrase-marker", "host-key-marker"}
+
+func TestConnectionSettings_Redacted(t *testing.T) {
+	s := secretSettings()
+	var logged bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logged, nil)).Info("connect", "settings", s, "ptr", &s)
+
+	outputs := map[string]string{
+		"%v":   fmt.Sprintf("%v", s),
+		"%+v":  fmt.Sprintf("%+v", s),
+		"%#v":  fmt.Sprintf("%#v", s),
+		"ptr":  fmt.Sprintf("%+v", &s),
+		"slog": logged.String(),
+	}
+	for verb, out := range outputs {
+		for _, m := range settingsMarkers {
+			if strings.Contains(out, m) {
+				t.Errorf("%s output %q contains %q", verb, out, m)
+			}
+		}
+	}
+	if got := fmt.Sprint(ConnectionSettings{}); !strings.Contains(got, "empty") {
+		t.Errorf("empty settings print as %q, want a mention of empty", got)
 	}
 }

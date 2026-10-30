@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"log/slog"
+)
 
 // DefaultDBHost is the database host used when settings leave it empty.
 const DefaultDBHost = "127.0.0.1"
@@ -55,11 +58,27 @@ func (s ConnectionSettings) Validate() error {
 	if err := required("db_user", s.DBUser); err != nil {
 		return err
 	}
-	if textLen(s.SyncPhrase) < MinSyncPhraseLen {
+	if secretLen(s.SyncPhrase) < MinSyncPhraseLen {
 		return &ValidationError{Field: "sync_phrase", Reason: fmt.Sprintf("must be at least %d characters", MinSyncPhraseLen)}
 	}
 	return nil
 }
+
+// String hides every field: together they form the connection string and hold
+// passwords and the sync phrase, none of which may reach the log. It also
+// serves %v and %+v.
+func (s ConnectionSettings) String() string {
+	if s.IsEmpty() {
+		return "ConnectionSettings{empty}"
+	}
+	return "ConnectionSettings{redacted}"
+}
+
+// GoString keeps %#v as redacted as String.
+func (s ConnectionSettings) GoString() string { return s.String() }
+
+// LogValue keeps slog output as redacted as String.
+func (s ConnectionSettings) LogValue() slog.Value { return slog.StringValue(s.String()) }
 
 // WithDefaults returns s with an empty DBHost set to DefaultDBHost, unless s is empty.
 func (s ConnectionSettings) WithDefaults() ConnectionSettings {
