@@ -16,7 +16,7 @@ func TestKDFParams_Validate(t *testing.T) {
 		params  KDFParams
 		wantErr bool
 	}{
-		{name: "default", params: DefaultKDF},
+		{name: "default", params: DefaultKDF()},
 		{name: "time 0", params: KDFParams{Time: 0, MemoryKiB: 65536, Threads: 4}, wantErr: true},
 		{name: "time 1", params: KDFParams{Time: 1, MemoryKiB: 65536, Threads: 4}},
 		{name: "time 10", params: KDFParams{Time: 10, MemoryKiB: 65536, Threads: 4}},
@@ -98,19 +98,30 @@ func TestDeriveKeyDeterministic(t *testing.T) {
 	}
 }
 
+func TestDefaultKDFIsACopy(t *testing.T) {
+	p := DefaultKDF()
+	p.Time = 1
+	if got := DefaultKDF().Time; got != 3 {
+		t.Errorf("DefaultKDF().Time = %d after changing a copy, want 3", got)
+	}
+}
+
 func TestDeriveKeyRejectsBadInput(t *testing.T) {
 	tests := []struct {
 		name   string
+		secret []byte
 		salt   []byte
 		params KDFParams
 	}{
-		{name: "salt of 15 bytes", salt: make([]byte, SaltSize-1), params: testKDF},
-		{name: "salt of 17 bytes", salt: make([]byte, SaltSize+1), params: testKDF},
-		{name: "invalid params", salt: make([]byte, SaltSize), params: KDFParams{Time: 1, MemoryKiB: 1 << 30, Threads: 1}},
+		{name: "salt of 15 bytes", secret: []byte("secret"), salt: make([]byte, SaltSize-1), params: testKDF},
+		{name: "salt of 17 bytes", secret: []byte("secret"), salt: make([]byte, SaltSize+1), params: testKDF},
+		{name: "invalid params", secret: []byte("secret"), salt: make([]byte, SaltSize), params: KDFParams{Time: 1, MemoryKiB: 1 << 30, Threads: 1}},
+		{name: "nil secret", secret: nil, salt: make([]byte, SaltSize), params: testKDF},
+		{name: "empty secret", secret: []byte{}, salt: make([]byte, SaltSize), params: testKDF},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := DeriveKey([]byte("secret"), tt.salt, tt.params); !errors.Is(err, ErrInvalidParams) {
+			if _, err := DeriveKey(tt.secret, tt.salt, tt.params); !errors.Is(err, ErrInvalidParams) {
 				t.Errorf("DeriveKey = %v, want ErrInvalidParams", err)
 			}
 		})
@@ -133,12 +144,35 @@ func TestSubKeyRFC5869(t *testing.T) {
 		t.Errorf("subKeyLen = %x, want %x", okm, want)
 	}
 
-	key, err := SubKey(ikm, "")
+	// SubKey only adds the master length check; the 22-byte IKM of the vector is below it.
+	master := bytes.Repeat([]byte{0x0b}, KeySize)
+	key, err := SubKey(master, "smartnote/v2/enc")
 	if err != nil {
 		t.Fatalf("SubKey: %v", err)
 	}
-	if !bytes.Equal(key, want[:KeySize]) {
-		t.Errorf("SubKey = %x, want prefix %x", key, want[:KeySize])
+	same, err := subKeyLen(master, "smartnote/v2/enc", KeySize)
+	if err != nil {
+		t.Fatalf("subKeyLen: %v", err)
+	}
+	if !bytes.Equal(key, same) {
+		t.Errorf("SubKey = %x, want %x", key, same)
+	}
+}
+
+func TestSubKeyRejectsShortMaster(t *testing.T) {
+	tests := []struct {
+		name   string
+		master []byte
+	}{
+		{name: "nil", master: nil},
+		{name: "31 bytes", master: make([]byte, KeySize-1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := SubKey(tt.master, "smartnote/v2/enc"); !errors.Is(err, ErrInvalidParams) {
+				t.Errorf("SubKey = %v, want ErrInvalidParams", err)
+			}
+		})
 	}
 }
 

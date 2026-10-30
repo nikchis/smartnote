@@ -22,8 +22,55 @@ func TestAAD_bytes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := string(tt.aad.bytes()); got != tt.want {
+			got, err := tt.aad.bytes()
+			if err != nil {
+				t.Fatalf("bytes(): %v", err)
+			}
+			if string(got) != tt.want {
 				t.Errorf("bytes() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// ambiguousAADs could share an encoding with another AAD, or bind a field to nothing.
+var ambiguousAADs = []struct {
+	name string
+	aad  AAD
+}{
+	{name: "zero", aad: AAD{}},
+	{name: "no table", aad: AAD{Column: "info", RowID: "u1"}},
+	{name: "no column", aad: AAD{Table: "notes", RowID: "u1"}},
+	{name: "no row id", aad: AAD{Table: "notes", Column: "info"}},
+	{name: "separator in table", aad: AAD{Table: "notes|info", Column: "a", RowID: "b"}},
+	{name: "separator in column", aad: AAD{Table: "notes", Column: "info|a", RowID: "b"}},
+	{name: "separator in row id", aad: AAD{Table: "notes", Column: "info", RowID: "a|b"}},
+	{name: "separator in owner id", aad: AAD{Table: "notes", Column: "info", RowID: "a", OwnerID: "b|c"}},
+}
+
+func TestSealRejectsAmbiguousAAD(t *testing.T) {
+	for _, tt := range ambiguousAADs {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Seal(testKey(1), []byte("x"), tt.aad); !errors.Is(err, ErrInvalidParams) {
+				t.Errorf("Seal = %v, want ErrInvalidParams", err)
+			}
+		})
+	}
+}
+
+func TestOpenRejectsAmbiguousAAD(t *testing.T) {
+	sealed, err := Seal(testKey(1), []byte("x"), AAD{Table: "notes", Column: "info", RowID: "a", OwnerID: "b"})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	for _, tt := range ambiguousAADs {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Open(testKey(1), sealed, tt.aad)
+			if !errors.Is(err, ErrOpen) {
+				t.Errorf("Open = %v, want ErrOpen", err)
+			}
+			if got != nil {
+				t.Errorf("Open returned plaintext %q", got)
 			}
 		})
 	}
@@ -49,6 +96,9 @@ func TestSealOpenRoundTrip(t *testing.T) {
 			}
 			if !bytes.Equal(got, tt.plaintext) {
 				t.Errorf("Open = %q, want %q", got, tt.plaintext)
+			}
+			if got == nil {
+				t.Error("Open returned nil plaintext with a nil error")
 			}
 		})
 	}
@@ -122,6 +172,38 @@ func TestOpenRejects(t *testing.T) {
 			}
 		})
 	}
+}
+
+// FuzzOpen checks that Open never panics, that every failure is ErrOpen
+// without plaintext, and that anything it opens is the sealed text. Fuzz
+// workers re-run this setup with a new nonce, so the check is on the plaintext.
+func FuzzOpen(f *testing.F) {
+	key := testKey(1)
+	plaintext := []byte("secret note")
+	authentic, err := Seal(key, plaintext, noteAAD)
+	if err != nil {
+		f.Fatalf("Seal: %v", err)
+	}
+	f.Add(authentic)
+	f.Add([]byte{})
+	f.Add([]byte{FormatVersion})
+	f.Add(authentic[:len(authentic)-1])
+
+	f.Fuzz(func(t *testing.T, sealed []byte) {
+		got, err := Open(key, sealed, noteAAD)
+		if err == nil {
+			if !bytes.Equal(got, plaintext) {
+				t.Fatalf("Open(%x) = %q, want %q", sealed, got, plaintext)
+			}
+			return
+		}
+		if !errors.Is(err, ErrOpen) {
+			t.Errorf("Open = %v, want ErrOpen", err)
+		}
+		if got != nil {
+			t.Errorf("Open returned plaintext %q with an error", got)
+		}
+	})
 }
 
 func TestWipe(t *testing.T) {

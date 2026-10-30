@@ -35,11 +35,13 @@ type KDFParams struct {
 	Threads   uint8  `json:"p"`
 }
 
-// DefaultKDF is used for new storages and new servers.
-var DefaultKDF = KDFParams{Time: 3, MemoryKiB: 65536, Threads: 4}
+// DefaultKDF returns the parameters for new storages and new servers. It is a
+// function so that no package can lower the cost for everyone.
+func DefaultKDF() KDFParams { return KDFParams{Time: 3, MemoryKiB: 65536, Threads: 4} }
 
 var (
-	// ErrInvalidParams reports KDF parameters, a salt or a key outside the allowed bounds.
+	// ErrInvalidParams reports KDF parameters, a salt, a key, a secret or an AAD
+	// that the caller passed outside the allowed bounds.
 	ErrInvalidParams = errors.New("sealbox: invalid parameters")
 	// ErrOpen reports a sealed field that cannot be opened with the given key and AAD.
 	ErrOpen = errors.New("sealbox: cannot open sealed data")
@@ -67,10 +69,14 @@ func NewSalt() ([]byte, error) {
 	return salt, nil
 }
 
-// DeriveKey derives a KeySize key from secret with Argon2id after checking p and the salt length.
+// DeriveKey derives a KeySize key from secret with Argon2id after checking p,
+// the salt length and that secret is not empty.
 func DeriveKey(secret []byte, salt []byte, p KDFParams) ([]byte, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
+	}
+	if len(secret) == 0 {
+		return nil, fmt.Errorf("%w: empty secret", ErrInvalidParams)
 	}
 	if len(salt) != SaltSize {
 		return nil, fmt.Errorf("%w: salt of %d bytes, want %d", ErrInvalidParams, len(salt), SaltSize)
@@ -78,8 +84,12 @@ func DeriveKey(secret []byte, salt []byte, p KDFParams) ([]byte, error) {
 	return argon2.IDKey(secret, salt, p.Time, p.MemoryKiB, p.Threads, KeySize), nil
 }
 
-// SubKey derives a KeySize key for the purpose named by info with HKDF-SHA256 and no salt.
+// SubKey derives a KeySize key for the purpose named by info with HKDF-SHA256
+// and no salt. master must be at least KeySize bytes.
 func SubKey(master []byte, info string) ([]byte, error) {
+	if len(master) < KeySize {
+		return nil, fmt.Errorf("%w: master key of %d bytes, want at least %d", ErrInvalidParams, len(master), KeySize)
+	}
 	return subKeyLen(master, info, KeySize)
 }
 
