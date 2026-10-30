@@ -1,0 +1,99 @@
+version: '3'
+
+vars:
+  APP_NAME: "smartnote"
+  BIN_DIR: "bin"
+  MAIN_PKG: "./cmd/smartnote"
+  PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+  # Target OS for build/package/run. Defaults to the host OS, and is overridden
+  # by `wails3 build GOOS=...` (or the GOOS env var) for cross-compilation. The
+  # tasks below dispatch to the matching platform Taskfile via this variable.
+  GOOS: '{{.GOOS | default OS}}'
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+  linux: ./build/linux/Taskfile.yml
+
+tasks:
+  build:
+    summary: Builds the application
+    cmds:
+      - task: "{{.GOOS}}:build"
+
+  package:
+    summary: Packages a production build of the application
+    cmds:
+      - task: "{{.GOOS}}:package"
+
+  run:
+    summary: Runs the application
+    cmds:
+      - task: "{{.GOOS}}:run"
+
+  dev:
+    summary: Runs the application in development mode
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  test:
+    summary: Runs Go unit tests with the race detector
+    deps:
+      # frontend/embed.go needs frontend/dist to compile.
+      - task: common:build:frontend
+    cmds:
+      - go test -race ./...
+
+  lint:
+    summary: Runs golangci-lint
+    deps:
+      - task: common:build:frontend
+    cmds:
+      - golangci-lint run ./...
+
+  package:linux:
+    summary: Builds the .deb package and the AppImage
+    cmds:
+      - task: linux:create:appimage
+      - task: linux:create:deb
+
+  smoke:appimage:
+    summary: Starts the AppImage in a clean ubuntu:26.04 container under Xvfb
+    preconditions:
+      - sh: test -f {{.BIN_DIR}}/{{.APP_NAME}}-x86_64.AppImage
+        msg: "Run `task package:linux` first."
+    cmds:
+      # bubblewrap inside Docker needs user namespaces and an unmasked /proc.
+      - docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined -v "{{.ROOT_DIR}}/{{.BIN_DIR}}:/app:ro" -v "{{.ROOT_DIR}}/build/linux/smoke-appimage.sh:/smoke.sh:ro" ubuntu:26.04 sh /smoke.sh /app/{{.APP_NAME}}-x86_64.AppImage
+
+  install:msix:tools:
+    summary: Installs tools required for Windows MSIX packaging
+    cmds:
+      - task: windows:install:msix:tools
+
+  setup:docker:
+    summary: Builds Docker image for cross-compilation (~800MB download)
+    cmds:
+      - task: common:setup:docker
+
+  build:server:
+    summary: Builds the application in server mode (no GUI, HTTP server only)
+    cmds:
+      - task: common:build:server
+
+  run:server:
+    summary: Runs the application in server mode
+    cmds:
+      - task: common:run:server
+
+  build:docker:
+    summary: Builds a Docker image for server mode deployment
+    cmds:
+      - task: common:build:docker
+
+  run:docker:
+    summary: Builds and runs the Docker image
+    cmds:
+      - task: common:run:docker

@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "2.0.0"
+	},
+	"info": {
+		"0409": {
+			"ProductVersion": "2.0.0",
+			"CompanyName": "My Company",
+			"FileDescription": "A smartnote application",
+			"LegalCopyright": "© 2026, My Company",
+			"ProductName": "Smartnote",
+			"Comments": "This is a comment"
+		}
+	}
+}

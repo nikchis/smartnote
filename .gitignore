@@ -1,0 +1,14 @@
+.task
+bin/
+build/bin/
+frontend/dist/
+frontend/node_modules/
+frontend/bindings/
+build/linux/appimage/build/
+build/linux/appimage/smartnote
+build/linux/appimage/smartnote.png
+build/linux/smartnote.desktop
+build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+*.db
+*.db-journal
+*.db.tmp
