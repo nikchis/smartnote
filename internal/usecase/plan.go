@@ -17,12 +17,14 @@ func Diff(local, remote []domain.Note) bool {
 	if len(localByID) != len(remoteByID) {
 		return true
 	}
+
 	for id, l := range localByID {
 		r, ok := remoteByID[id]
 		if !ok || !sameContent(l, r) {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -69,6 +71,7 @@ func PlanBackup(local LocalSnapshot, remote RemoteSnapshot, gen uint64) BackupPl
 		ServerID:         remote.ServerID,
 		Generation:       gen,
 	}
+
 	remoteByID := index(remote.Notes)
 	for _, l := range local.Notes {
 		r, ok := remoteByID[l.ID]
@@ -79,12 +82,14 @@ func PlanBackup(local LocalSnapshot, remote RemoteSnapshot, gen uint64) BackupPl
 			p.Updated++
 		}
 	}
+
 	localByID := index(local.Notes)
 	for _, r := range remote.Notes {
 		if _, ok := localByID[r.ID]; !ok {
 			p.Deleted++
 		}
 	}
+
 	return p
 }
 
@@ -93,6 +98,7 @@ func PlanBackup(local LocalSnapshot, remote RemoteSnapshot, gen uint64) BackupPl
 // visited in ID order, so ids is called in a stable order.
 func PlanRestore(local LocalSnapshot, remote RemoteSnapshot, ids IDGenerator, gen uint64) RestorePlan {
 	p := RestorePlan{Revision: remote.Revision, ServerID: remote.ServerID, Generation: gen}
+
 	localByID := index(local.Notes)
 	for _, r := range sortedByID(remote.Notes) {
 		l, ok := localByID[r.ID]
@@ -106,13 +112,16 @@ func PlanRestore(local LocalSnapshot, remote RemoteSnapshot, ids IDGenerator, ge
 			p.Rename = append(p.Rename, r)
 		}
 	}
+
 	remoteByID := index(remote.Notes)
 	for _, l := range sortedByID(local.Notes) {
 		if _, ok := remoteByID[l.ID]; !ok {
 			p.Delete = append(p.Delete, l.ID)
 		}
 	}
+
 	p.Counts = Counts{Added: len(p.Insert), Updated: len(p.Text) + len(p.Rename), Deleted: len(p.Delete)}
+
 	return p
 }
 
@@ -123,12 +132,14 @@ func index(notes []domain.Note) map[uuid.UUID]domain.Note {
 	for _, n := range notes {
 		m[n.ID] = n
 	}
+
 	return m
 }
 
 func sortedByID(notes []domain.Note) []domain.Note {
 	out := slices.Clone(notes)
 	slices.SortFunc(out, func(a, b domain.Note) int { return bytes.Compare(a.ID[:], b.ID[:]) })
+
 	return out
 }
 
@@ -142,16 +153,20 @@ func checkRemoteNotes(notes []domain.Note) error {
 		if n.ID == uuid.Nil {
 			return fmt.Errorf("%w: note %d has no id", domain.ErrUnsupportedFormat, i)
 		}
+
 		if _, dup := seen[n.ID]; dup {
 			return fmt.Errorf("%w: note %d repeats an id", domain.ErrUnsupportedFormat, i)
 		}
+
 		seen[n.ID] = struct{}{}
 		if n.Normalized() != n {
 			return fmt.Errorf("%w: note %d is not normalized", domain.ErrUnsupportedFormat, i)
 		}
+
 		if err := n.Validate(); err != nil {
 			return fmt.Errorf("%w: note %d: %w", domain.ErrUnsupportedFormat, i, err)
 		}
 	}
+
 	return nil
 }

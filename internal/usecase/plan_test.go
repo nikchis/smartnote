@@ -14,6 +14,7 @@ func note(id byte, name, info string) domain.Note {
 
 func TestDiff(t *testing.T) {
 	base := []domain.Note{note(1, "a", "x"), note(2, "b", "y")}
+
 	tests := []struct {
 		name   string
 		local  []domain.Note
@@ -47,9 +48,11 @@ func TestPlanBackup(t *testing.T) {
 	if want := (Counts{Added: 1, Updated: 2, Deleted: 1}); p.Counts != want {
 		t.Errorf("Counts = %+v, want %+v", p.Counts, want)
 	}
+
 	if len(p.Notes) != len(local.Notes) {
 		t.Errorf("Notes = %d, want all %d local notes", len(p.Notes), len(local.Notes))
 	}
+
 	if p.ExpectedRevision != 7 || p.ServerID != serverID || p.Generation != 42 {
 		t.Errorf("plan = {rev %d, server %v, gen %d}, want {7, %v, 42}", p.ExpectedRevision, p.ServerID, p.Generation, serverID)
 	}
@@ -57,6 +60,7 @@ func TestPlanBackup(t *testing.T) {
 
 func TestPlanBackupNoChanges(t *testing.T) {
 	notes := []domain.Note{note(1, "a", "x")}
+
 	p := PlanBackup(LocalSnapshot{Notes: notes}, RemoteSnapshot{Notes: notes}, 0)
 	if p.Counts != (Counts{}) {
 		t.Errorf("Counts = %+v, want zero", p.Counts)
@@ -85,28 +89,36 @@ func TestPlanRestore(t *testing.T) {
 	if want := (Counts{Added: 1, Updated: 2, Deleted: 1}); p.Counts != want {
 		t.Errorf("Counts = %+v, want %+v", p.Counts, want)
 	}
+
 	if len(p.Text) != 1 {
 		t.Fatalf("Text = %+v, want one change", p.Text)
 	}
+
 	tc := p.Text[0]
 	if tc.Note != remoteText {
 		t.Errorf("Text[0].Note = %+v, want the server note %+v", tc.Note, remoteText)
 	}
+
 	if tc.Previous.NoteID != testID(1) || tc.Previous.Info != "local text" || !tc.Previous.Created.Equal(t0) {
 		t.Errorf("Previous = %+v, want local text created at the local Updated %v", tc.Previous, t0)
 	}
+
 	if tc.Previous.ID == uuid.Nil {
 		t.Error("Previous has no ID")
 	}
+
 	if len(p.Rename) != 1 || p.Rename[0].ID != testID(2) || p.Rename[0].Name != "new name" {
 		t.Errorf("Rename = %+v, want note 2 named \"new name\"", p.Rename)
 	}
+
 	if len(p.Insert) != 1 || p.Insert[0].ID != testID(4) {
 		t.Errorf("Insert = %+v, want note 4", p.Insert)
 	}
+
 	if len(p.Delete) != 1 || p.Delete[0] != testID(3) {
 		t.Errorf("Delete = %v, want note 3", p.Delete)
 	}
+
 	if p.Revision != 9 || p.ServerID != serverID || p.Generation != 5 {
 		t.Errorf("plan = {rev %d, server %v, gen %d}, want {9, %v, 5}", p.Revision, p.ServerID, p.Generation, serverID)
 	}

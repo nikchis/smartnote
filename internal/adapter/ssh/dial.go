@@ -37,9 +37,11 @@ func pgConfig(s domain.ConnectionSettings, d contextDialer) (*pgx.ConnConfig, er
 	if err != nil {
 		return nil, fmt.Errorf("database config: %w", err)
 	}
+
 	if s.DBPort < 1 || s.DBPort > 65535 {
 		return nil, &domain.ValidationError{Field: "db_port", Reason: "must be between 1 and 65535"}
 	}
+
 	cfg.Host = s.DBHost
 	cfg.Port = uint16(s.DBPort)
 	cfg.Database = s.DBName
@@ -57,7 +59,9 @@ func pgConfig(s domain.ConnectionSettings, d contextDialer) (*pgx.ConnConfig, er
 		if network != "tcp" || addr != allowed {
 			return nil, fmt.Errorf("database dial to %s %s refused: only %s is allowed", network, addr, allowed)
 		}
+
 		return d.DialContext(ctx, "tcp", addr)
 	}
+
 	return cfg, nil
 }

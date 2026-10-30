@@ -26,6 +26,7 @@ func NewVault(s VaultStore) (*Vault, error) {
 	if s == nil {
 		return nil, nilDependency("NewVault", "store")
 	}
+
 	return &Vault{store: s}, nil
 }
 
@@ -35,6 +36,7 @@ func (v *Vault) Exists(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("check storage: %w", err)
 	}
+
 	return ok, nil
 }
 
@@ -43,9 +45,11 @@ func (v *Vault) Create(ctx context.Context, password, confirm string) error {
 	if err := validateNewPassword(password, confirm); err != nil {
 		return err
 	}
+
 	if err := v.store.Create(ctx, password); err != nil {
 		return fmt.Errorf("create storage: %w", err)
 	}
+
 	return nil
 }
 
@@ -54,6 +58,7 @@ func (v *Vault) Unlock(ctx context.Context, password string) error {
 	if err := v.store.Unlock(ctx, password); err != nil {
 		return fmt.Errorf("unlock storage: %w", err)
 	}
+
 	return nil
 }
 
@@ -63,9 +68,11 @@ func (v *Vault) ChangePassword(ctx context.Context, password, confirm string) er
 	if err := validateNewPassword(password, confirm); err != nil {
 		return err
 	}
+
 	if err := v.store.ChangePassword(ctx, password); err != nil {
 		return fmt.Errorf("change password: %w", err)
 	}
+
 	return nil
 }
 
@@ -75,8 +82,10 @@ func validateNewPassword(password, confirm string) error {
 	if err := domain.ValidatePassword(password); err != nil {
 		return err
 	}
+
 	if domain.NormalizeSecret(password) != domain.NormalizeSecret(confirm) {
 		return &domain.ValidationError{Field: "confirm", Reason: "does not match the password"}
 	}
+
 	return nil
 }

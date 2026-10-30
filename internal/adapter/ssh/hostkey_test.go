@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
@@ -15,29 +16,35 @@ import (
 
 func newEd25519Key(t *testing.T) gossh.PublicKey {
 	t.Helper()
+
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	k, err := gossh.NewPublicKey(pub)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return k
 }
 
 func TestHostKeyUnknown(t *testing.T) {
 	key := newEd25519Key(t)
 	err := hostKeyCallback("")("example.org:22", nil, key)
+
 	hk, ok := errors.AsType[*domain.HostKeyUnknownError](err)
 	if !ok {
 		t.Fatalf("callback = %v, want *HostKeyUnknownError", err)
 	}
+
 	if hk.Fingerprint != gossh.FingerprintSHA256(key) {
 		t.Errorf("Fingerprint = %q, want %q", hk.Fingerprint, gossh.FingerprintSHA256(key))
 	}
-	parsed, _, _, _, err := gossh.ParseAuthorizedKey([]byte(hk.AuthorizedKey))
-	if err != nil || string(parsed.Marshal()) != string(key.Marshal()) {
+
+	parsed, err := parseAuthorized(hk.AuthorizedKey)
+	if err != nil || !bytes.Equal(parsed.Marshal(), key.Marshal()) {
 		t.Errorf("AuthorizedKey %q does not parse back to the key: %v", hk.AuthorizedKey, err)
 	}
 }
@@ -45,13 +52,16 @@ func TestHostKeyUnknown(t *testing.T) {
 func TestHostKeyMismatch(t *testing.T) {
 	trusted, presented := newEd25519Key(t), newEd25519Key(t)
 	err := hostKeyCallback(authorizedLine(trusted))("example.org:22", nil, presented)
+
 	hk, ok := errors.AsType[*domain.HostKeyMismatchError](err)
 	if !ok {
 		t.Fatalf("callback = %v, want *HostKeyMismatchError", err)
 	}
+
 	if hk.Expected != gossh.FingerprintSHA256(trusted) || hk.Got != gossh.FingerprintSHA256(presented) {
 		t.Errorf("mismatch = %+v", hk)
 	}
+
 	if err := hostKeyCallback(authorizedLine(trusted))("example.org:22", nil, trusted); err != nil {
 		t.Errorf("trusted key: %v", err)
 	}
@@ -68,10 +78,12 @@ func TestPinnedAlgorithms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	rsaPub, err := gossh.NewPublicKey(&rsaKey.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	tests := []struct {
 		name    string
 		trusted string

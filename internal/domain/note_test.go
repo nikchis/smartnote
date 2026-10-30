@@ -34,10 +34,12 @@ func TestNote_Validate(t *testing.T) {
 
 func TestNote_Normalized(t *testing.T) {
 	n := Note{Name: "a\r\nb", Info: "c\r\nd\r\n"}
+
 	got := n.Normalized()
 	if got.Name != "a\nb" || got.Info != "c\nd\n" {
 		t.Errorf("Normalized() = {Name: %q, Info: %q}, want {Name: \"a\\nb\", Info: \"c\\nd\\n\"}", got.Name, got.Info)
 	}
+
 	if n.Info != "c\r\nd\r\n" {
 		t.Errorf("Normalized changed the receiver: %q", n.Info)
 	}
@@ -73,22 +75,28 @@ func TestValidatePassword(t *testing.T) {
 // otherwise that it is a *ValidationError for wantField matching ErrValidation.
 func assertValidationField(t *testing.T, err error, wantField string) {
 	t.Helper()
+
 	if wantField == "" {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+
 		return
 	}
+
 	if err == nil {
 		t.Fatalf("want validation error for %q, got nil", wantField)
 	}
+
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("errors.Is(%v, ErrValidation) = false", err)
 	}
+
 	var ve *ValidationError
 	if !errors.As(err, &ve) {
 		t.Fatalf("error %v is not a *ValidationError", err)
 	}
+
 	if ve.Field != wantField {
 		t.Errorf("Field = %q, want %q (error: %v)", ve.Field, wantField, err)
 	}

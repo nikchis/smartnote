@@ -22,8 +22,10 @@ and what the three delivery-risk checks showed. Date: 2026-10-30, Ubuntu 26.04, 
 - `cmd/smartnote/main.go` is the entry point. `//go:embed` cannot reach a parent directory,
   so the built UI is embedded by package `frontend` (`frontend/embed.go`, `frontend.Dist`),
   and `main` serves `fs.Sub(frontend.Dist, "dist")`.
-- `frontend/dist` must exist before Go code that imports `frontend` compiles; `task test`
-  and `task lint` build the frontend first.
+- `frontend/dist` must exist before Go code that imports `frontend` compiles; `make test`,
+  `make lint` and `make integration` build the frontend first (`task common:build:frontend`).
+- The `Makefile` and `.golangci.yml` follow the layout of pdfgo-renderer: pinned golangci-lint in
+  `bin/`, `govulncheck` as a `tool` in `go.mod`, integration tests linted with the `integration` tag.
 - `go.mod` has `ignore ./frontend/node_modules`, so `./...` never walks npm packages
   (some ship `.go` files).
 - The root `Taskfile.yml` defines `MAIN_PKG: ./cmd/smartnote`; the platform Taskfiles under

@@ -18,5 +18,6 @@ func (g *Gate) Enter() (leave func(), err error) {
 	if !g.mu.TryLock() {
 		return nil, domain.ErrBusy
 	}
+
 	return sync.OnceFunc(g.mu.Unlock), nil
 }

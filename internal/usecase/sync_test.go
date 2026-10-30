@@ -40,12 +40,14 @@ type syncFixture struct {
 
 func newSyncFixture(t *testing.T, local LocalSnapshot, srv *fakeServer) *syncFixture {
 	t.Helper()
+
 	f := &syncFixture{
 		local:   &fakeSyncState{snap: local},
 		srv:     srv,
 		changes: &ChangeTracker{},
 		gate:    &Gate{},
 	}
+
 	s, err := NewSync(SyncDeps{
 		Local:    f.local,
 		Settings: &fakeSettings{s: completeSettings()},
@@ -56,33 +58,40 @@ func newSyncFixture(t *testing.T, local LocalSnapshot, srv *fakeServer) *syncFix
 		OnState: func(st State) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+
 			f.states = append(f.states, st)
 		},
 		Warn: func(err error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+
 			f.warnings = append(f.warnings, err)
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	f.sync = s
+
 	return f
 }
 
 func (f *syncFixture) lastState() State {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	if len(f.states) == 0 {
 		return State{}
 	}
+
 	return f.states[len(f.states)-1]
 }
 
 func TestNewSyncNil(t *testing.T) {
 	full := SyncDeps{Local: &fakeSyncState{}, Settings: &fakeSettings{}, Remote: &fakeServer{},
 		Changes: &ChangeTracker{}, IDs: seqIDs(), Gate: &Gate{}, Warn: func(error) {}}
+
 	tests := []struct {
 		name   string
 		modify func(*SyncDeps)
@@ -99,11 +108,13 @@ func TestNewSyncNil(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			d := full
 			tt.modify(&d)
+
 			if _, err := NewSync(d); err == nil {
 				t.Error("want an error for a nil dependency")
 			}
 		})
 	}
+
 	if _, err := NewSync(full); err != nil {
 		t.Errorf("NewSync without OnState: %v", err)
 	}
@@ -119,12 +130,15 @@ func TestConnectOffline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+
 	if out.Status != StatusOffline {
 		t.Errorf("Status = %q, want offline", out.Status)
 	}
+
 	if len(srv.opens) != 0 {
 		t.Errorf("Open called %d times", len(srv.opens))
 	}
+
 	if f.sync.State().Connected {
 		t.Error("Connected = true while offline")
 	}
@@ -139,24 +153,31 @@ func TestConnectCreatedBacksUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+
 	if out.Status != StatusCreated {
 		t.Errorf("Status = %q, want created", out.Status)
 	}
+
 	if len(srv.opens) != 1 || srv.opens[0] != OpenCreate {
 		t.Errorf("opens = %v, want [OpenCreate]", srv.opens)
 	}
+
 	if len(srv.backups) != 1 {
 		t.Fatalf("backups = %d, want 1", len(srv.backups))
 	}
+
 	if b := srv.backups[0]; b.ExpectedRevision != 0 || b.ExpectedServerID != serverA || len(b.Notes) != 1 {
 		t.Errorf("Backup(%+v), want expected revision 0 from the snapshot, server A, 1 note", b)
 	}
+
 	if got := f.local.setCalls; len(got) != 1 || got[0] != (syncStateCall{serverA, 1}) {
 		t.Errorf("SetSyncState calls = %v, want [{A 1}]", got)
 	}
+
 	if st := f.sync.State(); !st.Connected || st.Dirty || st.RestoreAvailable {
 		t.Errorf("State = %+v, want connected, clean", st)
 	}
+
 	if srv.closed != 1 {
 		t.Errorf("sessions closed = %d, want 1", srv.closed)
 	}
@@ -170,15 +191,19 @@ func TestConnectEmptyBothInSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+
 	if out.Status != StatusInSync {
 		t.Errorf("Status = %q, want in_sync", out.Status)
 	}
+
 	if st := f.sync.State(); st != (State{Connected: true}) {
 		t.Errorf("State = %+v, want {Connected: true}", st)
 	}
+
 	if len(srv.backups) != 0 || len(f.local.restores) != 0 {
 		t.Error("an empty pair caused a Backup or a Restore")
 	}
+
 	if _, err := f.sync.PrepareBackup(context.Background()); err != nil {
 		t.Fatalf("PrepareBackup: %v", err)
 	}
@@ -193,12 +218,15 @@ func TestConnectRemoteNewer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+
 	if out.Status != StatusRemoteNewer {
 		t.Errorf("Status = %q, want remote_newer", out.Status)
 	}
+
 	if out.Restore != (Counts{Updated: 1, Deleted: 2}) {
 		t.Errorf("Restore = %+v, want {Updated: 1, Deleted: 2}", out.Restore)
 	}
+
 	if st := f.sync.State(); !st.Connected || !st.Dirty || !st.RestoreAvailable {
 		t.Errorf("State = %+v, want connected, dirty, restore available", st)
 	}
@@ -206,15 +234,19 @@ func TestConnectRemoteNewer(t *testing.T) {
 	if err := f.sync.CommitRestore(context.Background()); err != nil {
 		t.Fatalf("CommitRestore with the plan from Connect: %v", err)
 	}
+
 	if len(f.local.restores) != 1 || len(f.local.restores[0].Delete) != 2 {
 		t.Errorf("restores = %+v, want one plan deleting 2 notes", f.local.restores)
 	}
+
 	if len(srv.opens) != 1 {
 		t.Errorf("opens = %d, want 1: Restore from Connect reuses its snapshot", len(srv.opens))
 	}
+
 	if st := f.sync.State(); st.Dirty || st.RestoreAvailable {
 		t.Errorf("State after Restore = %+v, want clean", st)
 	}
+
 	if f.local.snap.Revision != 5 {
 		t.Errorf("local revision = %d, want 5", f.local.snap.Revision)
 	}
@@ -229,15 +261,19 @@ func TestConnectNotNewerDiverged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+
 	if out.Status != StatusDiverged {
 		t.Errorf("Status = %q, want diverged", out.Status)
 	}
+
 	if st := f.sync.State(); !st.Dirty || !st.RestoreAvailable || !st.Connected {
 		t.Errorf("State = %+v, want connected, dirty, restore available", st)
 	}
+
 	if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrNoPendingOperation) {
 		t.Errorf("CommitRestore after diverged = %v, want ErrNoPendingOperation", err)
 	}
+
 	if f.local.writes() != 0 {
 		t.Errorf("local writes = %d, want 0", f.local.writes())
 	}
@@ -252,15 +288,19 @@ func TestConnectServerIDChanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+
 	if len(f.local.setCalls) != 0 {
 		t.Errorf("SetSyncState calls = %v, want none: the reset to (B, 0) stays in memory", f.local.setCalls)
 	}
+
 	if out.Status != StatusRemoteNewer {
 		t.Errorf("Status = %q, want remote_newer: revision 1 is newer than the reset 0", out.Status)
 	}
+
 	if err := f.sync.CommitRestore(context.Background()); err != nil {
 		t.Fatalf("CommitRestore: %v", err)
 	}
+
 	if f.local.snap.ServerID != serverB || f.local.snap.Revision != 1 {
 		t.Errorf("local sync state = (%v, %d), want (B, 1)", f.local.snap.ServerID, f.local.snap.Revision)
 	}
@@ -276,21 +316,26 @@ func TestServerSwitchKeepsRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect to B: %v", err)
 	}
+
 	if out.Status != StatusRemoteNewer {
 		t.Fatalf("Connect to B = %q, want remote_newer", out.Status)
 	}
+
 	f.sync.CancelPending()
 
 	srv.mu.Lock()
 	srv.serverID, srv.revision, srv.notes = serverA, 5, notes
 	srv.mu.Unlock()
+
 	out, err = f.sync.Connect(ctx)
 	if err != nil {
 		t.Fatalf("Connect back to A: %v", err)
 	}
+
 	if out.Status != StatusInSync {
 		t.Errorf("Connect back to A = %q, want in_sync", out.Status)
 	}
+
 	if len(f.local.setCalls) != 0 || f.local.snap.Revision != 5 || f.local.snap.ServerID != serverA {
 		t.Errorf("local sync state = (%v, %d), calls %v; want (A, 5) untouched", f.local.snap.ServerID, f.local.snap.Revision, f.local.setCalls)
 	}
@@ -305,9 +350,11 @@ func TestConnectInSyncAlignsRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+
 	if out.Status != StatusInSync {
 		t.Errorf("Status = %q, want in_sync", out.Status)
 	}
+
 	if got := f.local.setCalls; len(got) != 1 || got[0] != (syncStateCall{serverA, 5}) {
 		t.Errorf("SetSyncState calls = %v, want [{A 5}]", got)
 	}
@@ -322,9 +369,11 @@ func TestConnectInSyncClearsDirty(t *testing.T) {
 	if _, err := f.sync.Connect(context.Background()); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+
 	if f.sync.State().Dirty {
 		t.Error("Dirty = true although local data equals the server's")
 	}
+
 	if len(f.local.setCalls) != 0 {
 		t.Errorf("SetSyncState called %v with an equal revision", f.local.setCalls)
 	}
@@ -333,34 +382,43 @@ func TestConnectInSyncClearsDirty(t *testing.T) {
 // diverged returns a fixture where the local note differs from the server's.
 func diverged(t *testing.T) *syncFixture {
 	t.Helper()
+
 	srv := &fakeServer{serverID: serverA, revision: 3, notes: []domain.Note{note(1, "a", "server"), note(2, "b", "gone")}}
+
 	return newSyncFixture(t, LocalSnapshot{Notes: []domain.Note{note(1, "a", "local")}, Revision: 3, ServerID: serverA}, srv)
 }
 
 func TestBackup(t *testing.T) {
 	f := diverged(t)
 	ctx := context.Background()
+
 	f.changes.MarkChanged()
 
 	counts, err := f.sync.PrepareBackup(ctx)
 	if err != nil {
 		t.Fatalf("PrepareBackup: %v", err)
 	}
+
 	if counts != (Counts{Updated: 1, Deleted: 1}) {
 		t.Errorf("Counts = %+v, want {Updated: 1, Deleted: 1}", counts)
 	}
+
 	if err := f.sync.CommitBackup(ctx); err != nil {
 		t.Fatalf("CommitBackup: %v", err)
 	}
+
 	if got := f.local.setCalls; len(got) != 1 || got[0] != (syncStateCall{serverA, 4}) {
 		t.Errorf("SetSyncState calls = %v, want [{A 4}]", got)
 	}
+
 	if st := f.sync.State(); st.Dirty || st.RestoreAvailable || !st.Connected {
 		t.Errorf("State = %+v, want connected and clean", st)
 	}
+
 	if err := f.sync.CommitBackup(ctx); !errors.Is(err, domain.ErrNoPendingOperation) {
 		t.Errorf("second CommitBackup = %v, want ErrNoPendingOperation", err)
 	}
+
 	if want := 2; f.srv.closed != want {
 		t.Errorf("sessions closed = %d, want %d", f.srv.closed, want)
 	}
@@ -368,13 +426,16 @@ func TestBackup(t *testing.T) {
 
 func TestCommitBackupRemoteChanged(t *testing.T) {
 	f := diverged(t)
+
 	ctx := context.Background()
 	if _, err := f.sync.Connect(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := f.sync.PrepareBackup(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	f.srv.mu.Lock()
 	f.srv.revision++ // another device backed up in between
 	f.srv.mu.Unlock()
@@ -382,9 +443,11 @@ func TestCommitBackupRemoteChanged(t *testing.T) {
 	if err := f.sync.CommitBackup(ctx); !errors.Is(err, domain.ErrRemoteChanged) {
 		t.Fatalf("CommitBackup = %v, want ErrRemoteChanged", err)
 	}
+
 	if f.local.writes() != 0 {
 		t.Errorf("local writes = %d, want 0", f.local.writes())
 	}
+
 	if st := f.sync.State(); !st.Dirty || !st.Connected {
 		t.Errorf("State = %+v, want dirty and still connected", st)
 	}
@@ -392,10 +455,12 @@ func TestCommitBackupRemoteChanged(t *testing.T) {
 
 func TestCommitBackupPassesServerID(t *testing.T) {
 	f := diverged(t)
+
 	ctx := context.Background()
 	if _, err := f.sync.PrepareBackup(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	f.srv.mu.Lock()
 	f.srv.serverID = serverB // the server was replaced, the revision happens to match
 	f.srv.mu.Unlock()
@@ -404,9 +469,11 @@ func TestCommitBackupPassesServerID(t *testing.T) {
 	if got := f.srv.backups[len(f.srv.backups)-1].ExpectedServerID; got != serverA {
 		t.Errorf("Backup expected server %v, want the planned %v", got, serverA)
 	}
+
 	if !errors.Is(err, domain.ErrRemoteChanged) {
 		t.Fatalf("CommitBackup = %v, want ErrRemoteChanged", err)
 	}
+
 	if f.local.writes() != 0 {
 		t.Errorf("local writes = %d, want 0", f.local.writes())
 	}
@@ -415,9 +482,11 @@ func TestCommitBackupPassesServerID(t *testing.T) {
 func TestCommitBackupCanceled(t *testing.T) {
 	f := diverged(t)
 	f.changes.MarkChanged()
+
 	if _, err := f.sync.PrepareBackup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+
 	f.srv.backupBlocks = true
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(10*time.Millisecond, cancel)
@@ -425,9 +494,11 @@ func TestCommitBackupCanceled(t *testing.T) {
 	if err := f.sync.CommitBackup(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("CommitBackup = %v, want context.Canceled", err)
 	}
+
 	if len(f.local.setCalls) != 0 {
 		t.Errorf("SetSyncState called: %v", f.local.setCalls)
 	}
+
 	if !f.sync.State().Dirty {
 		t.Error("Dirty = false after a canceled Backup")
 	}
@@ -436,34 +507,43 @@ func TestCommitBackupCanceled(t *testing.T) {
 func TestCommitBackupAckLost(t *testing.T) {
 	f := diverged(t)
 	ctx := context.Background()
+
 	f.changes.MarkChanged()
+
 	if _, err := f.sync.PrepareBackup(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	f.srv.backupAckLost = true
 
 	if err := f.sync.CommitBackup(ctx); !errors.Is(err, errAckLost) {
 		t.Fatalf("CommitBackup = %v, want the lost acknowledgement", err)
 	}
+
 	if f.local.snap.Revision != 3 || len(f.local.setCalls) != 0 {
 		t.Errorf("local revision = %d, set calls %v; want 3 and none", f.local.snap.Revision, f.local.setCalls)
 	}
+
 	if !f.sync.State().Dirty {
 		t.Error("Dirty = false after an unknown outcome")
 	}
 
 	f.srv.backupAckLost = false
+
 	counts, err := f.sync.PrepareBackup(ctx)
 	if err != nil {
 		t.Fatalf("PrepareBackup: %v", err)
 	}
+
 	if counts != (Counts{}) {
 		t.Errorf("Counts = %+v, want zero: the Backup went through", counts)
 	}
+
 	out, err := f.sync.Connect(ctx)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+
 	if out.Status != StatusInSync || f.local.snap.Revision != 4 {
 		t.Errorf("Connect = %q, local revision %d; want in_sync and 4", out.Status, f.local.snap.Revision)
 	}
@@ -472,15 +552,19 @@ func TestCommitBackupAckLost(t *testing.T) {
 func TestCommitBackupKeepsDirtyOnConcurrentEdit(t *testing.T) {
 	f := diverged(t)
 	ctx := context.Background()
+
 	f.changes.MarkChanged()
+
 	if _, err := f.sync.PrepareBackup(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	f.changes.MarkChanged()
 
 	if err := f.sync.CommitBackup(ctx); err != nil {
 		t.Fatalf("CommitBackup: %v", err)
 	}
+
 	if !f.sync.State().Dirty {
 		t.Error("Dirty = false although a note changed after the snapshot")
 	}
@@ -494,10 +578,12 @@ func TestBackupEditDuringLocalSnapshotKeepsDirty(t *testing.T) {
 	if _, err := f.sync.PrepareBackup(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	f.local.onSnapshot = nil
 	if err := f.sync.CommitBackup(ctx); err != nil {
 		t.Fatalf("CommitBackup: %v", err)
 	}
+
 	if !f.sync.State().Dirty {
 		t.Error("Dirty = false: the generation was read after the snapshot")
 	}
@@ -511,18 +597,23 @@ func TestRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareRestore: %v", err)
 	}
+
 	if counts != (Counts{Added: 1, Updated: 1}) {
 		t.Errorf("Counts = %+v, want {Added: 1, Updated: 1}", counts)
 	}
+
 	if f.srv.opens[0] != OpenCheck {
 		t.Errorf("PrepareRestore opened with %v, want OpenCheck", f.srv.opens[0])
 	}
+
 	if err := f.sync.CommitRestore(ctx); err != nil {
 		t.Fatalf("CommitRestore: %v", err)
 	}
+
 	if len(f.local.restores) != 1 {
 		t.Fatalf("restores = %d, want 1", len(f.local.restores))
 	}
+
 	if p := f.local.restores[0]; p.Revision != 3 || p.ServerID != serverA || len(p.Text) != 1 || len(p.Insert) != 1 {
 		t.Errorf("plan = %+v", p)
 	}
@@ -535,9 +626,11 @@ func TestPrepareRestoreMissingSchema(t *testing.T) {
 	if _, err := f.sync.PrepareRestore(context.Background()); !errors.Is(err, domain.ErrRemoteChanged) {
 		t.Fatalf("PrepareRestore = %v, want ErrRemoteChanged", err)
 	}
+
 	if !srv.noSchema {
 		t.Error("PrepareRestore created the schema")
 	}
+
 	if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrNoPendingOperation) {
 		t.Errorf("CommitRestore = %v, want ErrNoPendingOperation", err)
 	}
@@ -545,18 +638,22 @@ func TestPrepareRestoreMissingSchema(t *testing.T) {
 
 func TestCommitRestoreLocalChanged(t *testing.T) {
 	f := diverged(t)
+
 	ctx := context.Background()
 	if _, err := f.sync.PrepareRestore(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	f.changes.MarkChanged()
 
 	if err := f.sync.CommitRestore(ctx); !errors.Is(err, domain.ErrLocalChanged) {
 		t.Fatalf("CommitRestore = %v, want ErrLocalChanged", err)
 	}
+
 	if len(f.local.restores) != 0 {
 		t.Error("ApplyRestore called")
 	}
+
 	if !f.sync.State().Dirty {
 		t.Error("Dirty = false after ErrLocalChanged")
 	}
@@ -569,12 +666,15 @@ func TestRestoreAbortsOnSnapshotError(t *testing.T) {
 	if _, err := f.sync.PrepareRestore(context.Background()); err == nil {
 		t.Fatal("PrepareRestore = nil error")
 	}
+
 	if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrNoPendingOperation) {
 		t.Errorf("CommitRestore = %v, want ErrNoPendingOperation", err)
 	}
+
 	if f.local.writes() != 0 {
 		t.Errorf("local writes = %d, want 0", f.local.writes())
 	}
+
 	if f.sync.State().Connected {
 		t.Error("Connected = true after a failed snapshot")
 	}
@@ -588,12 +688,15 @@ func TestWrongPhraseKeepsConnectedFalseNoWrites(t *testing.T) {
 	if _, err := f.sync.Connect(ctx); !errors.Is(err, domain.ErrWrongSyncPhrase) {
 		t.Fatalf("Connect = %v, want ErrWrongSyncPhrase", err)
 	}
+
 	if _, err := f.sync.PrepareBackup(ctx); !errors.Is(err, domain.ErrWrongSyncPhrase) {
 		t.Fatalf("PrepareBackup = %v, want ErrWrongSyncPhrase", err)
 	}
+
 	if f.local.writes() != 0 || len(srv.backups) != 0 {
 		t.Errorf("writes: local %d, server %d; want none", f.local.writes(), len(srv.backups))
 	}
+
 	if f.sync.State().Connected {
 		t.Error("Connected = true")
 	}
@@ -622,14 +725,18 @@ func TestConnectedState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			notes := []domain.Note{note(1, "a", "x")}
 			srv := &fakeServer{serverID: serverA, notes: notes}
+
 			f := newSyncFixture(t, LocalSnapshot{Notes: notes, ServerID: serverA}, srv)
 			if _, err := f.sync.Connect(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+
 			tt.inject(f, tt.err)
+
 			if _, err := f.sync.PrepareBackup(context.Background()); !errors.Is(err, tt.err) {
 				t.Fatalf("PrepareBackup = %v, want %v", err, tt.err)
 			}
+
 			if got := f.sync.State().Connected; got != tt.wantConnected {
 				t.Errorf("Connected = %v, want %v", got, tt.wantConnected)
 			}
@@ -649,9 +756,11 @@ func TestPrepareWithEmptySettings(t *testing.T) {
 	if _, err := f.sync.PrepareBackup(context.Background()); !errors.Is(err, domain.ErrNotConnected) {
 		t.Errorf("PrepareBackup = %v, want ErrNotConnected", err)
 	}
+
 	if _, err := f.sync.PrepareRestore(context.Background()); !errors.Is(err, domain.ErrNotConnected) {
 		t.Errorf("PrepareRestore = %v, want ErrNotConnected", err)
 	}
+
 	if len(srv.opens) != 0 {
 		t.Errorf("Open called %d times", len(srv.opens))
 	}
@@ -663,25 +772,32 @@ func TestBusy(t *testing.T) {
 	f.srv.snapshotEntered = make(chan struct{})
 
 	done := make(chan error, 1)
+
 	go func() {
 		_, err := f.sync.Connect(context.Background())
 		done <- err
 	}()
+
 	<-f.srv.snapshotEntered
 
 	if st := f.sync.State(); !st.Busy {
 		t.Errorf("State during Connect = %+v, want Busy", st)
 	}
+
 	if _, err := f.sync.PrepareBackup(context.Background()); !errors.Is(err, domain.ErrBusy) {
 		t.Errorf("PrepareBackup during Connect = %v, want ErrBusy", err)
 	}
+
 	if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrBusy) {
 		t.Errorf("CommitRestore during Connect = %v, want ErrBusy", err)
 	}
+
 	close(f.srv.snapshotGate)
+
 	if err := <-done; err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+
 	if f.sync.State().Busy {
 		t.Error("Busy after Connect returned")
 	}
@@ -689,10 +805,12 @@ func TestBusy(t *testing.T) {
 
 func TestCommitWithoutPlan(t *testing.T) {
 	f := diverged(t)
+
 	ctx := context.Background()
 	if err := f.sync.CommitBackup(ctx); !errors.Is(err, domain.ErrNoPendingOperation) {
 		t.Errorf("CommitBackup = %v, want ErrNoPendingOperation", err)
 	}
+
 	if err := f.sync.CommitRestore(ctx); !errors.Is(err, domain.ErrNoPendingOperation) {
 		t.Errorf("CommitRestore = %v, want ErrNoPendingOperation", err)
 	}
@@ -700,13 +818,17 @@ func TestCommitWithoutPlan(t *testing.T) {
 	if _, err := f.sync.PrepareBackup(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := f.sync.CommitRestore(ctx); !errors.Is(err, domain.ErrNoPendingOperation) {
 		t.Errorf("CommitRestore with a Backup plan = %v, want ErrNoPendingOperation", err)
 	}
+
 	f.sync.CancelPending()
+
 	if err := f.sync.CommitBackup(ctx); !errors.Is(err, domain.ErrNoPendingOperation) {
 		t.Errorf("CommitBackup after CancelPending = %v, want ErrNoPendingOperation", err)
 	}
+
 	if len(f.srv.backups) != 0 {
 		t.Errorf("Backup called %d times", len(f.srv.backups))
 	}
@@ -717,22 +839,28 @@ func TestOnStateCalled(t *testing.T) {
 	if _, err := f.sync.Connect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+
 	f.mu.Lock()
 	states := append([]State(nil), f.states...)
 	f.mu.Unlock()
+
 	if len(states) < 2 {
 		t.Fatalf("OnState called %d times, want busy and the result", len(states))
 	}
+
 	if !states[0].Busy {
 		t.Errorf("first state = %+v, want Busy", states[0])
 	}
+
 	want := State{Connected: true, Dirty: true, RestoreAvailable: true}
 	if got := f.lastState(); got != want {
 		t.Errorf("last state = %+v, want %+v", got, want)
 	}
+
 	if got := f.sync.State(); got != want {
 		t.Errorf("State() = %+v, want %+v", got, want)
 	}
+
 	for i := 1; i < len(states); i++ {
 		if states[i] == states[i-1] {
 			t.Errorf("state %d repeats %+v", i, states[i])
@@ -744,14 +872,17 @@ func TestOnStateCalled(t *testing.T) {
 // with Notes; the server has a newer text of note 1.
 func restoreWithNotes(t *testing.T) (*syncFixture, *fakeNoteStore, *Notes) {
 	t.Helper()
+
 	srv := &fakeServer{serverID: serverA, revision: 5, notes: []domain.Note{note(1, "a", "server")}}
 	f := newSyncFixture(t, LocalSnapshot{Revision: 4, ServerID: serverA}, srv)
 	store := newFakeNoteStore(note(1, "a", "local"))
 	f.local.notes = store
+
 	notes, err := NewNotes(store, fixedClock(t1), seqIDs(), f.changes)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return f, store, notes
 }
 
@@ -766,28 +897,34 @@ func waitBriefly(ch chan error) {
 
 func TestCommitRestoreWaitsForEdit(t *testing.T) {
 	f, store, notes := restoreWithNotes(t)
+
 	ctx := context.Background()
 	if _, err := f.sync.PrepareRestore(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	saved := make(chan error, 1)
 	f.local.onApply = func() {
 		go func() {
 			_, err := notes.Save(ctx, testID(1), "a", "edited")
 			saved <- err
 		}()
+
 		waitBriefly(saved) // the edit must wait for the Restore, not run inside it
 	}
 
 	if err := f.sync.CommitRestore(ctx); err != nil {
 		t.Fatalf("CommitRestore: %v", err)
 	}
+
 	if err := <-saved; err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+
 	if got := store.notes[testID(1)].Info; got != "edited" {
 		t.Errorf("note text = %q, want the edit saved after the Restore", got)
 	}
+
 	if !f.sync.State().Dirty {
 		t.Error("Dirty = false after an edit")
 	}
@@ -795,25 +932,31 @@ func TestCommitRestoreWaitsForEdit(t *testing.T) {
 
 func TestCommitRestoreAfterUnmarkedWrite(t *testing.T) {
 	f, store, notes := restoreWithNotes(t)
+
 	ctx := context.Background()
 	if _, err := f.sync.PrepareRestore(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	restored := make(chan error, 1)
 	store.onWrite = func() { // the edit is written, MarkChanged has not run yet
 		store.mu.Lock()
 		store.onWrite = nil
 		store.mu.Unlock()
+
 		go func() { restored <- f.sync.CommitRestore(ctx) }()
+
 		waitBriefly(restored)
 	}
 
 	if _, err := notes.Save(ctx, testID(1), "a", "edited"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+
 	if err := <-restored; !errors.Is(err, domain.ErrLocalChanged) {
 		t.Errorf("CommitRestore = %v, want ErrLocalChanged", err)
 	}
+
 	if got := store.notes[testID(1)].Info; got != "edited" {
 		t.Errorf("note text = %q, want the edit kept", got)
 	}
@@ -824,9 +967,11 @@ func TestEditPublishesState(t *testing.T) {
 	if _, err := f.sync.Connect(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := f.sync.CommitRestore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+
 	if f.lastState().Dirty {
 		t.Fatal("dirty before the edit")
 	}
@@ -834,6 +979,7 @@ func TestEditPublishesState(t *testing.T) {
 	if _, err := notes.Save(context.Background(), testID(1), "a", "edited"); err != nil {
 		t.Fatal(err)
 	}
+
 	if got := f.lastState(); !got.Dirty || !got.Connected {
 		t.Errorf("last published state = %+v, want connected and dirty", got)
 	}
@@ -842,23 +988,30 @@ func TestEditPublishesState(t *testing.T) {
 func TestCloseErrorAfterCommittedBackup(t *testing.T) {
 	f := diverged(t)
 	ctx := context.Background()
+
 	f.changes.MarkChanged()
+
 	if _, err := f.sync.Connect(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := f.sync.PrepareBackup(ctx); err != nil {
 		t.Fatal(err)
 	}
+
 	f.srv.closeErr = errors.New("tunnel closed")
 
 	if err := f.sync.CommitBackup(ctx); err != nil {
 		t.Fatalf("CommitBackup = %v, want success: the server committed", err)
 	}
+
 	if st := f.sync.State(); !st.Connected || st.Dirty {
 		t.Errorf("State = %+v, want connected and clean", st)
 	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	if len(f.warnings) != 1 || !strings.Contains(f.warnings[0].Error(), "tunnel closed") {
 		t.Errorf("warnings = %v, want the close error", f.warnings)
 	}
@@ -873,6 +1026,7 @@ func TestCloseErrorJoinedToFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "snapshot failed") || !strings.Contains(err.Error(), "tunnel closed") {
 		t.Errorf("PrepareBackup = %v, want both errors", err)
 	}
+
 	if len(f.warnings) != 0 {
 		t.Errorf("warnings = %v, want none", f.warnings)
 	}
@@ -883,13 +1037,16 @@ func TestLocalRevisionWrittenAfterDeadline(t *testing.T) {
 	if _, err := f.sync.PrepareBackup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	f.srv.afterBackup = cancel // the operation budget ends right after the server commit
 
 	if err := f.sync.CommitBackup(ctx); err != nil {
 		t.Fatalf("CommitBackup: %v", err)
 	}
+
 	if len(f.local.setCalls) != 1 || f.local.setCalls[0] != (syncStateCall{serverA, 4}) {
 		t.Errorf("SetSyncState calls = %v, want [{A 4}]", f.local.setCalls)
 	}
@@ -906,6 +1063,7 @@ func TestRemoteNotesValidated(t *testing.T) {
 		{name: "text too long", notes: []domain.Note{note(1, "a", strings.Repeat("x", domain.MaxInfoLen+1))}},
 		{name: "crlf", notes: []domain.Note{note(1, "a", "x\r\ny")}},
 	}
+
 	ops := map[string]func(*Sync) error{
 		"Connect":        func(s *Sync) error { _, err := s.Connect(context.Background()); return err },
 		"PrepareBackup":  func(s *Sync) error { _, err := s.PrepareBackup(context.Background()); return err },
@@ -915,13 +1073,16 @@ func TestRemoteNotesValidated(t *testing.T) {
 		for opName, op := range ops {
 			t.Run(tt.name+"/"+opName, func(t *testing.T) {
 				srv := &fakeServer{serverID: serverA, revision: 9, notes: tt.notes}
+
 				f := newSyncFixture(t, LocalSnapshot{Notes: []domain.Note{note(2, "local", "x")}, ServerID: serverA}, srv)
 				if err := op(f.sync); !errors.Is(err, domain.ErrUnsupportedFormat) {
 					t.Fatalf("%s = %v, want ErrUnsupportedFormat", opName, err)
 				}
+
 				if f.local.writes() != 0 || len(srv.backups) != 0 {
 					t.Errorf("writes: local %d, server %d; want none", f.local.writes(), len(srv.backups))
 				}
+
 				if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrNoPendingOperation) {
 					t.Errorf("CommitRestore = %v, want ErrNoPendingOperation", err)
 				}
@@ -935,6 +1096,7 @@ func TestResetConnection(t *testing.T) {
 	f.srv.mu.Lock()
 	f.srv.revision = 9
 	f.srv.mu.Unlock()
+
 	if out, err := f.sync.Connect(context.Background()); err != nil || out.Status != StatusRemoteNewer {
 		t.Fatalf("Connect = %v, %v; want remote_newer", out.Status, err)
 	}
@@ -944,9 +1106,11 @@ func TestResetConnection(t *testing.T) {
 	if st := f.sync.State(); st.Connected || st.RestoreAvailable {
 		t.Errorf("State = %+v, want not connected, no Restore", st)
 	}
+
 	if got := f.lastState(); got.Connected || got.RestoreAvailable {
 		t.Errorf("last published state = %+v", got)
 	}
+
 	if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrNoPendingOperation) {
 		t.Errorf("CommitRestore = %v, want ErrNoPendingOperation", err)
 	}

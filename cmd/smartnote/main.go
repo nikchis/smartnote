@@ -10,6 +10,9 @@ import (
 	"github.com/nikchis/smartnote/frontend"
 )
 
+// appName is the application name and the window title.
+const appName = "Smartnote"
+
 func main() {
 	assets, err := fs.Sub(frontend.Dist, "dist")
 	if err != nil {
@@ -17,7 +20,7 @@ func main() {
 	}
 
 	app := application.New(application.Options{
-		Name:        "Smartnote",
+		Name:        appName,
 		Description: "Encrypted notes with remote backup",
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -28,7 +31,7 @@ func main() {
 	})
 
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:  "Smartnote",
+		Title:  appName,
 		Width:  1000,
 		Height: 640,
 		URL:    "/",

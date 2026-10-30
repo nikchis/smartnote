@@ -48,6 +48,7 @@ func NewNotes(s NoteStore, clock Clock, ids IDGenerator, changes *ChangeTracker)
 	case changes == nil:
 		return nil, nilDependency("NewNotes", "changes")
 	}
+
 	return &Notes{store: s, clock: clock, ids: ids, changes: changes}, nil
 }
 
@@ -58,9 +59,11 @@ func (n *Notes) List(ctx context.Context) ([]domain.Note, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list notes: %w", err)
 	}
+
 	slices.SortFunc(notes, func(a, b domain.Note) int {
 		return cmp.Or(strings.Compare(a.Name, b.Name), bytes.Compare(a.ID[:], b.ID[:]))
 	})
+
 	return notes, nil
 }
 
@@ -70,12 +73,14 @@ func (n *Notes) Create(ctx context.Context, name, info string) (domain.Note, err
 	if err := note.Validate(); err != nil {
 		return domain.Note{}, err
 	}
+
 	err := n.changes.Edit(func() (bool, error) {
 		return true, n.store.InsertNote(ctx, note)
 	})
 	if err != nil {
 		return domain.Note{}, fmt.Errorf("create note: %w", err)
 	}
+
 	return note, nil
 }
 
@@ -87,16 +92,20 @@ func (n *Notes) Save(ctx context.Context, id uuid.UUID, name, info string) (doma
 	if err := note.Validate(); err != nil {
 		return domain.Note{}, err
 	}
+
 	var saved domain.Note
+
 	err := n.changes.Edit(func() (bool, error) {
 		cur, err := n.store.GetNote(ctx, id)
 		if err != nil {
 			return false, err
 		}
+
 		if note.Name == cur.Name && note.Info == cur.Info {
 			saved = cur
 			return false, nil
 		}
+
 		note.Updated = n.clock()
 		if note.Info != cur.Info {
 			prev := domain.NoteVersion{ID: n.ids(), NoteID: id, Created: cur.Updated, Info: cur.Info}
@@ -104,12 +113,15 @@ func (n *Notes) Save(ctx context.Context, id uuid.UUID, name, info string) (doma
 		} else {
 			err = n.store.UpdateNoteName(ctx, id, note.Name, note.Updated)
 		}
+
 		saved = note
+
 		return true, err
 	})
 	if err != nil {
 		return domain.Note{}, fmt.Errorf("save note: %w", err)
 	}
+
 	return saved, nil
 }
 
@@ -121,6 +133,7 @@ func (n *Notes) Delete(ctx context.Context, id uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("delete note: %w", err)
 	}
+
 	return nil
 }
 
@@ -130,8 +143,10 @@ func (n *Notes) Versions(ctx context.Context, id uuid.UUID) ([]domain.NoteVersio
 	if err != nil {
 		return nil, fmt.Errorf("list versions: %w", err)
 	}
+
 	slices.SortFunc(versions, func(a, b domain.NoteVersion) int {
 		return cmp.Or(b.Created.Compare(a.Created), bytes.Compare(a.ID[:], b.ID[:]))
 	})
+
 	return versions, nil
 }

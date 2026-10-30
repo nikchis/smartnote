@@ -144,8 +144,10 @@ func NewSync(d SyncDeps) (*Sync, error) {
 	case d.Warn == nil:
 		return nil, nilDependency("NewSync", "warn")
 	}
+
 	s := &Sync{d: d}
 	d.Changes.setOnChange(s.publish)
+
 	return s, nil
 }
 
@@ -153,6 +155,7 @@ func NewSync(d SyncDeps) (*Sync, error) {
 func (s *Sync) State() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return s.stateLocked()
 }
 
@@ -170,11 +173,13 @@ func (s *Sync) stateLocked() State {
 func (s *Sync) publish() {
 	s.publishMu.Lock()
 	defer s.publishMu.Unlock()
+
 	s.mu.Lock()
 	st := s.stateLocked()
 	changed := st != s.published
 	s.published = st
 	s.mu.Unlock()
+
 	if changed && s.d.OnState != nil {
 		s.d.OnState(st)
 	}
@@ -193,7 +198,9 @@ func (s *Sync) begin() (end func(), err error) {
 	if err != nil {
 		return nil, err
 	}
+
 	s.update(func() { s.busy = true })
+
 	return func() {
 		s.update(func() { s.busy = false })
 		leave()
@@ -219,24 +226,29 @@ func disconnects(err error) bool {
 	if _, ok := errors.AsType[localError](err); ok {
 		return false
 	}
+
 	switch {
 	case errors.Is(err, domain.ErrNotConnected), errors.Is(err, context.DeadlineExceeded):
 		return true
 	case errors.Is(err, context.Canceled):
 		return false
 	}
+
 	if _, ok := errors.AsType[*domain.HostKeyUnknownError](err); ok {
 		return true
 	}
+
 	if _, ok := errors.AsType[*domain.HostKeyMismatchError](err); ok {
 		return true
 	}
+
 	for _, e := range []error{domain.ErrValidation, domain.ErrWrongSyncPhrase, domain.ErrRemoteChanged,
 		domain.ErrUnsupportedFormat, domain.ErrLocalChanged} {
 		if errors.Is(err, e) {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -260,6 +272,7 @@ func (s *Sync) ResetConnection() {
 func (s *Sync) CancelPending() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.pendingBackup, s.pendingRestore = nil, nil
 }
 
@@ -271,21 +284,26 @@ func (s *Sync) Connect(ctx context.Context) (ConnectOutcome, error) {
 		return ConnectOutcome{}, err
 	}
 	defer end()
+
 	s.CancelPending()
 
 	settings, err := s.d.Settings.LoadSettings(ctx)
 	if err != nil {
 		return ConnectOutcome{}, fmt.Errorf("connect: load settings: %w", err)
 	}
+
 	if settings.IsEmpty() {
 		s.update(func() { s.connected, s.restoreAvailable = false, false })
 		return ConnectOutcome{Status: StatusOffline}, nil
 	}
+
 	out, err := s.connect(ctx, settings)
 	s.afterRemote(err)
+
 	if err != nil {
 		return ConnectOutcome{}, fmt.Errorf("connect: %w", err)
 	}
+
 	return out, nil
 }
 
@@ -294,9 +312,10 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 	if err != nil {
 		return ConnectOutcome{}, err
 	}
-	defer s.closeSession(sess, &err)
+	defer func() { err = s.closeSession(sess, err) }()
 
 	gen := s.d.Changes.Generation()
+
 	local, remote, err := s.snapshots(ctx, sess)
 	if err != nil {
 		return ConnectOutcome{}, err
@@ -306,6 +325,7 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 		if err := s.backup(ctx, sess, PlanBackup(local, remote, gen)); err != nil {
 			return ConnectOutcome{}, err
 		}
+
 		return ConnectOutcome{Status: StatusCreated}, nil
 	}
 
@@ -323,18 +343,23 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 				return ConnectOutcome{}, fmt.Errorf("align revision: %w", localError{err})
 			}
 		}
+
 		s.d.Changes.ClearIf(gen)
 		s.update(func() { s.restoreAvailable = false })
+
 		return ConnectOutcome{Status: StatusInSync}, nil
 	}
 
 	s.d.Changes.MarkDiverged()
+
 	if remote.Revision <= local.Revision {
 		s.update(func() { s.restoreAvailable = true })
 		return ConnectOutcome{Status: StatusDiverged}, nil
 	}
+
 	plan := PlanRestore(local, remote, s.d.IDs, gen)
 	s.update(func() { s.restoreAvailable, s.pendingRestore = true, &plan })
+
 	return ConnectOutcome{Status: StatusRemoteNewer, Restore: plan.Counts}, nil
 }
 
@@ -345,13 +370,16 @@ func (s *Sync) snapshots(ctx context.Context, sess RemoteSession) (LocalSnapshot
 	if err != nil {
 		return LocalSnapshot{}, RemoteSnapshot{}, fmt.Errorf("local snapshot: %w", localError{err})
 	}
+
 	remote, err := sess.Snapshot(ctx)
 	if err != nil {
 		return LocalSnapshot{}, RemoteSnapshot{}, fmt.Errorf("remote snapshot: %w", err)
 	}
+
 	if err := checkRemoteNotes(remote.Notes); err != nil {
 		return LocalSnapshot{}, RemoteSnapshot{}, fmt.Errorf("remote snapshot: %w", err)
 	}
+
 	return local, remote, nil
 }
 
@@ -362,14 +390,18 @@ func (s *Sync) PrepareBackup(ctx context.Context) (Counts, error) {
 		return Counts{}, err
 	}
 	defer end()
+
 	s.CancelPending()
 
 	plan, err := s.prepareBackup(ctx)
 	s.afterRemote(err)
+
 	if err != nil {
 		return Counts{}, fmt.Errorf("prepare backup: %w", err)
 	}
+
 	s.update(func() { s.pendingBackup = &plan })
+
 	return plan.Counts, nil
 }
 
@@ -378,13 +410,15 @@ func (s *Sync) prepareBackup(ctx context.Context) (plan BackupPlan, err error) {
 	if err != nil {
 		return BackupPlan{}, err
 	}
-	defer s.closeSession(sess, &err)
+	defer func() { err = s.closeSession(sess, err) }()
 
 	gen := s.d.Changes.Generation()
+
 	local, remote, err := s.snapshots(ctx, sess)
 	if err != nil {
 		return BackupPlan{}, err
 	}
+
 	return PlanBackup(local, remote, gen), nil
 }
 
@@ -401,15 +435,18 @@ func (s *Sync) CommitBackup(ctx context.Context) error {
 	plan := s.pendingBackup
 	s.pendingBackup = nil
 	s.mu.Unlock()
+
 	if plan == nil {
 		return fmt.Errorf("commit backup: %w", domain.ErrNoPendingOperation)
 	}
 
 	err = s.commitBackup(ctx, *plan)
 	s.afterRemote(err)
+
 	if err != nil {
 		return fmt.Errorf("commit backup: %w", err)
 	}
+
 	return nil
 }
 
@@ -418,7 +455,8 @@ func (s *Sync) commitBackup(ctx context.Context, plan BackupPlan) (err error) {
 	if err != nil {
 		return err
 	}
-	defer s.closeSession(sess, &err)
+	defer func() { err = s.closeSession(sess, err) }()
+
 	return s.backup(ctx, sess, plan)
 }
 
@@ -431,13 +469,17 @@ func (s *Sync) backup(ctx context.Context, sess RemoteSession, plan BackupPlan) 
 	if err != nil {
 		return fmt.Errorf("backup: %w", err)
 	}
+
 	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), localWriteTimeout)
 	defer cancel()
+
 	if err := s.d.Local.SetSyncState(lctx, plan.ServerID, rev); err != nil {
 		return fmt.Errorf("store revision: %w", localError{err})
 	}
+
 	s.d.Changes.ClearIf(plan.Generation)
 	s.update(func() { s.restoreAvailable = false })
+
 	return nil
 }
 
@@ -449,14 +491,18 @@ func (s *Sync) PrepareRestore(ctx context.Context) (Counts, error) {
 		return Counts{}, err
 	}
 	defer end()
+
 	s.CancelPending()
 
 	plan, err := s.prepareRestore(ctx)
 	s.afterRemote(err)
+
 	if err != nil {
 		return Counts{}, fmt.Errorf("prepare restore: %w", err)
 	}
+
 	s.update(func() { s.pendingRestore = &plan })
+
 	return plan.Counts, nil
 }
 
@@ -465,16 +511,19 @@ func (s *Sync) prepareRestore(ctx context.Context) (plan RestorePlan, err error)
 	if err != nil {
 		return RestorePlan{}, err
 	}
-	defer s.closeSession(sess, &err)
+	defer func() { err = s.closeSession(sess, err) }()
+
 	if sess.Empty() {
 		return RestorePlan{}, fmt.Errorf("remote storage is empty: %w", domain.ErrRemoteChanged)
 	}
 
 	gen := s.d.Changes.Generation()
+
 	local, remote, err := s.snapshots(ctx, sess)
 	if err != nil {
 		return RestorePlan{}, err
 	}
+
 	return PlanRestore(local, remote, s.d.IDs, gen), nil
 }
 
@@ -492,16 +541,20 @@ func (s *Sync) CommitRestore(ctx context.Context) error {
 	plan := s.pendingRestore
 	s.pendingRestore = nil
 	s.mu.Unlock()
+
 	if plan == nil {
 		return fmt.Errorf("commit restore: %w", domain.ErrNoPendingOperation)
 	}
+
 	err = s.d.Changes.ApplyIfUnchanged(plan.Generation, func() error {
 		return s.d.Local.ApplyRestore(ctx, *plan, plan.Revision, plan.ServerID)
 	})
 	if err != nil {
 		return fmt.Errorf("commit restore: %w", err)
 	}
+
 	s.update(func() { s.restoreAvailable = false })
+
 	return nil
 }
 
@@ -512,34 +565,42 @@ func (s *Sync) open(ctx context.Context, mode OpenMode) (RemoteSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load settings: %w", localError{err})
 	}
+
 	if settings.IsEmpty() {
 		return nil, domain.ErrNotConnected
 	}
+
 	sess, err := s.d.Remote.Open(ctx, settings, mode)
 	if err != nil {
 		return nil, err
 	}
+
 	return sess, nil
 }
 
-// closeSession closes sess. A close error joins *err when the operation
-// failed; after a success it goes to Warn and the operation stays successful.
-func (s *Sync) closeSession(sess RemoteSession, err *error) {
+// closeSession closes sess and returns err with the close error: joined when
+// the operation failed, sent to Warn after a success, which stays a success.
+func (s *Sync) closeSession(sess RemoteSession, err error) error {
 	cerr := sess.Close()
 	if cerr == nil {
-		return
+		return err
 	}
+
 	cerr = fmt.Errorf("close remote session: %w", cerr)
-	if *err != nil {
-		*err = errors.Join(*err, cerr)
-		return
+	if err != nil {
+		return errors.Join(err, cerr)
 	}
+
 	s.d.Warn(cerr)
+
+	return nil
 }
 
-// joinCloseError closes sess and adds a close error to *err.
-func joinCloseError(sess RemoteSession, err *error) {
+// joinCloseError closes sess and returns err joined with the close error.
+func joinCloseError(sess RemoteSession, err error) error {
 	if cerr := sess.Close(); cerr != nil {
-		*err = errors.Join(*err, fmt.Errorf("close remote session: %w", cerr))
+		return errors.Join(err, fmt.Errorf("close remote session: %w", cerr))
 	}
+
+	return err
 }

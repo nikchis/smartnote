@@ -12,3 +12,4 @@ build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 *.db
 *.db-journal
 *.db.tmp
+.test-coverage

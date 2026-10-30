@@ -37,6 +37,7 @@ func NewConnection(s SettingsStore, r RemoteConnector, g *Gate, changed func()) 
 	case changed == nil:
 		return nil, nilDependency("NewConnection", "changed")
 	}
+
 	return &Connection{settings: s, remote: r, gate: g, changed: changed}, nil
 }
 
@@ -46,6 +47,7 @@ func (c *Connection) Load(ctx context.Context) (domain.ConnectionSettings, error
 	if err != nil {
 		return domain.ConnectionSettings{}, fmt.Errorf("load settings: %w", err)
 	}
+
 	return s, nil
 }
 
@@ -61,14 +63,17 @@ func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res
 	if err := s.Validate(); err != nil {
 		return TestResult{}, err
 	}
+
 	if s.IsEmpty() {
 		return TestResult{}, fmt.Errorf("test connection: %w", domain.ErrNotConnected)
 	}
+
 	sess, err := c.remote.Open(ctx, s.WithDefaults(), OpenCheck)
 	if err != nil {
 		return TestResult{}, fmt.Errorf("test connection: %w", err)
 	}
-	defer joinCloseError(sess, &err)
+	defer func() { err = joinCloseError(sess, err) }()
+
 	return TestResult{Empty: sess.Empty()}, nil
 }
 
@@ -78,10 +83,12 @@ func (c *Connection) Save(ctx context.Context, s domain.ConnectionSettings) erro
 	if err := s.Validate(); err != nil {
 		return err
 	}
+
 	return c.write(func() error {
 		if err := c.settings.SaveSettings(ctx, s.WithDefaults()); err != nil {
 			return fmt.Errorf("save settings: %w", err)
 		}
+
 		return nil
 	})
 }
@@ -91,6 +98,7 @@ func (c *Connection) TrustHostKey(ctx context.Context, authorizedKey string) err
 	if authorizedKey == "" {
 		return &domain.ValidationError{Field: "trusted_host_key", Reason: "is required"}
 	}
+
 	return c.setHostKey(ctx, authorizedKey)
 }
 
@@ -105,10 +113,12 @@ func (c *Connection) setHostKey(ctx context.Context, key string) error {
 		if err != nil {
 			return fmt.Errorf("load settings: %w", err)
 		}
+
 		s.TrustedHostKey = key
 		if err := c.settings.SaveSettings(ctx, s); err != nil {
 			return fmt.Errorf("save settings: %w", err)
 		}
+
 		return nil
 	})
 }
@@ -120,9 +130,12 @@ func (c *Connection) write(save func() error) error {
 		return err
 	}
 	defer leave()
+
 	if err := save(); err != nil {
 		return err
 	}
+
 	c.changed()
+
 	return nil
 }

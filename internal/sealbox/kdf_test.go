@@ -37,8 +37,10 @@ func TestKDFParams_Validate(t *testing.T) {
 				if !errors.Is(err, ErrInvalidParams) {
 					t.Errorf("Validate() = %v, want ErrInvalidParams", err)
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Errorf("Validate() = %v, want nil", err)
 			}
@@ -51,13 +53,16 @@ func TestNewSalt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSalt: %v", err)
 	}
+
 	b, err := NewSalt()
 	if err != nil {
 		t.Fatalf("NewSalt: %v", err)
 	}
+
 	if len(a) != SaltSize {
 		t.Errorf("len = %d, want %d", len(a), SaltSize)
 	}
+
 	if bytes.Equal(a, b) {
 		t.Error("two salts are equal")
 	}
@@ -71,14 +76,17 @@ func TestDeriveKeyDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeriveKey: %v", err)
 	}
+
 	k2, err := DeriveKey([]byte("secret"), salt, testKDF)
 	if err != nil {
 		t.Fatalf("DeriveKey: %v", err)
 	}
+
 	k3, err := DeriveKey([]byte("secret"), otherSalt, testKDF)
 	if err != nil {
 		t.Fatalf("DeriveKey: %v", err)
 	}
+
 	k4, err := DeriveKey([]byte("other secret"), salt, testKDF)
 	if err != nil {
 		t.Fatalf("DeriveKey: %v", err)
@@ -87,12 +95,15 @@ func TestDeriveKeyDeterministic(t *testing.T) {
 	if len(k1) != KeySize {
 		t.Errorf("len = %d, want %d", len(k1), KeySize)
 	}
+
 	if !bytes.Equal(k1, k2) {
 		t.Error("same input gave different keys")
 	}
+
 	if bytes.Equal(k1, k3) {
 		t.Error("different salt gave the same key")
 	}
+
 	if bytes.Equal(k1, k4) {
 		t.Error("different secret gave the same key")
 	}
@@ -100,6 +111,7 @@ func TestDeriveKeyDeterministic(t *testing.T) {
 
 func TestDefaultKDFIsACopy(t *testing.T) {
 	p := DefaultKDF()
+
 	p.Time = 1
 	if got := DefaultKDF().Time; got != 3 {
 		t.Errorf("DefaultKDF().Time = %d after changing a copy, want 3", got)
@@ -131,6 +143,7 @@ func TestDeriveKeyRejectsBadInput(t *testing.T) {
 func TestSubKeyRFC5869(t *testing.T) {
 	// RFC 5869, Test Case 3: SHA-256 with an empty salt and empty info.
 	ikm := bytes.Repeat([]byte{0x0b}, 22)
+
 	want, err := hex.DecodeString("8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8")
 	if err != nil {
 		t.Fatal(err)
@@ -140,20 +153,24 @@ func TestSubKeyRFC5869(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subKeyLen: %v", err)
 	}
+
 	if !bytes.Equal(okm, want) {
 		t.Errorf("subKeyLen = %x, want %x", okm, want)
 	}
 
 	// SubKey only adds the master length check; the 22-byte IKM of the vector is below it.
 	master := bytes.Repeat([]byte{0x0b}, KeySize)
+
 	key, err := SubKey(master, "smartnote/v2/enc")
 	if err != nil {
 		t.Fatalf("SubKey: %v", err)
 	}
+
 	same, err := subKeyLen(master, "smartnote/v2/enc", KeySize)
 	if err != nil {
 		t.Fatalf("subKeyLen: %v", err)
 	}
+
 	if !bytes.Equal(key, same) {
 		t.Errorf("SubKey = %x, want %x", key, same)
 	}
@@ -178,14 +195,17 @@ func TestSubKeyRejectsShortMaster(t *testing.T) {
 
 func TestSubKeyInfoSeparatesKeys(t *testing.T) {
 	master := bytes.Repeat([]byte{7}, KeySize)
+
 	a, err := SubKey(master, "smartnote/v2/enc")
 	if err != nil {
 		t.Fatalf("SubKey: %v", err)
 	}
+
 	b, err := SubKey(master, "smartnote/v2/other")
 	if err != nil {
 		t.Fatalf("SubKey: %v", err)
 	}
+
 	if bytes.Equal(a, b) {
 		t.Error("different info gave the same key")
 	}

@@ -19,14 +19,18 @@ var errNoteNotFound = errors.New("note not found")
 // ListNotes returns all notes, decrypted, in no particular order.
 func (s *Store) ListNotes(ctx context.Context) ([]domain.Note, error) {
 	var notes []domain.Note
+
 	err := s.unlocked(func(db *sql.DB, dek []byte) error {
 		var err error
+
 		notes, err = listNotes(ctx, db, dek)
+
 		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list notes: %w", err)
 	}
+
 	return notes, nil
 }
 
@@ -42,56 +46,71 @@ func listNotes(ctx context.Context, q querier, dek []byte) (_ []domain.Note, err
 	if err != nil {
 		return nil, err
 	}
-	defer closeRows(rows, &err)
+	defer func() { err = errors.Join(err, rows.Close()) }()
+
 	var notes []domain.Note
+
 	for rows.Next() {
 		n, err := scanNote(rows, dek)
 		if err != nil {
 			return nil, err
 		}
+
 		notes = append(notes, n)
 	}
+
 	return notes, rows.Err()
 }
 
 // GetNote returns note id, decrypted.
 func (s *Store) GetNote(ctx context.Context, id uuid.UUID) (domain.Note, error) {
 	var n domain.Note
+
 	err := s.unlocked(func(db *sql.DB, dek []byte) error {
 		row := db.QueryRowContext(ctx, "SELECT note_id, updated, name, info FROM notes WHERE note_id = ?", id.String())
+
 		var err error
+
 		n, err = scanNote(row, dek)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errNoteNotFound
 		}
+
 		return err
 	})
 	if err != nil {
 		return domain.Note{}, fmt.Errorf("get note %s: %w", id, err)
 	}
+
 	return n, nil
 }
 
 type scanner interface{ Scan(dest ...any) error }
 
 func scanNote(sc scanner, dek []byte) (domain.Note, error) {
-	var id string
-	var updated int64
-	var name, info []byte
+	var (
+		id         string
+		updated    int64
+		name, info []byte
+	)
 	if err := sc.Scan(&id, &updated, &name, &info); err != nil {
 		return domain.Note{}, err
 	}
+
 	noteID, err := uuid.Parse(id)
 	if err != nil {
 		return domain.Note{}, corrupt("note id %q", id)
 	}
+
 	n := domain.Note{ID: noteID, Updated: fromMillis(updated)}
 	if n.Name, err = openString(dek, name, aadNote("name", id)); err != nil {
 		return domain.Note{}, err
 	}
+
 	if n.Info, err = openString(dek, info, aadNote("info", id)); err != nil {
 		return domain.Note{}, err
 	}
+
 	return n, nil
 }
 
@@ -101,17 +120,21 @@ func (s *Store) InsertNote(ctx context.Context, n domain.Note) error {
 	if err != nil {
 		return fmt.Errorf("insert note %s: %w", n.ID, err)
 	}
+
 	return nil
 }
 
 func insertNote(ctx context.Context, q querier, dek []byte, n domain.Note) error {
 	id := n.ID.String()
+
 	name, info, err := sealNote(dek, n)
 	if err != nil {
 		return err
 	}
+
 	_, err = q.ExecContext(ctx, "INSERT INTO notes (note_id, updated, name, info) VALUES (?, ?, ?, ?)",
 		id, toMillis(n.Updated), name, info)
+
 	return err
 }
 
@@ -123,6 +146,7 @@ func (s *Store) UpdateNoteWithVersion(ctx context.Context, n domain.Note, prev d
 	if err != nil {
 		return fmt.Errorf("update note %s: %w", n.ID, err)
 	}
+
 	return nil
 }
 
@@ -131,21 +155,26 @@ func updateNoteWithVersion(ctx context.Context, q querier, dek []byte, n domain.
 	if err != nil {
 		return err
 	}
+
 	if err := execOne(ctx, q, "UPDATE notes SET updated = ?, name = ?, info = ? WHERE note_id = ?",
 		toMillis(n.Updated), name, info, n.ID.String()); err != nil {
 		return err
 	}
+
 	return insertVersion(ctx, q, dek, prev)
 }
 
 func insertVersion(ctx context.Context, q querier, dek []byte, v domain.NoteVersion) error {
 	vid, nid := v.ID.String(), v.NoteID.String()
+
 	info, err := sealbox.Seal(dek, []byte(v.Info), aadVersion(vid, nid))
 	if err != nil {
 		return err
 	}
+
 	_, err = q.ExecContext(ctx, "INSERT INTO note_versions (version_id, note_id, created, info) VALUES (?, ?, ?, ?)",
 		vid, nid, toMillis(v.Created), info)
+
 	return err
 }
 
@@ -155,6 +184,7 @@ func (s *Store) UpdateNoteName(ctx context.Context, id uuid.UUID, name string, u
 	if err != nil {
 		return fmt.Errorf("rename note %s: %w", id, err)
 	}
+
 	return nil
 }
 
@@ -163,6 +193,7 @@ func updateNoteName(ctx context.Context, q querier, dek []byte, id uuid.UUID, na
 	if err != nil {
 		return err
 	}
+
 	return execOne(ctx, q, "UPDATE notes SET updated = ?, name = ? WHERE note_id = ?", toMillis(updated), sealed, id.String())
 }
 
@@ -172,6 +203,7 @@ func (s *Store) DeleteNote(ctx context.Context, id uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("delete note %s: %w", id, err)
 	}
+
 	return nil
 }
 
@@ -183,35 +215,44 @@ func deleteNote(ctx context.Context, q querier, id uuid.UUID) error {
 // another note does not open: its AAD names the note it was sealed for.
 func (s *Store) ListVersions(ctx context.Context, noteID uuid.UUID) ([]domain.NoteVersion, error) {
 	var versions []domain.NoteVersion
+
 	err := s.unlocked(func(db *sql.DB, dek []byte) (err error) {
 		rows, err := db.QueryContext(ctx,
 			"SELECT version_id, note_id, created, info FROM note_versions WHERE note_id = ?", noteID.String())
 		if err != nil {
 			return err
 		}
-		defer closeRows(rows, &err)
+		defer func() { err = errors.Join(err, rows.Close()) }()
+
 		for rows.Next() {
-			var vid, nid string
-			var created int64
-			var info []byte
+			var (
+				vid, nid string
+				created  int64
+				info     []byte
+			)
 			if err := rows.Scan(&vid, &nid, &created, &info); err != nil {
 				return err
 			}
+
 			versionID, err := uuid.Parse(vid)
 			if err != nil {
 				return corrupt("version id %q", vid)
 			}
+
 			text, err := openString(dek, info, aadVersion(vid, nid))
 			if err != nil {
 				return err
 			}
+
 			versions = append(versions, domain.NoteVersion{ID: versionID, NoteID: noteID, Created: fromMillis(created), Info: text})
 		}
+
 		return rows.Err()
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list versions of %s: %w", noteID, err)
 	}
+
 	return versions, nil
 }
 
@@ -220,9 +261,11 @@ func sealNote(dek []byte, n domain.Note) (name, info []byte, err error) {
 	if name, err = sealbox.Seal(dek, []byte(n.Name), aadNote("name", id)); err != nil {
 		return nil, nil, err
 	}
+
 	if info, err = sealbox.Seal(dek, []byte(n.Info), aadNote("info", id)); err != nil {
 		return nil, nil, err
 	}
+
 	return name, info, nil
 }
 
@@ -233,14 +276,8 @@ func openString(dek, sealed []byte, aad sealbox.AAD) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: %s.%s %s: %w", domain.ErrCorruptStorage, aad.Table, aad.Column, aad.RowID, err)
 	}
-	return string(b), nil
-}
 
-// closeRows closes rows and adds a close error to *err.
-func closeRows(rows *sql.Rows, err *error) {
-	if cerr := rows.Close(); cerr != nil {
-		*err = errors.Join(*err, cerr)
-	}
+	return string(b), nil
 }
 
 // execOne runs a statement that must change exactly one row.
@@ -249,13 +286,16 @@ func execOne(ctx context.Context, q querier, query string, args ...any) error {
 	if err != nil {
 		return err
 	}
+
 	n, err := res.RowsAffected()
 	if err != nil {
 		return err
 	}
+
 	if n != 1 {
 		return fmt.Errorf("%w: %d rows changed", errNoteNotFound, n)
 	}
+
 	return nil
 }
 
@@ -272,9 +312,11 @@ func inTx(ctx context.Context, db *sql.DB, f func(tx *sql.Tx) error) (err error)
 			}
 		}
 	}()
+
 	if err := f(tx); err != nil {
 		return err
 	}
+
 	return tx.Commit()
 }
 

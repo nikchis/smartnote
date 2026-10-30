@@ -37,30 +37,39 @@ func (s ConnectionSettings) Validate() error {
 	if s.IsEmpty() {
 		return nil
 	}
+
 	if err := required("ssh_host", s.SSHHost); err != nil {
 		return err
 	}
+
 	if err := required("ssh_user", s.SSHUser); err != nil {
 		return err
 	}
+
 	if err := validPort("ssh_port", s.SSHPort); err != nil {
 		return err
 	}
+
 	if s.DBHost != "" && !IsLoopbackHost(s.DBHost) {
 		return &ValidationError{Field: "db_host", Reason: "must be localhost, 127.0.0.1 or ::1"}
 	}
+
 	if err := validPort("db_port", s.DBPort); err != nil {
 		return err
 	}
+
 	if err := required("db_name", s.DBName); err != nil {
 		return err
 	}
+
 	if err := required("db_user", s.DBUser); err != nil {
 		return err
 	}
+
 	if secretLen(s.SyncPhrase) < MinSyncPhraseLen {
 		return &ValidationError{Field: "sync_phrase", Reason: fmt.Sprintf("must be at least %d characters", MinSyncPhraseLen)}
 	}
+
 	return nil
 }
 
@@ -71,6 +80,7 @@ func (s ConnectionSettings) String() string {
 	if s.IsEmpty() {
 		return "ConnectionSettings{empty}"
 	}
+
 	return "ConnectionSettings{redacted}"
 }
 
@@ -85,6 +95,7 @@ func (s ConnectionSettings) WithDefaults() ConnectionSettings {
 	if !s.IsEmpty() && s.DBHost == "" {
 		s.DBHost = DefaultDBHost
 	}
+
 	return s
 }
 
@@ -95,13 +106,15 @@ func IsLoopbackHost(h string) bool {
 	case "localhost", "127.0.0.1", "::1":
 		return true
 	}
+
 	return false
 }
 
 func required(field, v string) error {
 	if v == "" {
-		return &ValidationError{Field: field, Reason: "is required"}
+		return &ValidationError{Field: field, Reason: reasonRequired}
 	}
+
 	return nil
 }
 
@@ -109,5 +122,6 @@ func validPort(field string, port int) error {
 	if port < 1 || port > 65535 {
 		return &ValidationError{Field: field, Reason: "must be between 1 and 65535"}
 	}
+
 	return nil
 }

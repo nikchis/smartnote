@@ -57,6 +57,7 @@ func (p KDFParams) Validate() error {
 	case p.Threads < minThreads || p.Threads > maxThreads:
 		return fmt.Errorf("%w: threads %d not in [%d, %d]", ErrInvalidParams, p.Threads, minThreads, maxThreads)
 	}
+
 	return nil
 }
 
@@ -66,21 +67,25 @@ func NewSalt() ([]byte, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("sealbox: read random salt: %w", err)
 	}
+
 	return salt, nil
 }
 
 // DeriveKey derives a KeySize key from secret with Argon2id after checking p,
 // the salt length and that secret is not empty.
-func DeriveKey(secret []byte, salt []byte, p KDFParams) ([]byte, error) {
+func DeriveKey(secret, salt []byte, p KDFParams) ([]byte, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
+
 	if len(secret) == 0 {
 		return nil, fmt.Errorf("%w: empty secret", ErrInvalidParams)
 	}
+
 	if len(salt) != SaltSize {
 		return nil, fmt.Errorf("%w: salt of %d bytes, want %d", ErrInvalidParams, len(salt), SaltSize)
 	}
+
 	return argon2.IDKey(secret, salt, p.Time, p.MemoryKiB, p.Threads, KeySize), nil
 }
 
@@ -90,6 +95,7 @@ func SubKey(master []byte, info string) ([]byte, error) {
 	if len(master) < KeySize {
 		return nil, fmt.Errorf("%w: master key of %d bytes, want at least %d", ErrInvalidParams, len(master), KeySize)
 	}
+
 	return subKeyLen(master, info, KeySize)
 }
 
@@ -98,5 +104,6 @@ func subKeyLen(master []byte, info string, n int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sealbox: hkdf: %w", err)
 	}
+
 	return key, nil
 }

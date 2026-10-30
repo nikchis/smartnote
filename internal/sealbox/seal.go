@@ -31,10 +31,12 @@ func (a AAD) bytes() ([]byte, error) {
 		strings.Contains(a.Table+a.Column+a.RowID+a.OwnerID, "|") {
 		return nil, errAmbiguousAAD
 	}
+
 	s := "smartnote|" + strconv.Itoa(int(FormatVersion)) + "|" + a.Table + "|" + a.Column + "|" + a.RowID
 	if a.OwnerID != "" {
 		s += "|" + a.OwnerID
 	}
+
 	return []byte(s), nil
 }
 
@@ -46,17 +48,21 @@ func Seal(key, plaintext []byte, aad AAD) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidParams, err)
 	}
+
 	ad, err := aad.bytes()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidParams, err)
 	}
+
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("sealbox: read random nonce: %w", err)
 	}
+
 	out := make([]byte, 0, 1+len(nonce)+len(plaintext)+aead.Overhead())
 	out = append(out, FormatVersion)
 	out = append(out, nonce...)
+
 	return aead.Seal(out, nonce, plaintext, ad), nil
 }
 
@@ -69,21 +75,26 @@ func Open(key, sealed []byte, aad AAD) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrOpen, err)
 	}
+
 	ad, err := aad.bytes()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrOpen, err)
 	}
+
 	header := 1 + aead.NonceSize()
 	if len(sealed) < header+aead.Overhead() {
 		return nil, fmt.Errorf("%w: %d bytes is too short", ErrOpen, len(sealed))
 	}
+
 	if sealed[0] != FormatVersion {
 		return nil, fmt.Errorf("%w: unknown version %d", ErrOpen, sealed[0])
 	}
+
 	plaintext, err := aead.Open([]byte{}, sealed[1:header], sealed[header:], ad)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrOpen, err)
 	}
+
 	return plaintext, nil
 }
 

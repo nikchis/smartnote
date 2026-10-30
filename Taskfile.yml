@@ -38,21 +38,6 @@ tasks:
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
-  test:
-    summary: Runs Go unit tests with the race detector
-    deps:
-      # frontend/embed.go needs frontend/dist to compile.
-      - task: common:build:frontend
-    cmds:
-      - go test -race ./...
-
-  lint:
-    summary: Runs golangci-lint
-    deps:
-      - task: common:build:frontend
-    cmds:
-      - golangci-lint run ./...
-
   package:linux:
     summary: Builds the .deb package and the AppImage
     cmds:

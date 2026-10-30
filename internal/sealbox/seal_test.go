@@ -26,6 +26,7 @@ func TestAAD_bytes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("bytes(): %v", err)
 			}
+
 			if string(got) != tt.want {
 				t.Errorf("bytes() = %q, want %q", got, tt.want)
 			}
@@ -63,12 +64,14 @@ func TestOpenRejectsAmbiguousAAD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
+
 	for _, tt := range ambiguousAADs {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := Open(testKey(1), sealed, tt.aad)
 			if !errors.Is(err, ErrOpen) {
 				t.Errorf("Open = %v, want ErrOpen", err)
 			}
+
 			if got != nil {
 				t.Errorf("Open returned plaintext %q", got)
 			}
@@ -90,13 +93,16 @@ func TestSealOpenRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Seal: %v", err)
 			}
+
 			got, err := Open(testKey(1), sealed, noteAAD)
 			if err != nil {
 				t.Fatalf("Open: %v", err)
 			}
+
 			if !bytes.Equal(got, tt.plaintext) {
 				t.Errorf("Open = %q, want %q", got, tt.plaintext)
 			}
+
 			if got == nil {
 				t.Error("Open returned nil plaintext with a nil error")
 			}
@@ -106,13 +112,16 @@ func TestSealOpenRoundTrip(t *testing.T) {
 
 func TestSealFormat(t *testing.T) {
 	pt := []byte("hello")
+
 	sealed, err := Seal(testKey(1), pt, noteAAD)
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
+
 	if sealed[0] != FormatVersion {
 		t.Errorf("version byte = %d, want %d", sealed[0], FormatVersion)
 	}
+
 	if want := 1 + 24 + len(pt) + 16; len(sealed) != want {
 		t.Errorf("len = %d, want %d", len(sealed), want)
 	}
@@ -121,6 +130,7 @@ func TestSealFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
+
 	if bytes.Equal(sealed[1:25], again[1:25]) {
 		t.Error("two seals use the same nonce")
 	}
@@ -137,6 +147,7 @@ func TestOpenRejects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
+
 	aad := AAD{Table: "note_versions", Column: "info", RowID: "v1", OwnerID: "n1"}
 
 	tampered := bytes.Clone(sealed)
@@ -167,6 +178,7 @@ func TestOpenRejects(t *testing.T) {
 			if !errors.Is(err, ErrOpen) {
 				t.Errorf("Open = %v, want ErrOpen", err)
 			}
+
 			if got != nil {
 				t.Errorf("Open returned plaintext %q", got)
 			}
@@ -180,10 +192,12 @@ func TestOpenRejects(t *testing.T) {
 func FuzzOpen(f *testing.F) {
 	key := testKey(1)
 	plaintext := []byte("secret note")
+
 	authentic, err := Seal(key, plaintext, noteAAD)
 	if err != nil {
 		f.Fatalf("Seal: %v", err)
 	}
+
 	f.Add(authentic)
 	f.Add([]byte{})
 	f.Add([]byte{FormatVersion})
@@ -195,11 +209,14 @@ func FuzzOpen(f *testing.F) {
 			if !bytes.Equal(got, plaintext) {
 				t.Fatalf("Open(%x) = %q, want %q", sealed, got, plaintext)
 			}
+
 			return
 		}
+
 		if !errors.Is(err, ErrOpen) {
 			t.Errorf("Open = %v, want ErrOpen", err)
 		}
+
 		if got != nil {
 			t.Errorf("Open returned plaintext %q with an error", got)
 		}
@@ -209,8 +226,10 @@ func FuzzOpen(f *testing.F) {
 func TestWipe(t *testing.T) {
 	b := []byte{1, 2, 3}
 	Wipe(b)
+
 	if !bytes.Equal(b, []byte{0, 0, 0}) {
 		t.Errorf("Wipe left %v", b)
 	}
+
 	Wipe(nil)
 }

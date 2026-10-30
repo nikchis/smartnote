@@ -133,19 +133,23 @@ func TestConnectionSettings_JSONNames(t *testing.T) {
 		SSHHost: "h", SSHPort: 1, SSHUser: "u", SSHPassword: "p", DBHost: "::1", DBPort: 2,
 		DBName: "n", DBUser: "d", DBPassword: "q", SyncPhrase: "s", TrustedHostKey: "k",
 	}
+
 	data, err := json.Marshal(s)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
+
 	var got map[string]any
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
+
 	want := []string{"ssh_host", "ssh_port", "ssh_user", "ssh_password", "db_host", "db_port",
 		"db_name", "db_user", "db_password", "sync_phrase", "trusted_host_key"}
 	if len(got) != len(want) {
 		t.Errorf("got %d keys %v, want %d", len(got), got, len(want))
 	}
+
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
 			t.Errorf("key %q missing in %s", k, data)
@@ -167,11 +171,13 @@ var settingsMarkers = []string{"host-marker", "ssh-user-marker", "ssh-password-m
 
 func TestConnectionSettings_Redacted(t *testing.T) {
 	s := secretSettings()
+
 	var logged bytes.Buffer
 	slog.New(slog.NewJSONHandler(&logged, nil)).Info("connect", "settings", s, "ptr", &s)
 
 	outputs := map[string]string{
-		"%v":   fmt.Sprintf("%v", s),
+		"%v": fmt.Sprintf("%v", s), //nolint:gocritic // the test checks the fmt path, not String
+
 		"%+v":  fmt.Sprintf("%+v", s),
 		"%#v":  fmt.Sprintf("%#v", s),
 		"ptr":  fmt.Sprintf("%+v", &s),
@@ -184,7 +190,8 @@ func TestConnectionSettings_Redacted(t *testing.T) {
 			}
 		}
 	}
-	if got := fmt.Sprint(ConnectionSettings{}); !strings.Contains(got, "empty") {
+
+	if got := fmt.Sprint(ConnectionSettings{}); !strings.Contains(got, "empty") { //nolint:gocritic // the fmt path
 		t.Errorf("empty settings print as %q, want a mention of empty", got)
 	}
 }

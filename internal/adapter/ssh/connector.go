@@ -37,6 +37,7 @@ func NewConnector(keys KeyLoader) (*Connector, error) {
 	if keys == nil {
 		return nil, errors.New("ssh: NewConnector: nil key loader")
 	}
+
 	return &Connector{keys: keys}, nil
 }
 
@@ -47,21 +48,26 @@ func (c *Connector) Open(ctx context.Context, s domain.ConnectionSettings, mode 
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
+
 	if s.IsEmpty() {
 		return nil, domain.ErrNotConnected
 	}
+
 	signer, err := c.signer(ctx)
 	if err != nil {
 		return nil, err
 	}
+
 	client, err := dialSSH(ctx, s, signer)
 	if err != nil {
 		return nil, err
 	}
+
 	sess, err := openDatabase(ctx, s, client, mode)
 	if err != nil {
 		return nil, withContext(ctx, err)
 	}
+
 	return sess, nil
 }
 
@@ -70,13 +76,16 @@ func (c *Connector) signer(ctx context.Context) (gossh.Signer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load ssh key: %w", err)
 	}
+
 	if !ok {
 		return nil, nil
 	}
+
 	signer, err := gossh.ParsePrivateKey(pair.PrivatePEM)
 	if err != nil {
 		return nil, fmt.Errorf("ssh key: %w", err)
 	}
+
 	return signer, nil
 }
 
@@ -86,22 +95,26 @@ func (c *Connector) signer(ctx context.Context) (gossh.Signer, error) {
 func openDatabase(ctx context.Context, s domain.ConnectionSettings, client *gossh.Client, mode usecase.OpenMode) (usecase.RemoteSession, error) {
 	stop := context.AfterFunc(ctx, func() { _ = client.Close() }) // the operation is over; see withContext
 	defer stop()
+
 	abort := func() { _ = client.Close() } // a second Close only reports that it is closed
 
 	cfg, err := pgConfig(s, client)
 	if err != nil {
-		return nil, errors.Join(err, client.Close())
+		return nil, errors.Join(err, closeClient(client))
 	}
+
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("database: %w", err), closeClient(client))
 	}
+
 	sess, err := postgres.NewSession(ctx, conn, postgres.Options{
 		Mode: mode, Phrase: s.SyncPhrase, KDF: sealbox.DefaultKDF(), Abort: abort,
 	})
 	if err != nil {
 		return nil, err // NewSession closed conn and called abort
 	}
+
 	return sess, nil
 }
 
@@ -109,13 +122,16 @@ func openDatabase(ctx context.Context, s domain.ConnectionSettings, client *goss
 // ctx. It authenticates with signer when given, then with the password.
 func dialSSH(ctx context.Context, s domain.ConnectionSettings, signer gossh.Signer) (*gossh.Client, error) {
 	addr := net.JoinHostPort(s.SSHHost, strconv.Itoa(s.SSHPort))
+
 	var auth []gossh.AuthMethod
 	if signer != nil {
 		auth = append(auth, gossh.PublicKeys(signer))
 	}
+
 	if s.SSHPassword != "" || signer == nil {
 		auth = append(auth, gossh.Password(s.SSHPassword))
 	}
+
 	config := &gossh.ClientConfig{
 		User:              s.SSHUser,
 		Auth:              auth,
@@ -125,6 +141,7 @@ func dialSSH(ctx context.Context, s domain.ConnectionSettings, signer gossh.Sign
 
 	hctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
+
 	raw, err := (&net.Dialer{}).DialContext(hctx, "tcp", addr)
 	if err != nil {
 		return nil, withContext(ctx, fmt.Errorf("ssh: connect %s: %w", addr, err))
@@ -135,20 +152,26 @@ func dialSSH(ctx context.Context, s domain.ConnectionSettings, signer gossh.Sign
 		stop()
 		return nil, errors.Join(err, raw.Close())
 	}
+
 	conn, chans, reqs, err := gossh.NewClientConn(raw, addr, config)
 	stopped := stop()
+
 	if err != nil {
 		if cerr := raw.Close(); cerr != nil && !errors.Is(cerr, net.ErrClosed) {
 			err = errors.Join(err, cerr)
 		}
+
 		return nil, withContext(ctx, err)
 	}
+
 	if !stopped {
 		return nil, errors.Join(ctx.Err(), conn.Close())
 	}
+
 	if err := raw.SetDeadline(time.Time{}); err != nil {
 		return nil, errors.Join(err, conn.Close())
 	}
+
 	return gossh.NewClient(conn, chans, reqs), nil
 }
 
@@ -158,6 +181,7 @@ func withContext(ctx context.Context, err error) error {
 	if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
 		return errors.Join(cerr, err)
 	}
+
 	return err
 }
 
@@ -165,5 +189,6 @@ func closeClient(client *gossh.Client) error {
 	if err := client.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		return fmt.Errorf("close ssh client: %w", err)
 	}
+
 	return nil
 }

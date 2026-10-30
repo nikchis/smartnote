@@ -20,6 +20,7 @@ func UTF16Len(s string) int {
 	for _, r := range s {
 		n += utf16.RuneLen(r)
 	}
+
 	return n
 }
 

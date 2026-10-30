@@ -23,13 +23,16 @@ func hostKeyCallback(trustedAuthorized string) gossh.HostKeyCallback {
 		if trustedAuthorized == "" {
 			return &domain.HostKeyUnknownError{Fingerprint: got, AuthorizedKey: authorizedLine(key)}
 		}
+
 		want, err := parseAuthorized(trustedAuthorized)
 		if err != nil {
 			return err
 		}
+
 		if !bytes.Equal(want.Marshal(), key.Marshal()) {
 			return &domain.HostKeyMismatchError{Expected: gossh.FingerprintSHA256(want), Got: got}
 		}
+
 		return nil
 	}
 }
@@ -41,21 +44,25 @@ func pinnedAlgorithms(trustedAuthorized string) []string {
 	if trustedAuthorized == "" {
 		return nil
 	}
+
 	key, err := parseAuthorized(trustedAuthorized)
 	if err != nil {
 		return nil
 	}
+
 	if key.Type() == gossh.KeyAlgoRSA {
 		return []string{gossh.KeyAlgoRSASHA512, gossh.KeyAlgoRSASHA256, gossh.KeyAlgoRSA}
 	}
+
 	return []string{key.Type()}
 }
 
 func parseAuthorized(line string) (gossh.PublicKey, error) {
-	key, _, _, _, err := gossh.ParseAuthorizedKey([]byte(line))
+	key, _, _, _, err := gossh.ParseAuthorizedKey([]byte(line)) //nolint:dogsled // only the key of the five results matters
 	if err != nil {
 		return nil, fmt.Errorf("trusted host key: %w", err)
 	}
+
 	return key, nil
 }
 

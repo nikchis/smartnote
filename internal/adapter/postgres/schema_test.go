@@ -21,16 +21,20 @@ func TestNewMetaOpensWithSamePhrase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newMeta: %v", err)
 	}
+
 	if m.ServerID == uuid.Nil || m.FormatVersion != formatVersion || len(m.Salt) != sealbox.SaltSize {
 		t.Errorf("meta = %+v", m)
 	}
+
 	got, err := m.unlock(testPhrase)
 	if err != nil {
 		t.Fatalf("unlock: %v", err)
 	}
+
 	if !bytes.Equal(got, key) {
 		t.Error("the same phrase derived another key")
 	}
+
 	if _, err := m.unlock("another phrase 16"); !errors.Is(err, domain.ErrWrongSyncPhrase) {
 		t.Errorf("unlock with another phrase = %v, want ErrWrongSyncPhrase", err)
 	}
@@ -38,10 +42,12 @@ func TestNewMetaOpensWithSamePhrase(t *testing.T) {
 
 func TestUnlockNFCAndNFD(t *testing.T) {
 	nfc, nfd := "passéword phrase", "passéword phrase"
+
 	m, _, err := newMeta(nfc, testKDF)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := m.unlock(nfd); err != nil {
 		t.Errorf("unlock with the NFD form: %v", err)
 	}
@@ -52,6 +58,7 @@ func TestMetaCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	tests := []struct {
 		name   string
 		modify func(*meta)
@@ -67,6 +74,7 @@ func TestMetaCheck(t *testing.T) {
 			m := good
 			m.Salt = bytes.Clone(good.Salt)
 			tt.modify(&m)
+
 			if _, err := m.unlock(testPhrase); !errors.Is(err, domain.ErrUnsupportedFormat) {
 				t.Errorf("unlock = %v, want ErrUnsupportedFormat", err)
 			}
@@ -79,6 +87,7 @@ func TestParseKDF(t *testing.T) {
 	if err != nil || p != sealbox.DefaultKDF() {
 		t.Errorf("parseKDF = %+v, %v", p, err)
 	}
+
 	if _, err := parseKDF([]byte(`{`)); !errors.Is(err, domain.ErrUnsupportedFormat) {
 		t.Errorf("parseKDF of broken json = %v, want ErrUnsupportedFormat", err)
 	}
@@ -87,17 +96,21 @@ func TestParseKDF(t *testing.T) {
 func TestNoteFieldsBoundToNote(t *testing.T) {
 	key := bytes.Repeat([]byte{1}, sealbox.KeySize)
 	n := domain.Note{ID: uuid.New(), Name: "n", Info: "i"}
+
 	name, info, err := sealNote(key, n)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	other := uuid.New()
 	if _, err := openNote(key, other.String(), n.Updated, name, info); err == nil {
 		t.Error("fields of one note opened as another note")
 	}
+
 	if _, err := openNote(key, n.ID.String(), n.Updated, info, name); err == nil {
 		t.Error("name and text swapped opened")
 	}
+
 	got, err := openNote(key, n.ID.String(), n.Updated, name, info)
 	if err != nil || got.Name != "n" || got.Info != "i" || got.ID != n.ID {
 		t.Errorf("openNote = %+v, %v", got, err)

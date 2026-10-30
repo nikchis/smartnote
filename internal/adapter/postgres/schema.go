@@ -70,15 +70,18 @@ func newMeta(phrase string, p sealbox.KDFParams) (meta, []byte, error) {
 	if err != nil {
 		return meta{}, nil, err
 	}
+
 	key, err := deriveEncKey(phrase, salt, p)
 	if err != nil {
 		return meta{}, nil, err
 	}
+
 	check, err := sealbox.Seal(key, []byte(keyCheckPlain), aadKeyCheck())
 	if err != nil {
 		sealbox.Wipe(key)
 		return meta{}, nil, err
 	}
+
 	return meta{ServerID: uuid.New(), FormatVersion: formatVersion, KDF: p, Salt: salt, KeyCheck: check}, key, nil
 }
 
@@ -90,21 +93,26 @@ func (m meta) unlock(phrase string) ([]byte, error) {
 	if m.FormatVersion != formatVersion {
 		return nil, fmt.Errorf("%w: remote format version %d", domain.ErrUnsupportedFormat, m.FormatVersion)
 	}
+
 	if err := m.KDF.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", domain.ErrUnsupportedFormat, err)
 	}
+
 	if len(m.Salt) != sealbox.SaltSize {
 		return nil, fmt.Errorf("%w: salt of %d bytes", domain.ErrUnsupportedFormat, len(m.Salt))
 	}
+
 	key, err := deriveEncKey(phrase, m.Salt, m.KDF)
 	if err != nil {
 		return nil, err
 	}
+
 	check, err := sealbox.Open(key, m.KeyCheck, aadKeyCheck())
 	if err != nil || string(check) != keyCheckPlain {
 		sealbox.Wipe(key)
 		return nil, domain.ErrWrongSyncPhrase
 	}
+
 	return key, nil
 }
 
@@ -112,11 +120,13 @@ func (m meta) unlock(phrase string) ([]byte, error) {
 func deriveEncKey(phrase string, salt []byte, p sealbox.KDFParams) ([]byte, error) {
 	secret := []byte(domain.NormalizeSecret(phrase))
 	defer sealbox.Wipe(secret)
+
 	master, err := sealbox.DeriveKey(secret, salt, p)
 	if err != nil {
 		return nil, err
 	}
 	defer sealbox.Wipe(master)
+
 	return sealbox.SubKey(master, encKeyInfo)
 }
 
@@ -127,6 +137,7 @@ func parseKDF(raw []byte) (sealbox.KDFParams, error) {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return sealbox.KDFParams{}, fmt.Errorf("%w: kdf parameters: %w", domain.ErrUnsupportedFormat, err)
 	}
+
 	return p, nil
 }
 
@@ -135,9 +146,11 @@ func sealNote(key []byte, n domain.Note) (name, info []byte, err error) {
 	if name, err = sealbox.Seal(key, []byte(n.Name), aadNote("name", id)); err != nil {
 		return nil, nil, err
 	}
+
 	if info, err = sealbox.Seal(key, []byte(n.Info), aadNote("info", id)); err != nil {
 		return nil, nil, err
 	}
+
 	return name, info, nil
 }
 
@@ -150,15 +163,20 @@ func openNote(key []byte, id string, updated time.Time, name, info []byte) (doma
 	if err != nil {
 		return domain.Note{}, fmt.Errorf("%w: note id %q", errNoteDoesNotOpen, id)
 	}
+
 	n := domain.Note{ID: noteID, Updated: updated.UTC()}
+
 	nameBytes, err := sealbox.Open(key, name, aadNote("name", id))
 	if err != nil {
 		return domain.Note{}, fmt.Errorf("%w: %s: %w", errNoteDoesNotOpen, id, err)
 	}
+
 	infoBytes, err := sealbox.Open(key, info, aadNote("info", id))
 	if err != nil {
 		return domain.Note{}, fmt.Errorf("%w: %s: %w", errNoteDoesNotOpen, id, err)
 	}
+
 	n.Name, n.Info = string(nameBytes), string(infoBytes)
+
 	return n, nil
 }

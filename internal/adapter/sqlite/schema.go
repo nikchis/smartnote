@@ -64,25 +64,34 @@ CREATE TABLE ssh_key (
 
 // requiredTables are checked on Unlock, so a damaged schema reads as a
 // corrupt storage rather than as a later "no such table".
-var requiredTables = []string{"meta", "notes", "note_versions", "connection", "ssh_key"}
+var requiredTables = []string{tableMeta, tableNotes, tableNoteVersions, tableConnection, tableSSHKey}
+
+// Table names, also the Table part of the AADs.
+const (
+	tableMeta         = "meta"
+	tableNotes        = "notes"
+	tableNoteVersions = "note_versions"
+	tableConnection   = "connection"
+	tableSSHKey       = "ssh_key"
+)
 
 // AADs of the sealed fields (spec §4).
 func aadWrappedDEK() sealbox.AAD {
-	return sealbox.AAD{Table: "meta", Column: metaWrappedDEK, RowID: "1"}
+	return sealbox.AAD{Table: tableMeta, Column: metaWrappedDEK, RowID: "1"}
 }
 func aadSettings() sealbox.AAD {
-	return sealbox.AAD{Table: "connection", Column: "settings", RowID: "1"}
+	return sealbox.AAD{Table: tableConnection, Column: "settings", RowID: "1"}
 }
 func aadPrivateKey() sealbox.AAD {
-	return sealbox.AAD{Table: "ssh_key", Column: "private_key", RowID: "1"}
+	return sealbox.AAD{Table: tableSSHKey, Column: "private_key", RowID: "1"}
 }
 
 func aadNote(column, id string) sealbox.AAD {
-	return sealbox.AAD{Table: "notes", Column: column, RowID: id}
+	return sealbox.AAD{Table: tableNotes, Column: column, RowID: id}
 }
 
 func aadVersion(versionID, noteID string) sealbox.AAD {
-	return sealbox.AAD{Table: "note_versions", Column: "info", RowID: versionID, OwnerID: noteID}
+	return sealbox.AAD{Table: tableNoteVersions, Column: "info", RowID: versionID, OwnerID: noteID}
 }
 
 // dsn returns the URI for path: the file must exist (mode=rw), foreign keys
@@ -93,7 +102,9 @@ func dsn(path string) string {
 	if !strings.HasPrefix(p, "/") {
 		p = "/" + p // a Windows drive path
 	}
+
 	u := url.URL{Scheme: "file", Path: p, RawQuery: "mode=rw&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"}
+
 	return u.String()
 }
 
@@ -107,6 +118,7 @@ func mapOpenError(err error) error {
 			return fmt.Errorf("%w: %w", domain.ErrCorruptStorage, err)
 		}
 	}
+
 	return err
 }
 

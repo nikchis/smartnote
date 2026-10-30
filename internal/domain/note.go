@@ -38,6 +38,7 @@ type NoteVersion struct {
 func (n Note) Normalized() Note {
 	n.Name = NormalizeText(n.Name)
 	n.Info = NormalizeText(n.Info)
+
 	return n
 }
 
@@ -48,6 +49,7 @@ func (n Note) Validate() error {
 	if err := checkLen("name", UTF16Len(n.Name), 1, MaxNameLen); err != nil {
 		return err
 	}
+
 	return checkLen("info", UTF16Len(n.Info), 1, MaxInfoLen)
 }
 
@@ -57,15 +59,19 @@ func ValidatePassword(p string) error {
 	return checkLen("password", secretLen(p), MinPasswordLen, MaxPasswordLen)
 }
 
+// reasonRequired is the Reason of a missing value.
+const reasonRequired = "is required"
+
 // checkLen returns a *ValidationError for field unless the length n is in [minLen, maxLen].
 func checkLen(field string, n, minLen, maxLen int) error {
 	switch {
 	case n == 0:
-		return &ValidationError{Field: field, Reason: "is required"}
+		return &ValidationError{Field: field, Reason: reasonRequired}
 	case n < minLen:
 		return &ValidationError{Field: field, Reason: fmt.Sprintf("must be at least %d characters", minLen)}
 	case n > maxLen:
 		return &ValidationError{Field: field, Reason: fmt.Sprintf("must be at most %d characters", maxLen)}
 	}
+
 	return nil
 }

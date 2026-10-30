@@ -26,6 +26,7 @@ type ChangeTracker struct {
 func (t *ChangeTracker) setOnChange(f func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	t.onChange = f
 }
 
@@ -34,14 +35,17 @@ func (t *ChangeTracker) setOnChange(f func()) {
 // is set before the lock is released.
 func (t *ChangeTracker) Edit(write func() (changed bool, err error)) error {
 	t.edit.Lock()
+
 	changed, err := write()
 	if err == nil && changed {
 		t.set(func() { t.gen++; t.dirty = true })
 	}
 	t.edit.Unlock()
+
 	if err == nil && changed {
 		t.notify()
 	}
+
 	return err
 }
 
@@ -54,14 +58,17 @@ func (t *ChangeTracker) ApplyIfUnchanged(gen uint64, apply func() error) error {
 		t.edit.Unlock()
 		return domain.ErrLocalChanged
 	}
+
 	err := apply()
 	if err == nil {
 		t.set(func() { t.dirty = false })
 	}
 	t.edit.Unlock()
+
 	if err == nil {
 		t.notify()
 	}
+
 	return err
 }
 
@@ -83,20 +90,24 @@ func (t *ChangeTracker) MarkDiverged() {
 func (t *ChangeTracker) Generation() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	return t.gen
 }
 
 // ClearIf clears the flag and returns true if the generation is still gen.
 func (t *ChangeTracker) ClearIf(gen uint64) bool {
 	t.mu.Lock()
+
 	ok := t.gen == gen
 	if ok {
 		t.dirty = false
 	}
 	t.mu.Unlock()
+
 	if ok {
 		t.notify()
 	}
+
 	return ok
 }
 
@@ -110,12 +121,14 @@ func (t *ChangeTracker) Clear() {
 func (t *ChangeTracker) Dirty() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	return t.dirty
 }
 
 func (t *ChangeTracker) set(f func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	f()
 }
 
@@ -123,6 +136,7 @@ func (t *ChangeTracker) notify() {
 	t.mu.Lock()
 	f := t.onChange
 	t.mu.Unlock()
+
 	if f != nil {
 		f()
 	}

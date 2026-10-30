@@ -36,6 +36,7 @@ func NewKeys(s KeyStore, t KeyTool) (*Keys, error) {
 	case t == nil:
 		return nil, nilDependency("NewKeys", "tool")
 	}
+
 	return &Keys{store: s, tool: t}, nil
 }
 
@@ -45,6 +46,7 @@ func (k *Keys) HasKey(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("load ssh key: %w", err)
 	}
+
 	return ok, nil
 }
 
@@ -54,6 +56,7 @@ func (k *Keys) Generate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("generate ssh key: %w", err)
 	}
+
 	return k.save(ctx, pair)
 }
 
@@ -64,6 +67,7 @@ func (k *Keys) Import(ctx context.Context, data []byte, passphrase string) error
 	if err != nil {
 		return fmt.Errorf("import ssh key: %w", err)
 	}
+
 	return k.save(ctx, pair)
 }
 
@@ -74,9 +78,11 @@ func (k *Keys) PublicKey(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load ssh key: %w", err)
 	}
+
 	if !ok {
 		return "", fmt.Errorf("public key: %w", domain.ErrKeyMissing)
 	}
+
 	return pair.PublicAuthorized, nil
 }
 
@@ -84,5 +90,6 @@ func (k *Keys) save(ctx context.Context, pair domain.KeyPair) error {
 	if err := k.store.SaveKey(ctx, pair); err != nil {
 		return fmt.Errorf("save ssh key: %w", err)
 	}
+
 	return nil
 }

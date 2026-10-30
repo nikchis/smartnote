@@ -37,13 +37,16 @@ func TestUTF16Len(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read vectors: %v", err)
 	}
+
 	var vectors []lengthVector
 	if err := json.Unmarshal(data, &vectors); err != nil {
 		t.Fatalf("parse vectors: %v", err)
 	}
+
 	if len(vectors) == 0 {
 		t.Fatal("no vectors in testdata/lengths.json")
 	}
+
 	for _, v := range vectors {
 		t.Run(v.Name, func(t *testing.T) {
 			if got := UTF16Len(NormalizeText(v.Text)); got != v.UTF16 {

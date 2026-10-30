@@ -26,6 +26,7 @@ func (KeyTool) Generate() (domain.KeyPair, error) {
 	if err != nil {
 		return domain.KeyPair{}, fmt.Errorf("generate key: %w", err)
 	}
+
 	return pairOf(priv)
 }
 
@@ -39,17 +40,21 @@ func (KeyTool) Import(data []byte, passphrase string) (domain.KeyPair, error) {
 		if passphrase == "" {
 			return domain.KeyPair{}, fmt.Errorf("import key: %w", domain.ErrKeyPassphraseRequired)
 		}
+
 		key, err = gossh.ParseRawPrivateKeyWithPassphrase(data, []byte(passphrase))
 		if errors.Is(err, x509.IncorrectPasswordError) {
 			return domain.KeyPair{}, fmt.Errorf("import key: wrong passphrase: %w", domain.ErrKeyPassphraseRequired)
 		}
 	}
+
 	if err != nil {
 		return domain.KeyPair{}, fmt.Errorf("import key: %w", err)
 	}
+
 	if p, ok := key.(*ed25519.PrivateKey); ok {
 		key = *p // MarshalPrivateKey takes the value
 	}
+
 	return pairOf(key)
 }
 
@@ -58,10 +63,12 @@ func pairOf(key crypto.PrivateKey) (domain.KeyPair, error) {
 	if err != nil {
 		return domain.KeyPair{}, fmt.Errorf("key: %w", err)
 	}
+
 	block, err := gossh.MarshalPrivateKey(key, keyComment)
 	if err != nil {
 		return domain.KeyPair{}, fmt.Errorf("encode key: %w", err)
 	}
+
 	return domain.KeyPair{
 		PrivatePEM:       pem.EncodeToMemory(block),
 		PublicAuthorized: authorizedLine(signer.PublicKey()) + " " + keyComment,

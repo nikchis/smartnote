@@ -44,13 +44,15 @@ func OpenWithKDF(dir string, p sealbox.KDFParams) (*Store, error) {
 	if err := p.Validate(); err != nil {
 		return nil, fmt.Errorf("open local storage: %w", err)
 	}
+
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("open local storage: %w", err)
 	}
 	// A directory needs the x bit to be entered; 0700 still keeps out other users.
-	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // G302: see above
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("open local storage: %w", err)
 	}
+
 	return &Store{dir: dir, kdf: p}, nil
 }
 
@@ -62,6 +64,7 @@ func (s *Store) path() string { return filepath.Join(s.dir, dbFile) }
 func (s *Store) Exists(ctx context.Context) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return s.existsLocked(ctx)
 }
 
@@ -70,27 +73,35 @@ func (s *Store) existsLocked(ctx context.Context) (bool, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
+
 	if err != nil {
 		return false, fmt.Errorf("check local storage: %w", err)
 	}
+
 	if info.Size() == 0 {
 		return false, nil
 	}
+
 	if err := s.ensureDBLocked(); err != nil {
 		return false, err
 	}
+
 	tables, err := tableNames(ctx, s.db)
 	if err != nil {
 		return false, err
 	}
-	if !tables["meta"] {
+
+	if !tables[tableMeta] {
 		return false, nil
 	}
+
 	var n int
+
 	err = s.db.QueryRowContext(ctx, "SELECT count(*) FROM meta WHERE key = ?", metaWrappedDEK).Scan(&n)
 	if err != nil {
 		return false, fmt.Errorf("check local storage: %w", mapOpenError(err))
 	}
+
 	return n > 0, nil
 }
 
@@ -100,35 +111,44 @@ func (s *Store) existsLocked(ctx context.Context) (bool, error) {
 func (s *Store) Create(ctx context.Context, password string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	ok, err := s.existsLocked(ctx)
 	if err != nil {
 		return fmt.Errorf("create local storage: %w", err)
 	}
+
 	if ok {
 		return fmt.Errorf("create local storage: %w", domain.ErrStorageExists)
 	}
+
 	if err := s.closeDBLocked(); err != nil {
 		return fmt.Errorf("create local storage: %w", err)
 	}
 
 	tmp := filepath.Join(s.dir, tmpFile)
+
 	dek, err := s.buildStorage(ctx, tmp, password)
 	if err != nil {
 		if rerr := os.Remove(tmp); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
 			err = errors.Join(err, rerr)
 		}
+
 		return fmt.Errorf("create local storage: %w", err)
 	}
+
 	if err := s.install(tmp); err != nil {
 		sealbox.Wipe(dek)
 		return fmt.Errorf("create local storage: %w", err)
 	}
+
 	db, err := openDB(s.path())
 	if err != nil {
 		sealbox.Wipe(dek)
 		return fmt.Errorf("create local storage: %w", err)
 	}
+
 	s.db, s.dek = db, dek
+
 	return nil
 }
 
@@ -146,6 +166,7 @@ func (s *Store) buildStorage(ctx context.Context, tmp, password string) (dek []b
 		if err != nil {
 			return err
 		}
+
 		return f.Close()
 	}); err != nil {
 		return nil, err
@@ -160,6 +181,7 @@ func (s *Store) buildStorage(ctx context.Context, tmp, password string) (dek []b
 			err = cerr
 		}
 	}()
+
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
@@ -168,11 +190,13 @@ func (s *Store) buildStorage(ctx context.Context, tmp, password string) (dek []b
 	if _, err := rand.Read(dek); err != nil {
 		return nil, fmt.Errorf("new data key: %w", err)
 	}
+
 	meta, err := s.sealDEK(password, dek)
 	if err != nil {
 		sealbox.Wipe(dek)
 		return nil, err
 	}
+
 	meta[metaFormatVersion] = []byte(strconv.Itoa(formatVersion))
 	for k, v := range meta {
 		if _, err := db.ExecContext(ctx, "INSERT INTO meta (key, value) VALUES (?, ?)", k, v); err != nil {
@@ -180,6 +204,7 @@ func (s *Store) buildStorage(ctx context.Context, tmp, password string) (dek []b
 			return nil, fmt.Errorf("write meta: %w", err)
 		}
 	}
+
 	return dek, nil
 }
 
@@ -192,12 +217,15 @@ func (s *Store) install(tmp string) error {
 	if err := os.Remove(s.path() + "-journal"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+
 	if err := os.Rename(tmp, s.path()); err != nil {
 		return err
 	}
+
 	if runtime.GOOS == "windows" {
 		return nil // no directory sync on Windows
 	}
+
 	return s.withRoot(func(root *os.Root) error { return syncFile(root, ".", os.O_RDONLY) })
 }
 
@@ -213,6 +241,7 @@ func (s *Store) withRoot(f func(root *os.Root) error) (err error) {
 			err = errors.Join(err, cerr)
 		}
 	}()
+
 	return f(root)
 }
 
@@ -227,6 +256,7 @@ func syncFile(root *os.Root, name string, flag int) (err error) {
 			err = errors.Join(err, cerr)
 		}
 	}()
+
 	return f.Sync()
 }
 
@@ -237,25 +267,30 @@ func (s *Store) sealDEK(password string, dek []byte) (map[string][]byte, error) 
 	if err != nil {
 		return nil, err
 	}
+
 	kek, err := deriveKEK(password, salt, s.kdf)
 	if err != nil {
 		return nil, err
 	}
 	defer sealbox.Wipe(kek)
+
 	wrapped, err := sealbox.Seal(kek, dek, aadWrappedDEK())
 	if err != nil {
 		return nil, err
 	}
+
 	params, err := json.Marshal(s.kdf)
 	if err != nil {
 		return nil, err
 	}
+
 	return map[string][]byte{metaKDFParams: params, metaKDFSalt: salt, metaWrappedDEK: wrapped}, nil
 }
 
 func deriveKEK(password string, salt []byte, p sealbox.KDFParams) ([]byte, error) {
 	secret := []byte(domain.NormalizeSecret(password))
 	defer sealbox.Wipe(secret)
+
 	return sealbox.DeriveKey(secret, salt, p)
 }
 
@@ -264,15 +299,19 @@ func deriveKEK(password string, salt []byte, p sealbox.KDFParams) ([]byte, error
 func (s *Store) Unlock(ctx context.Context, password string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if err := s.ensureDBLocked(); err != nil {
 		return fmt.Errorf("unlock local storage: %w", err)
 	}
+
 	dek, err := s.unlock(ctx, password)
 	if err != nil {
 		return fmt.Errorf("unlock local storage: %w", err)
 	}
+
 	sealbox.Wipe(s.dek)
 	s.dek = dek
+
 	return nil
 }
 
@@ -281,22 +320,27 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !tables["meta"] {
+
+	if !tables[tableMeta] {
 		return nil, domain.ErrStorageMissing
 	}
+
 	meta, err := readMeta(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
+
 	wrapped, ok := meta[metaWrappedDEK]
 	if !ok {
 		return nil, domain.ErrStorageMissing
 	}
+
 	for _, t := range requiredTables {
 		if !tables[t] {
 			return nil, corrupt("table %s is missing", t)
 		}
 	}
+
 	version, err := strconv.Atoi(string(meta[metaFormatVersion]))
 	switch {
 	case err != nil || version < 1:
@@ -304,13 +348,16 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 	case version > formatVersion:
 		return nil, fmt.Errorf("%w: format version %d", domain.ErrUnsupportedFormat, version)
 	}
+
 	var p sealbox.KDFParams
 	if err := json.Unmarshal(meta[metaKDFParams], &p); err != nil {
 		return nil, corrupt("kdf parameters: %v", err)
 	}
+
 	if err := p.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", domain.ErrCorruptStorage, err)
 	}
+
 	salt := meta[metaKDFSalt]
 	if len(salt) != sealbox.SaltSize {
 		return nil, corrupt("salt of %d bytes", len(salt))
@@ -321,14 +368,17 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 		return nil, err
 	}
 	defer sealbox.Wipe(kek)
+
 	dek, err := sealbox.Open(kek, wrapped, aadWrappedDEK())
 	if err != nil {
 		return nil, domain.ErrWrongPassword
 	}
+
 	if len(dek) != sealbox.KeySize {
 		sealbox.Wipe(dek)
 		return nil, corrupt("data key of %d bytes", len(dek))
 	}
+
 	return dek, nil
 }
 
@@ -337,24 +387,29 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 func (s *Store) ChangePassword(ctx context.Context, newPassword string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if s.db == nil || s.dek == nil {
 		return fmt.Errorf("change password: %w", errLocked)
 	}
+
 	meta, err := s.sealDEK(newPassword, s.dek)
 	if err != nil {
 		return fmt.Errorf("change password: %w", err)
 	}
+
 	err = inTx(ctx, s.db, func(tx *sql.Tx) error {
 		for k, v := range meta {
 			if err := execOne(ctx, tx, "UPDATE meta SET value = ? WHERE key = ?", v, k); err != nil {
 				return err
 			}
 		}
+
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("change password: %w", err)
 	}
+
 	return nil
 }
 
@@ -362,11 +417,14 @@ func (s *Store) ChangePassword(ctx context.Context, newPassword string) error {
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	sealbox.Wipe(s.dek)
+
 	s.dek = nil
 	if err := s.closeDBLocked(); err != nil {
 		return fmt.Errorf("close local storage: %w", err)
 	}
+
 	return nil
 }
 
@@ -374,8 +432,10 @@ func (s *Store) closeDBLocked() error {
 	if s.db == nil {
 		return nil
 	}
+
 	err := s.db.Close()
 	s.db = nil
+
 	return err
 }
 
@@ -384,17 +444,22 @@ func (s *Store) ensureDBLocked() error {
 	if s.db != nil {
 		return nil
 	}
+
 	if _, err := os.Stat(s.path()); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return domain.ErrStorageMissing
 		}
+
 		return err
 	}
+
 	db, err := openDB(s.path())
 	if err != nil {
 		return err
 	}
+
 	s.db = db
+
 	return nil
 }
 
@@ -405,9 +470,11 @@ var errLocked = fmt.Errorf("local storage is locked: %w", domain.ErrStorageMissi
 func (s *Store) unlocked(f func(db *sql.DB, dek []byte) error) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	if s.db == nil || s.dek == nil {
 		return errLocked
 	}
+
 	return f(s.db, s.dek)
 }
 
@@ -416,7 +483,9 @@ func openDB(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	db.SetMaxOpenConns(1)
+
 	return db, nil
 }
 
@@ -425,18 +494,23 @@ func tableNames(ctx context.Context, db *sql.DB) (_ map[string]bool, err error) 
 	if err != nil {
 		return nil, fmt.Errorf("read schema: %w", mapOpenError(err))
 	}
-	defer closeRows(rows, &err)
+	defer func() { err = errors.Join(err, rows.Close()) }()
+
 	names := map[string]bool{}
+
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			return nil, fmt.Errorf("read schema: %w", mapOpenError(err))
 		}
+
 		names[name] = true
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read schema: %w", mapOpenError(err))
 	}
+
 	return names, nil
 }
 
@@ -445,18 +519,25 @@ func readMeta(ctx context.Context, db *sql.DB) (_ map[string][]byte, err error) 
 	if err != nil {
 		return nil, fmt.Errorf("read meta: %w", mapOpenError(err))
 	}
-	defer closeRows(rows, &err)
+	defer func() { err = errors.Join(err, rows.Close()) }()
+
 	meta := map[string][]byte{}
+
 	for rows.Next() {
-		var k string
-		var v []byte
+		var (
+			k string
+			v []byte
+		)
 		if err := rows.Scan(&k, &v); err != nil {
 			return nil, fmt.Errorf("read meta: %w", mapOpenError(err))
 		}
+
 		meta[k] = v
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read meta: %w", mapOpenError(err))
 	}
+
 	return meta, nil
 }
