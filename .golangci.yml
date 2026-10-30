@@ -16,6 +16,12 @@ linters:
   exclusions:
     paths:
       - frontend/node_modules
+    rules:
+      # Tests are full of fake passwords and phrases that must not reach the
+      # disk, and read files they created in t.TempDir().
+      - path: _test\.go
+        linters: [gosec]
+        text: "G101:|G304:"
 
 formatters:
   enable:
