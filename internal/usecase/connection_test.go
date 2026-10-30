@@ -21,7 +21,7 @@ func newTestConnectionResets(t *testing.T, saved domain.ConnectionSettings, srv 
 	gate := &Gate{}
 	resets := new(int)
 
-	c, err := NewConnection(settings, srv, gate, func() { *resets++ })
+	c, err := NewConnection(settings, srv, gate, &HostKeyOffer{}, func() { *resets++ })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,21 +30,24 @@ func newTestConnectionResets(t *testing.T, saved domain.ConnectionSettings, srv 
 }
 
 func TestNewConnectionNil(t *testing.T) {
-	noop := func() {}
-	if _, err := NewConnection(nil, &fakeServer{}, &Gate{}, noop); err == nil {
-		t.Error("nil settings: want an error")
-	}
+	noop, offer := func() {}, &HostKeyOffer{}
 
-	if _, err := NewConnection(&fakeSettings{}, nil, &Gate{}, noop); err == nil {
-		t.Error("nil remote: want an error")
+	tests := []struct {
+		name string
+		call func() (*Connection, error)
+	}{
+		{name: "settings", call: func() (*Connection, error) { return NewConnection(nil, &fakeServer{}, &Gate{}, offer, noop) }},
+		{name: "remote", call: func() (*Connection, error) { return NewConnection(&fakeSettings{}, nil, &Gate{}, offer, noop) }},
+		{name: "gate", call: func() (*Connection, error) { return NewConnection(&fakeSettings{}, &fakeServer{}, nil, offer, noop) }},
+		{name: "offer", call: func() (*Connection, error) { return NewConnection(&fakeSettings{}, &fakeServer{}, &Gate{}, nil, noop) }},
+		{name: "changed", call: func() (*Connection, error) { return NewConnection(&fakeSettings{}, &fakeServer{}, &Gate{}, offer, nil) }},
 	}
-
-	if _, err := NewConnection(&fakeSettings{}, &fakeServer{}, nil, noop); err == nil {
-		t.Error("nil gate: want an error")
-	}
-
-	if _, err := NewConnection(&fakeSettings{}, &fakeServer{}, &Gate{}, nil); err == nil {
-		t.Error("nil settings-changed callback: want an error")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := tt.call(); err == nil {
+				t.Error("want an error for a nil dependency")
+			}
+		})
 	}
 }
 
@@ -211,27 +214,120 @@ func TestSaveEmptyAllowed(t *testing.T) {
 	}
 }
 
+// offered is the unknown key the fake server presents at the address of completeSettings.
+func offered() *domain.HostKeyUnknownError {
+	return &domain.HostKeyUnknownError{Fingerprint: "SHA256:abc", AuthorizedKey: "ssh-ed25519 AAAA", Addr: completeSettings().SSHAddr()}
+}
+
+func trusted() domain.ConnectionSettings {
+	s := completeSettings()
+	s.TrustedHostKey, s.TrustedHostAddr = "ssh-ed25519 AAAA", s.SSHAddr()
+
+	return s
+}
+
 func TestTrustAndReset(t *testing.T) {
-	c, settings, _ := newTestConnection(t, completeSettings(), &fakeServer{})
+	c, settings, _ := newTestConnection(t, completeSettings(), &fakeServer{openErr: offered()})
 	ctx := context.Background()
 
-	if err := c.TrustHostKey(ctx, "ssh-ed25519 AAAA"); err != nil {
+	if _, err := c.Test(ctx, completeSettings()); err == nil {
+		t.Fatal("Test against an unknown key: nil error")
+	}
+
+	assertField(t, c.TrustHostKey(ctx, "SHA256:other"), "trusted_host_key")
+
+	if err := c.TrustHostKey(ctx, "SHA256:abc"); err != nil {
 		t.Fatalf("TrustHostKey: %v", err)
 	}
 
-	want := completeSettings()
-
-	want.TrustedHostKey = "ssh-ed25519 AAAA"
-	if settings.s != want {
-		t.Error("TrustHostKey changed other fields or did not store the key")
+	if settings.s != trusted() {
+		t.Errorf("saved %+v, want the key bound to the server address", settings.s.TrustedHostAddr)
 	}
+
+	assertField(t, c.TrustHostKey(ctx, "SHA256:abc"), "trusted_host_key") // the offer is used up
 
 	if err := c.ResetHostKey(ctx); err != nil {
 		t.Fatalf("ResetHostKey: %v", err)
 	}
 
 	if settings.s != completeSettings() {
-		t.Error("ResetHostKey did not clear only the key")
+		t.Error("ResetHostKey did not clear only the key and its address")
+	}
+}
+
+func TestTrustHostKeyWithoutOffer(t *testing.T) {
+	c, settings, _ := newTestConnection(t, completeSettings(), &fakeServer{})
+	assertField(t, c.TrustHostKey(context.Background(), "SHA256:abc"), "trusted_host_key")
+
+	if len(settings.saved) != 0 {
+		t.Error("a key nobody offered was saved")
+	}
+}
+
+func TestTrustHostKeyOfferedByAnotherServer(t *testing.T) {
+	offer := offered()
+	offer.Addr = "other.example.org:22" // the settings changed after the offer
+	c, settings, _ := newTestConnection(t, completeSettings(), &fakeServer{openErr: offer})
+	other := completeSettings()
+
+	other.SSHHost = "other.example.org"
+	if _, err := c.Test(context.Background(), other); err == nil {
+		t.Fatal("Test: nil error")
+	}
+
+	assertField(t, c.TrustHostKey(context.Background(), "SHA256:abc"), "trusted_host_key")
+
+	if len(settings.saved) != 0 {
+		t.Error("a key offered by another server was saved")
+	}
+}
+
+func TestTrustOfferedKeyForDialog(t *testing.T) {
+	c, settings, _ := newTestConnection(t, domain.ConnectionSettings{}, &fakeServer{openErr: offered()})
+	if _, err := c.Test(context.Background(), completeSettings()); err == nil {
+		t.Fatal("Test: nil error")
+	}
+
+	moved := completeSettings()
+
+	moved.SSHPort = 2222
+	if _, err := c.TrustOfferedKey("SHA256:abc", moved); err == nil {
+		t.Error("TrustOfferedKey for settings with another port: nil error")
+	}
+
+	got, err := c.TrustOfferedKey("SHA256:abc", completeSettings())
+	if err != nil {
+		t.Fatalf("TrustOfferedKey: %v", err)
+	}
+
+	if got != trusted() {
+		t.Errorf("TrustOfferedKey = key %q for %q, want the offered key for the dialog address", got.TrustedHostKey, got.TrustedHostAddr)
+	}
+
+	if len(settings.saved) != 0 {
+		t.Error("TrustOfferedKey saved the settings: only OK saves")
+	}
+}
+
+func TestSaveDropsStaleTrust(t *testing.T) {
+	c, settings, _ := newTestConnection(t, domain.ConnectionSettings{}, &fakeServer{})
+	s := trusted()
+	s.SSHHost = "new.example.org" // trusted for the old server
+
+	if err := c.Save(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+
+	if settings.s.TrustedHostKey != "" || settings.s.TrustedHostAddr != "" {
+		t.Errorf("saved key %q for %q, want none", settings.s.TrustedHostKey, settings.s.TrustedHostAddr)
+	}
+
+	if err := c.Save(context.Background(), trusted()); err != nil {
+		t.Fatal(err)
+	}
+
+	if settings.s != trusted() {
+		t.Error("a key bound to the current address was dropped")
 	}
 }
 
@@ -257,7 +353,7 @@ func TestSettingsWritesBusy(t *testing.T) {
 
 	writes := map[string]func() error{
 		"Save":         func() error { return c.Save(ctx, completeSettings()) },
-		"TrustHostKey": func() error { return c.TrustHostKey(ctx, "ssh-ed25519 AAAA") },
+		"TrustHostKey": func() error { return c.TrustHostKey(ctx, "SHA256:abc") },
 		"ResetHostKey": func() error { return c.ResetHostKey(ctx) },
 	}
 	for name, write := range writes {
@@ -279,7 +375,9 @@ func TestSettingsWritesResetConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := c.TrustHostKey(ctx, "ssh-ed25519 AAAA"); err != nil {
+	c.offer.remember(offered())
+
+	if err := c.TrustHostKey(ctx, "SHA256:abc"); err != nil {
 		t.Fatal(err)
 	}
 

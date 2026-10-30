@@ -32,6 +32,7 @@ type syncFixture struct {
 	srv     *fakeServer
 	changes *ChangeTracker
 	gate    *Gate
+	offer   *HostKeyOffer
 
 	mu       sync.Mutex
 	states   []State
@@ -46,6 +47,7 @@ func newSyncFixture(t *testing.T, local LocalSnapshot, srv *fakeServer) *syncFix
 		srv:     srv,
 		changes: &ChangeTracker{},
 		gate:    &Gate{},
+		offer:   &HostKeyOffer{},
 	}
 
 	s, err := NewSync(SyncDeps{
@@ -55,6 +57,7 @@ func newSyncFixture(t *testing.T, local LocalSnapshot, srv *fakeServer) *syncFix
 		Changes:  f.changes,
 		IDs:      seqIDs(),
 		Gate:     f.gate,
+		Offer:    f.offer,
 		OnState: func(st State) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
@@ -90,7 +93,7 @@ func (f *syncFixture) lastState() State {
 
 func TestNewSyncNil(t *testing.T) {
 	full := SyncDeps{Local: &fakeSyncState{}, Settings: &fakeSettings{}, Remote: &fakeServer{},
-		Changes: &ChangeTracker{}, IDs: seqIDs(), Gate: &Gate{}, Warn: func(error) {}}
+		Changes: &ChangeTracker{}, IDs: seqIDs(), Gate: &Gate{}, Offer: &HostKeyOffer{}, Warn: func(error) {}}
 
 	tests := []struct {
 		name   string
@@ -103,6 +106,7 @@ func TestNewSyncNil(t *testing.T) {
 		{name: "ids", modify: func(d *SyncDeps) { d.IDs = nil }},
 		{name: "gate", modify: func(d *SyncDeps) { d.Gate = nil }},
 		{name: "warn", modify: func(d *SyncDeps) { d.Warn = nil }},
+		{name: "offer", modify: func(d *SyncDeps) { d.Offer = nil }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -394,13 +398,13 @@ func TestBackup(t *testing.T) {
 
 	f.changes.MarkChanged()
 
-	counts, err := f.sync.PrepareBackup(ctx)
+	preview, err := f.sync.PrepareBackup(ctx)
 	if err != nil {
 		t.Fatalf("PrepareBackup: %v", err)
 	}
 
-	if counts != (Counts{Updated: 1, Deleted: 1}) {
-		t.Errorf("Counts = %+v, want {Updated: 1, Deleted: 1}", counts)
+	if preview.Counts != (Counts{Updated: 1, Deleted: 1}) || preview.RemoteNewer {
+		t.Errorf("preview = %+v, want {Updated: 1, Deleted: 1}, server not newer", preview)
 	}
 
 	if err := f.sync.CommitBackup(ctx); err != nil {
@@ -530,13 +534,13 @@ func TestCommitBackupAckLost(t *testing.T) {
 
 	f.srv.backupAckLost = false
 
-	counts, err := f.sync.PrepareBackup(ctx)
+	preview, err := f.sync.PrepareBackup(ctx)
 	if err != nil {
 		t.Fatalf("PrepareBackup: %v", err)
 	}
 
-	if counts != (Counts{}) {
-		t.Errorf("Counts = %+v, want zero: the Backup went through", counts)
+	if preview.Counts != (Counts{}) || preview.RemoteNewer {
+		t.Errorf("preview = %+v, want zero: the Backup went through", preview)
 	}
 
 	out, err := f.sync.Connect(ctx)
@@ -1113,5 +1117,43 @@ func TestResetConnection(t *testing.T) {
 
 	if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrNoPendingOperation) {
 		t.Errorf("CommitRestore = %v, want ErrNoPendingOperation", err)
+	}
+}
+
+func TestPrepareBackupRemoteNewer(t *testing.T) {
+	srv := &fakeServer{serverID: serverA, revision: 5, notes: []domain.Note{note(1, "a", "server")}}
+	f := newSyncFixture(t, LocalSnapshot{Notes: []domain.Note{note(1, "a", "local")}, Revision: 4, ServerID: serverA}, srv)
+
+	preview, err := f.sync.PrepareBackup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !preview.RemoteNewer || preview.Counts != (Counts{Updated: 1}) {
+		t.Errorf("preview = %+v, want the server newer and one update", preview)
+	}
+}
+
+func TestSyncRemembersOffer(t *testing.T) {
+	offer := &domain.HostKeyUnknownError{Fingerprint: "SHA256:abc", AuthorizedKey: "ssh-ed25519 AAAA", Addr: completeSettings().SSHAddr()}
+	f := newSyncFixture(t, LocalSnapshot{}, &fakeServer{openErr: offer})
+	settings := &fakeSettings{s: completeSettings()}
+	f.sync.d.Settings = settings
+
+	c, err := NewConnection(settings, f.srv, f.gate, f.offer, f.sync.ResetConnection)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.sync.Connect(context.Background()); err == nil {
+		t.Fatal("Connect: nil error")
+	}
+
+	if err := c.TrustHostKey(context.Background(), "SHA256:abc"); err != nil {
+		t.Fatalf("TrustHostKey after Connect offered the key: %v", err)
+	}
+
+	if got := settings.s.TrustedKey(); got != "ssh-ed25519 AAAA" {
+		t.Errorf("trusted key = %q", got)
 	}
 }

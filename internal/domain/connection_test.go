@@ -30,7 +30,7 @@ func TestConnectionSettings_IsEmpty(t *testing.T) {
 		want     bool
 	}{
 		{name: "zero value", settings: ConnectionSettings{}, want: true},
-		{name: "only trusted host key", settings: ConnectionSettings{TrustedHostKey: "ssh-ed25519 AAAA"}, want: true},
+		{name: "only trusted host key", settings: ConnectionSettings{TrustedHostKey: "ssh-ed25519 AAAA", TrustedHostAddr: "h:22"}, want: true},
 		{name: "only ssh password", settings: ConnectionSettings{SSHPassword: "x"}, want: false},
 		{name: "only db port", settings: ConnectionSettings{DBPort: 5432}, want: false},
 		{name: "complete", settings: validSettings(), want: false},
@@ -131,7 +131,7 @@ func TestIsLoopbackHost(t *testing.T) {
 func TestConnectionSettings_JSONNames(t *testing.T) {
 	s := ConnectionSettings{
 		SSHHost: "h", SSHPort: 1, SSHUser: "u", SSHPassword: "p", DBHost: "::1", DBPort: 2,
-		DBName: "n", DBUser: "d", DBPassword: "q", SyncPhrase: "s", TrustedHostKey: "k",
+		DBName: "n", DBUser: "d", DBPassword: "q", SyncPhrase: "s", TrustedHostKey: "k", TrustedHostAddr: "h:1",
 	}
 
 	data, err := json.Marshal(s)
@@ -145,7 +145,7 @@ func TestConnectionSettings_JSONNames(t *testing.T) {
 	}
 
 	want := []string{"ssh_host", "ssh_port", "ssh_user", "ssh_password", "db_host", "db_port",
-		"db_name", "db_user", "db_password", "sync_phrase", "trusted_host_key"}
+		"db_name", "db_user", "db_password", "sync_phrase", "trusted_host_key", "trusted_host_addr"}
 	if len(got) != len(want) {
 		t.Errorf("got %d keys %v, want %d", len(got), got, len(want))
 	}
@@ -193,5 +193,65 @@ func TestConnectionSettings_Redacted(t *testing.T) {
 
 	if got := fmt.Sprint(ConnectionSettings{}); !strings.Contains(got, "empty") { //nolint:gocritic // the fmt path
 		t.Errorf("empty settings print as %q, want a mention of empty", got)
+	}
+}
+
+func TestConnectionSettings_SSHAddr(t *testing.T) {
+	tests := []struct {
+		host string
+		port int
+		want string
+	}{
+		{host: "example.org", port: 22, want: "example.org:22"},
+		{host: "::1", port: 2222, want: "[::1]:2222"},
+	}
+	for _, tt := range tests {
+		if got := (ConnectionSettings{SSHHost: tt.host, SSHPort: tt.port}).SSHAddr(); got != tt.want {
+			t.Errorf("SSHAddr(%s, %d) = %q, want %q", tt.host, tt.port, got, tt.want)
+		}
+	}
+}
+
+func TestConnectionSettings_TrustedKey(t *testing.T) {
+	s := validSettings()
+
+	s.TrustedHostKey, s.TrustedHostAddr = "ssh-ed25519 AAAA", s.SSHAddr()
+	if got := s.TrustedKey(); got != "ssh-ed25519 AAAA" {
+		t.Errorf("TrustedKey for the bound address = %q", got)
+	}
+
+	moved := s
+
+	moved.SSHPort = 2222
+	if got := moved.TrustedKey(); got != "" {
+		t.Errorf("TrustedKey after the port changed = %q, want none", got)
+	}
+
+	unbound := s
+
+	unbound.TrustedHostAddr = ""
+	if got := unbound.TrustedKey(); got != "" {
+		t.Errorf("TrustedKey without an address = %q, want none", got)
+	}
+}
+
+func TestConnectionSettings_WithoutStaleTrust(t *testing.T) {
+	s := validSettings()
+
+	s.TrustedHostKey, s.TrustedHostAddr = "ssh-ed25519 AAAA", s.SSHAddr()
+	if got := s.WithoutStaleTrust(); got != s {
+		t.Error("a key bound to the current address was dropped")
+	}
+
+	moved := s
+	moved.SSHHost = "other.example.org"
+
+	got := moved.WithoutStaleTrust()
+	if got.TrustedHostKey != "" || got.TrustedHostAddr != "" {
+		t.Errorf("key bound to another address kept: %q for %q", got.TrustedHostKey, got.TrustedHostAddr)
+	}
+
+	if got.SSHHost != "other.example.org" {
+		t.Error("WithoutStaleTrust changed other fields")
 	}
 }

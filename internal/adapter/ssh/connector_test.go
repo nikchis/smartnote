@@ -37,10 +37,15 @@ func sshSettings(t *testing.T, addr, trusted string) domain.ConnectionSettings {
 		t.Fatal(err)
 	}
 
-	return domain.ConnectionSettings{
+	s := domain.ConnectionSettings{
 		SSHHost: host, SSHPort: p, SSHUser: "u", SSHPassword: "pw", DBHost: "127.0.0.1", DBPort: 5432,
 		DBName: "db", DBUser: "dbu", SyncPhrase: "sixteen chars ok", TrustedHostKey: trusted,
 	}
+	if trusted != "" {
+		s.TrustedHostAddr = s.SSHAddr()
+	}
+
+	return s
 }
 
 func TestNewConnectorNil(t *testing.T) {
@@ -66,6 +71,23 @@ func TestDialSSHHostKeyUnknown(t *testing.T) {
 
 	if hk.AuthorizedKey != srv.authorizedKey() {
 		t.Errorf("AuthorizedKey = %q, want the server key", hk.AuthorizedKey)
+	}
+}
+
+func TestDialSSHKeyTrustedForAnotherAddress(t *testing.T) {
+	srv := newTestServer(t, nil)
+	s := sshSettings(t, srv.addr, srv.authorizedKey())
+	s.TrustedHostAddr = "old.example.org:22" // trusted for the server before the settings changed
+
+	_, err := dialSSH(context.Background(), s, nil)
+
+	hk, ok := errors.AsType[*domain.HostKeyUnknownError](err)
+	if !ok {
+		t.Fatalf("dialSSH = %v, want *HostKeyUnknownError: the key belongs to another address", err)
+	}
+
+	if hk.Addr != srv.addr {
+		t.Errorf("Addr = %q, want %q", hk.Addr, srv.addr)
 	}
 }
 

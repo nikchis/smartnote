@@ -39,6 +39,10 @@ func TestHostKeyUnknown(t *testing.T) {
 		t.Fatalf("callback = %v, want *HostKeyUnknownError", err)
 	}
 
+	if hk.Addr != "example.org:22" {
+		t.Errorf("Addr = %q, want the address that presented the key", hk.Addr)
+	}
+
 	if hk.Fingerprint != gossh.FingerprintSHA256(key) {
 		t.Errorf("Fingerprint = %q, want %q", hk.Fingerprint, gossh.FingerprintSHA256(key))
 	}

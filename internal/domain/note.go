@@ -2,7 +2,9 @@ package domain
 
 import (
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 )
@@ -13,7 +15,7 @@ const (
 	MaxNameLen       = 64
 	MaxInfoLen       = 8192
 	MinPasswordLen   = 6
-	MaxPasswordLen   = 32
+	MaxPasswordLen   = 64
 	MinSyncPhraseLen = 16
 )
 
@@ -45,12 +47,31 @@ func (n Note) Normalized() Note {
 // Validate checks the lengths of the name and the text as given, so a note that
 // passes is within the limits when stored. Call it on Normalized(): a CRLF
 // still counts as two units here.
+//
+// The name must have a character other than white space and no control
+// characters; the text may hold no control characters but line feeds and tabs.
 func (n Note) Validate() error {
-	if err := checkLen("name", UTF16Len(n.Name), 1, MaxNameLen); err != nil {
+	if err := checkLen(fieldName, UTF16Len(n.Name), 1, MaxNameLen); err != nil {
 		return err
 	}
 
-	return checkLen("info", UTF16Len(n.Info), 1, MaxInfoLen)
+	if strings.TrimFunc(n.Name, unicode.IsSpace) == "" {
+		return &ValidationError{Field: fieldName, Reason: reasonRequired}
+	}
+
+	if strings.ContainsFunc(n.Name, unicode.IsControl) {
+		return &ValidationError{Field: fieldName, Reason: reasonControl}
+	}
+
+	if err := checkLen(fieldInfo, UTF16Len(n.Info), 1, MaxInfoLen); err != nil {
+		return err
+	}
+
+	if strings.ContainsFunc(n.Info, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\t' }) {
+		return &ValidationError{Field: fieldInfo, Reason: reasonControl}
+	}
+
+	return nil
 }
 
 // ValidatePassword checks the length of a local storage password in its NFC
@@ -59,8 +80,17 @@ func ValidatePassword(p string) error {
 	return checkLen("password", secretLen(p), MinPasswordLen, MaxPasswordLen)
 }
 
-// reasonRequired is the Reason of a missing value.
-const reasonRequired = "is required"
+// Fields of a note as the UI names them.
+const (
+	fieldName = "name"
+	fieldInfo = "info"
+)
+
+// Reasons of validation errors.
+const (
+	reasonRequired = "is required"
+	reasonControl  = "must not contain control characters"
+)
 
 // checkLen returns a *ValidationError for field unless the length n is in [minLen, maxLen].
 func checkLen(field string, n, minLen, maxLen int) error {

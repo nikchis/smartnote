@@ -22,6 +22,16 @@ func TestNote_Validate(t *testing.T) {
 		{name: "info of 8192 units", note: Note{Name: "n", Info: strings.Repeat("a", MaxInfoLen)}},
 		{name: "info of 8193 units", note: Note{Name: "n", Info: strings.Repeat("a", MaxInfoLen+1)}, wantField: "info"},
 		{name: "info of 8192 normalized line breaks", note: Note{Name: "n", Info: strings.Repeat("\r\n", MaxInfoLen)}.Normalized()},
+		{name: "name of spaces", note: Note{Name: " \t\u3000 ", Info: "i"}, wantField: "name"},
+		{name: "name with inner space", note: Note{Name: "a b", Info: "i"}},
+		{name: "name with nul", note: Note{Name: "a\x00b", Info: "i"}, wantField: "name"},
+		{name: "name with line break", note: Note{Name: "a\nb", Info: "i"}, wantField: "name"},
+		{name: "name with del", note: Note{Name: "a\x7fb", Info: "i"}, wantField: "name"},
+		{name: "info of spaces is allowed", note: Note{Name: "n", Info: "   "}},
+		{name: "info with tab and line breaks", note: Note{Name: "n", Info: "a\tb\nc\n"}},
+		{name: "info with nul", note: Note{Name: "n", Info: "a\x00"}, wantField: "info"},
+		{name: "info with lone cr", note: Note{Name: "n", Info: "a\rb"}, wantField: "info"},
+		{name: "info with escape", note: Note{Name: "n", Info: "a\x1b[31m"}, wantField: "info"},
 		{name: "info of 8192 crlf is 16384 units before normalization", note: Note{Name: "n", Info: strings.Repeat("\r\n", MaxInfoLen)}, wantField: "info"},
 	}
 	for _, tt := range tests {
@@ -56,8 +66,9 @@ func TestValidatePassword(t *testing.T) {
 	}{
 		{name: "5 units", password: strings.Repeat("a", MinPasswordLen-1), wantField: "password"},
 		{name: "6 units", password: strings.Repeat("a", MinPasswordLen)},
-		{name: "32 units", password: strings.Repeat("a", MaxPasswordLen)},
-		{name: "33 units", password: strings.Repeat("a", MaxPasswordLen+1), wantField: "password"},
+		{name: "33 units are allowed", password: strings.Repeat("a", 33)},
+		{name: "64 units", password: strings.Repeat("a", MaxPasswordLen)},
+		{name: "65 units", password: strings.Repeat("a", MaxPasswordLen+1), wantField: "password"},
 		{name: "3 emoji are 6 units", password: strings.Repeat("😀", 3)},
 		{name: "empty", password: "", wantField: "password"},
 		{name: "3 nfd letters are 6 units but 3 after nfc", password: strings.Repeat(nfdE, 3), wantField: "password"},

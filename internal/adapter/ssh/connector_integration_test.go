@@ -35,17 +35,26 @@ var (
 	sshPort   int
 )
 
-// startSSHD builds and starts the test SSH server.
-func startSSHD(ctx context.Context) (*testcontainers.DockerContainer, error) {
-	key := clientKey.PublicAuthorized
+// sshdImage is the tag of the test SSH server image. The image is kept after
+// the tests, so the next run takes it from the build cache; remove it with
+// docker rmi when it is no longer needed.
+const (
+	sshdRepo = "smartnote-test-sshd"
+	sshdTag  = "alpine3.22.6"
+)
 
+// startSSHD builds (from the cache, after the first time) and starts the test SSH server.
+func startSSHD(ctx context.Context) (*testcontainers.DockerContainer, error) {
 	return testcontainers.Run(ctx, "",
 		testcontainers.WithDockerfile(testcontainers.FromDockerfile{
 			Context:   "testdata/sshd",
-			BuildArgs: map[string]*string{"AUTHORIZED_KEY": &key},
+			Repo:      sshdRepo,
+			Tag:       sshdTag,
+			KeepImage: true,
 			// As docker build --network=host: the default bridge may not reach the package mirror.
 			BuildOptionsModifier: func(o *client.ImageBuildOptions) { o.NetworkMode = "host" },
 		}),
+		testcontainers.WithEnv(map[string]string{"AUTHORIZED_KEY": clientKey.PublicAuthorized}),
 		testcontainers.WithExposedPorts("22/tcp"),
 		testcontainers.WithWaitStrategy(wait.ForLog("Server listening on").WithStartupTimeout(time.Minute)))
 }
@@ -118,7 +127,7 @@ func newDatabase(t *testing.T) string {
 
 	ctx := context.Background()
 	s := settingsFor("postgres", "phrase is unused here", "testpass")
-	s.TrustedHostKey = trustedKey(t)
+	s.TrustedHostKey, s.TrustedHostAddr = trustedKey(t), s.SSHAddr()
 
 	client, err := dialSSH(ctx, s, nil)
 	if err != nil {
@@ -216,10 +225,10 @@ func newMachine(t *testing.T, s domain.ConnectionSettings, key *domain.KeyPair) 
 		t.Fatal(err)
 	}
 
-	gate, changes := &usecase.Gate{}, &usecase.ChangeTracker{}
+	gate, changes, offer := &usecase.Gate{}, &usecase.ChangeTracker{}, &usecase.HostKeyOffer{}
 
 	sync, err := usecase.NewSync(usecase.SyncDeps{Local: store, Settings: store, Remote: connector, Changes: changes,
-		IDs: uuid.New, Gate: gate, Warn: func(err error) { t.Logf("warning: %v", err) }})
+		IDs: uuid.New, Gate: gate, Offer: offer, Warn: func(err error) { t.Logf("warning: %v", err) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +238,7 @@ func newMachine(t *testing.T, s domain.ConnectionSettings, key *domain.KeyPair) 
 		t.Fatal(err)
 	}
 
-	conn, err := usecase.NewConnection(store, connector, gate, sync.ResetConnection)
+	conn, err := usecase.NewConnection(store, connector, gate, offer, sync.ResetConnection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +260,7 @@ func (m *machine) connect(t *testing.T) usecase.ConnectOutcome {
 
 	out, err := m.sync.Connect(ctx)
 	if hk, ok := errors.AsType[*domain.HostKeyUnknownError](err); ok {
-		if err := m.conn.TrustHostKey(ctx, hk.AuthorizedKey); err != nil {
+		if err := m.conn.TrustHostKey(ctx, hk.Fingerprint); err != nil {
 			t.Fatal(err)
 		}
 
@@ -351,7 +360,7 @@ func TestWrongPhraseOverTunnel(t *testing.T) {
 	b := newMachine(t, settingsFor(db, "another phrase 16", "testpass"), nil)
 	s := settingsFor(db, "another phrase 16", "testpass")
 
-	s.TrustedHostKey = trustedKey(t)
+	s.TrustedHostKey, s.TrustedHostAddr = trustedKey(t), s.SSHAddr()
 	if err := b.conn.Save(ctx, s); err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +396,8 @@ func TestHostKeyChangedAfterTrust(t *testing.T) {
 	}
 
 	s := settingsFor("postgres", "sixteen chars ok", "testpass")
-	s.SSHHost, s.SSHPort, s.TrustedHostKey = host, port, trusted
+	s.SSHHost, s.SSHPort = host, port
+	s.TrustedHostKey, s.TrustedHostAddr = trusted, s.SSHAddr() // as if trusted for this address
 
 	_, err = c.Open(ctx, s, usecase.OpenCheck)
 	if _, ok := errors.AsType[*domain.HostKeyMismatchError](err); !ok {

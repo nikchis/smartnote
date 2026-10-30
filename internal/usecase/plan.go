@@ -35,13 +35,22 @@ type Counts struct {
 
 // BackupPlan replaces the server set with Notes, provided the server still has
 // ServerID at ExpectedRevision. Generation is the local change generation read
-// before the snapshot.
+// before the snapshot. RemoteNewer reports that the server has other data at a
+// newer revision than the local one, which the Backup overwrites.
 type BackupPlan struct {
 	Counts
+	RemoteNewer      bool
 	Notes            []domain.Note
 	ExpectedRevision int64
 	ServerID         uuid.UUID
 	Generation       uint64
+}
+
+// BackupPreview is what the user is asked about before a Backup: the counts,
+// and whether the server has newer data that the Backup overwrites.
+type BackupPreview struct {
+	Counts
+	RemoteNewer bool
 }
 
 // TextChange replaces a local note with the server's, keeping Previous as a version.
@@ -71,6 +80,14 @@ func PlanBackup(local LocalSnapshot, remote RemoteSnapshot, gen uint64) BackupPl
 		ServerID:         remote.ServerID,
 		Generation:       gen,
 	}
+
+	// A revision of another server says nothing about this one, as in the connect check.
+	localRevision := local.Revision
+	if local.ServerID != remote.ServerID {
+		localRevision = 0
+	}
+
+	p.RemoteNewer = remote.Revision > localRevision && Diff(local.Notes, remote.Notes)
 
 	remoteByID := index(remote.Notes)
 	for _, l := range local.Notes {

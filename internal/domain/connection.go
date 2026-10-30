@@ -3,6 +3,8 @@ package domain
 import (
 	"fmt"
 	"log/slog"
+	"net"
+	"strconv"
 )
 
 // DefaultDBHost is the database host used when settings leave it empty.
@@ -11,23 +13,24 @@ const DefaultDBHost = "127.0.0.1"
 // ConnectionSettings describe the SSH server and the PostgreSQL database
 // reachable from it. Either all required fields are set, or none.
 type ConnectionSettings struct {
-	SSHHost        string `json:"ssh_host"`
-	SSHPort        int    `json:"ssh_port"`
-	SSHUser        string `json:"ssh_user"`
-	SSHPassword    string `json:"ssh_password"`
-	DBHost         string `json:"db_host"`
-	DBPort         int    `json:"db_port"`
-	DBName         string `json:"db_name"`
-	DBUser         string `json:"db_user"`
-	DBPassword     string `json:"db_password"`
-	SyncPhrase     string `json:"sync_phrase"`
-	TrustedHostKey string `json:"trusted_host_key"` // authorized_keys format; empty until trusted
+	SSHHost         string `json:"ssh_host"`
+	SSHPort         int    `json:"ssh_port"`
+	SSHUser         string `json:"ssh_user"`
+	SSHPassword     string `json:"ssh_password"`
+	DBHost          string `json:"db_host"`
+	DBPort          int    `json:"db_port"`
+	DBName          string `json:"db_name"`
+	DBUser          string `json:"db_user"`
+	DBPassword      string `json:"db_password"`
+	SyncPhrase      string `json:"sync_phrase"`
+	TrustedHostKey  string `json:"trusted_host_key"` // authorized_keys format; empty until trusted
+	TrustedHostAddr string `json:"trusted_host_addr"`
 }
 
-// IsEmpty reports whether no field except TrustedHostKey is set: the app then
-// works locally only.
+// IsEmpty reports whether no field except the trusted key and its address is
+// set: the app then works locally only.
 func (s ConnectionSettings) IsEmpty() bool {
-	s.TrustedHostKey = ""
+	s.TrustedHostKey, s.TrustedHostAddr = "", ""
 	return s == ConnectionSettings{}
 }
 
@@ -124,4 +127,29 @@ func validPort(field string, port int) error {
 	}
 
 	return nil
+}
+
+// SSHAddr is the SSH server address host:port, the address a trusted key is bound to.
+func (s ConnectionSettings) SSHAddr() string {
+	return net.JoinHostPort(s.SSHHost, strconv.Itoa(s.SSHPort))
+}
+
+// TrustedKey returns the trusted server key if it was trusted for the current
+// SSH address, and "" otherwise: a key trusted for another server is not one
+// to compare with, and the user is asked again.
+func (s ConnectionSettings) TrustedKey() string {
+	if s.TrustedHostAddr != s.SSHAddr() {
+		return ""
+	}
+
+	return s.TrustedHostKey
+}
+
+// WithoutStaleTrust returns s without a trusted key bound to another address.
+func (s ConnectionSettings) WithoutStaleTrust() ConnectionSettings {
+	if s.TrustedKey() == "" {
+		s.TrustedHostKey, s.TrustedHostAddr = "", ""
+	}
+
+	return s
 }

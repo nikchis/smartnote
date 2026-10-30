@@ -58,6 +58,31 @@ func TestPlanBackup(t *testing.T) {
 	}
 }
 
+func TestPlanBackupRemoteNewer(t *testing.T) {
+	local := []domain.Note{note(1, "a", "local")}
+	remote := []domain.Note{note(1, "a", "server")}
+
+	tests := []struct {
+		name   string
+		local  LocalSnapshot
+		remote RemoteSnapshot
+		want   bool
+	}{
+		{name: "newer revision, other data", local: LocalSnapshot{Notes: local, Revision: 3, ServerID: serverA}, remote: RemoteSnapshot{Notes: remote, Revision: 5, ServerID: serverA}, want: true},
+		{name: "same revision", local: LocalSnapshot{Notes: local, Revision: 5, ServerID: serverA}, remote: RemoteSnapshot{Notes: remote, Revision: 5, ServerID: serverA}},
+		{name: "newer revision, same data", local: LocalSnapshot{Notes: remote, Revision: 3, ServerID: serverA}, remote: RemoteSnapshot{Notes: remote, Revision: 5, ServerID: serverA}},
+		{name: "other server with data", local: LocalSnapshot{Notes: local, Revision: 7, ServerID: serverA}, remote: RemoteSnapshot{Notes: remote, Revision: 1, ServerID: serverB}, want: true},
+		{name: "other server, empty", local: LocalSnapshot{Notes: local, Revision: 7, ServerID: serverA}, remote: RemoteSnapshot{Revision: 0, ServerID: serverB}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PlanBackup(tt.local, tt.remote, 0).RemoteNewer; got != tt.want {
+				t.Errorf("RemoteNewer = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPlanBackupNoChanges(t *testing.T) {
 	notes := []domain.Note{note(1, "a", "x")}
 

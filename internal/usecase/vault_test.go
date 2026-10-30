@@ -23,7 +23,7 @@ func TestVaultCreateValidates(t *testing.T) {
 		wantField string
 	}{
 		{name: "5 characters", password: "12345", confirm: "12345", wantField: "password"},
-		{name: "33 characters", password: strings.Repeat("a", 33), confirm: strings.Repeat("a", 33), wantField: "password"},
+		{name: "65 characters", password: strings.Repeat("a", 65), confirm: strings.Repeat("a", 65), wantField: "password"},
 		{name: "confirmation differs", password: "123456", confirm: "123457", wantField: "confirm"},
 		{name: "valid", password: "123456", confirm: "123456"},
 		{name: "same password in nfc and nfd", password: "passéword", confirm: "passéword"},

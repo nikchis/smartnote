@@ -42,6 +42,7 @@ func (e *ValidationError) Is(target error) bool { return target == ErrValidation
 type HostKeyUnknownError struct {
 	Fingerprint   string // SHA256 fingerprint of the presented key
 	AuthorizedKey string // the presented key in authorized_keys format
+	Addr          string // host:port of the server that presented it
 }
 
 func (e *HostKeyUnknownError) Error() string {

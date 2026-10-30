@@ -100,6 +100,7 @@ type SyncDeps struct {
 	Changes  *ChangeTracker
 	IDs      IDGenerator
 	Gate     *Gate
+	Offer    *HostKeyOffer
 	OnState  func(State)
 	Warn     func(error)
 }
@@ -143,6 +144,8 @@ func NewSync(d SyncDeps) (*Sync, error) {
 		return nil, nilDependency("NewSync", "gate")
 	case d.Warn == nil:
 		return nil, nilDependency("NewSync", "warn")
+	case d.Offer == nil:
+		return nil, nilDependency("NewSync", "offer")
 	}
 
 	s := &Sync{d: d}
@@ -211,6 +214,8 @@ func (s *Sync) begin() (end func(), err error) {
 // success connects, an error that shows the server is unreachable or not the
 // trusted one disconnects, any other error leaves the state as it was.
 func (s *Sync) afterRemote(err error) {
+	s.d.Offer.remember(err)
+
 	switch {
 	case err == nil:
 		s.update(func() { s.connected = true })
@@ -384,10 +389,10 @@ func (s *Sync) snapshots(ctx context.Context, sess RemoteSession) (LocalSnapshot
 }
 
 // PrepareBackup reads both snapshots, keeps a Backup plan and returns its counts.
-func (s *Sync) PrepareBackup(ctx context.Context) (Counts, error) {
+func (s *Sync) PrepareBackup(ctx context.Context) (BackupPreview, error) {
 	end, err := s.begin()
 	if err != nil {
-		return Counts{}, err
+		return BackupPreview{}, err
 	}
 	defer end()
 
@@ -397,12 +402,12 @@ func (s *Sync) PrepareBackup(ctx context.Context) (Counts, error) {
 	s.afterRemote(err)
 
 	if err != nil {
-		return Counts{}, fmt.Errorf("prepare backup: %w", err)
+		return BackupPreview{}, fmt.Errorf("prepare backup: %w", err)
 	}
 
 	s.update(func() { s.pendingBackup = &plan })
 
-	return plan.Counts, nil
+	return BackupPreview{Counts: plan.Counts, RemoteNewer: plan.RemoteNewer}, nil
 }
 
 func (s *Sync) prepareBackup(ctx context.Context) (plan BackupPlan, err error) {

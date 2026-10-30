@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -119,9 +118,10 @@ func openDatabase(ctx context.Context, s domain.ConnectionSettings, client *goss
 }
 
 // dialSSH opens TCP and runs the SSH handshake within handshakeTimeout and
-// ctx. It authenticates with signer when given, then with the password.
+// ctx. It authenticates with signer when given, then with the password. Only
+// a key trusted for this address is compared; any other is reported unknown.
 func dialSSH(ctx context.Context, s domain.ConnectionSettings, signer gossh.Signer) (*gossh.Client, error) {
-	addr := net.JoinHostPort(s.SSHHost, strconv.Itoa(s.SSHPort))
+	addr := s.SSHAddr()
 
 	var auth []gossh.AuthMethod
 	if signer != nil {
@@ -135,8 +135,8 @@ func dialSSH(ctx context.Context, s domain.ConnectionSettings, signer gossh.Sign
 	config := &gossh.ClientConfig{
 		User:              s.SSHUser,
 		Auth:              auth,
-		HostKeyCallback:   hostKeyCallback(s.TrustedHostKey),
-		HostKeyAlgorithms: pinnedAlgorithms(s.TrustedHostKey),
+		HostKeyCallback:   hostKeyCallback(s.TrustedKey()),
+		HostKeyAlgorithms: pinnedAlgorithms(s.TrustedKey()),
 	}
 
 	hctx, cancel := context.WithTimeout(ctx, handshakeTimeout)

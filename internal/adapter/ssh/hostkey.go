@@ -16,12 +16,13 @@ import (
 // hostKeyCallback accepts only the trusted key in authorized_keys format.
 // With none trusted it returns *domain.HostKeyUnknownError carrying the
 // presented key, so the user can decide to trust it; another key returns
-// *domain.HostKeyMismatchError.
+// *domain.HostKeyMismatchError. hostname is the host:port given to the
+// handshake; the offer carries it, so the key is trusted only for that address.
 func hostKeyCallback(trustedAuthorized string) gossh.HostKeyCallback {
-	return func(_ string, _ net.Addr, key gossh.PublicKey) error {
+	return func(hostname string, _ net.Addr, key gossh.PublicKey) error {
 		got := gossh.FingerprintSHA256(key)
 		if trustedAuthorized == "" {
-			return &domain.HostKeyUnknownError{Fingerprint: got, AuthorizedKey: authorizedLine(key)}
+			return &domain.HostKeyUnknownError{Fingerprint: got, AuthorizedKey: authorizedLine(key), Addr: hostname}
 		}
 
 		want, err := parseAuthorized(trustedAuthorized)
