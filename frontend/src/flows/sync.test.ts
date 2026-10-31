@@ -307,6 +307,20 @@ describe("closeFlow", () => {
     expect(quits).toBe(0);
   });
 
+  it("a failed Backup on close shows a changed host key with both fingerprints", async () => {
+    api.st = { ...api.st, dirty: true };
+    api.preview = uiError("host_key_mismatch", "server host key mismatch: expected SHA256:old, got SHA256:new", {
+      expected: "SHA256:old",
+      got: "SHA256:new",
+    });
+    d.answers = [true, false];
+
+    await closeFlow(api, d, quit);
+
+    expect(d.log[1]).toContain("The server host key does not match the trusted one.");
+    expect(d.log[1]).toContain("Expected: SHA256:old");
+  });
+
   it("Close anyway? yes quits", async () => {
     api.st = { ...api.st, dirty: true };
     api.preview = uiError("ssh", "ssh: connection refused");

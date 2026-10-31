@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  WAILS_VERSION: v3.0.0
+  TASK_VERSION: v3.54.0
+  NODE_VERSION: "24"
+  # Wails v3 needs GTK 4 and WebKitGTK 6.0 headers to compile on Linux (cgo).
+  LINUX_PACKAGES: build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
+      - run: go install github.com/go-task/task/v3/cmd/task@$TASK_VERSION
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@$WAILS_VERSION
+      - run: npm ci
+        working-directory: frontend
+      # make lint builds the frontend, which generates the bindings svelte-check reads.
+      - run: make lint
+      - run: npm run check
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
+      - run: go install github.com/go-task/task/v3/cmd/task@$TASK_VERSION
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@$WAILS_VERSION
+      - run: npm ci
+        working-directory: frontend
+      - run: make test
+      - run: npm run test
+        working-directory: frontend
+
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
+      - run: go install github.com/go-task/task/v3/cmd/task@$TASK_VERSION
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@$WAILS_VERSION
+      - run: npm ci
+        working-directory: frontend
+      - run: make integration
+
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux
+            artifacts: |
+              bin/smartnote.deb
+              bin/smartnote-x86_64.AppImage
+          - os: windows-latest
+            target: windows
+            artifacts: bin/*installer.exe
+          - os: macos-latest
+            target: darwin
+            artifacts: bin/*.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
+      - if: runner.os == 'Windows'
+        run: choco install nsis -y --no-progress
+      - run: go install github.com/go-task/task/v3/cmd/task@${{ env.TASK_VERSION }}
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
+      - run: task package:${{ matrix.target }}
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smartnote-${{ matrix.target }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+
+  smoke-appimage:
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: smartnote-linux
+          path: bin
+      - run: chmod +x bin/smartnote-x86_64.AppImage
+      - run: go install github.com/go-task/task/v3/cmd/task@$TASK_VERSION
+      - run: task smoke:appimage

@@ -45,25 +45,21 @@ function backupQuestion(p: BackupPreview): string {
   );
 }
 
+/** errorText is the message shown for err; a changed server key shows both fingerprints. */
+function errorText(err: UIError): string {
+  if (err.code !== "host_key_mismatch") return err.message;
+  return lines(
+    "The server host key does not match the trusted one.",
+    `Expected: ${err.expected ?? ""}`,
+    `Got: ${err.got ?? ""}`,
+    "If the server key was changed on purpose, reset the trusted key in Settings.",
+  );
+}
+
 /** report shows err unless the user needs no message: a cancellation, or a busy app whose buttons are already off. */
 async function report(d: Dialogs, err: UIError): Promise<void> {
-  switch (err.code) {
-    case "canceled":
-    case "busy":
-      return;
-    case "host_key_mismatch":
-      await d.error(
-        lines(
-          "The server host key does not match the trusted one.",
-          `Expected: ${err.expected ?? ""}`,
-          `Got: ${err.got ?? ""}`,
-          "If the server key was changed on purpose, reset the trusted key in Settings.",
-        ),
-      );
-      return;
-    default:
-      await d.error(err.message);
-  }
+  if (err.code === "canceled" || err.code === "busy") return;
+  await d.error(errorText(err));
 }
 
 /** trustQuestion asks about a server key that is not trusted yet. */
@@ -179,7 +175,7 @@ export async function closeFlow(api: SyncApi, d: Dialogs, quit: () => Promise<vo
     }
     await api.commitBackup();
   } catch (e) {
-    await d.error(parseError(e).message);
+    await d.error(errorText(parseError(e)));
     if (await d.ask("Close anyway?")) await quit();
     return;
   }
