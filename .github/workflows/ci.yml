@@ -110,7 +110,10 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
       - if: runner.os == 'Windows'
-        run: choco install nsis -y --no-progress
+        # choco does not put makensis on PATH for the following steps.
+        run: |
+          choco install nsis -y --no-progress
+          Add-Content -Path $env:GITHUB_PATH -Value "${env:ProgramFiles(x86)}\NSIS"
       - run: go install github.com/go-task/task/v3/cmd/task@${{ env.TASK_VERSION }}
       - run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
       - run: task package:${{ matrix.target }}
