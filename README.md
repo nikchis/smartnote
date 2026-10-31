@@ -92,6 +92,9 @@ from it before they reach the server.
 - Backup and Restore replace the whole set of notes on the other side, as in v1. Before deleting
   anything they ask, with the number of notes to delete.
 - The sync phrase cannot be changed while the server holds notes.
+- On macOS, logging out or shutting down while Smartnote is open stops at the close question, as
+  any quit does; answer it and repeat the logout. On Windows the end of the session closes
+  Smartnote without the question.
 
 ### Building from source
 

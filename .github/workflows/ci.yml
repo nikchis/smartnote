@@ -131,5 +131,9 @@ jobs:
           name: smartnote-linux
           path: bin
       - run: chmod +x bin/smartnote-x86_64.AppImage
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
       - run: go install github.com/go-task/task/v3/cmd/task@$TASK_VERSION
       - run: task smoke:appimage

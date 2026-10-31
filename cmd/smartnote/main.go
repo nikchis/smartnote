@@ -117,6 +117,8 @@ func newApp(env wailsui.Env, store *sqlite.Store, finish func()) (*application.A
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
+		// The end of a Windows session quits without the close question.
+		Windows: application.WindowsOptions{WndProcInterceptor: lifecycle.OnWindowsMessage},
 		// SIGTERM and SIGINT quit without asking; see quitOnSignal.
 		DisableDefaultSignalHandler: true,
 		ShouldQuit:                  lifecycle.OnQuitRequested,

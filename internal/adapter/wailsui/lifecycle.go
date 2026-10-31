@@ -7,8 +7,9 @@ import (
 
 // Lifecycle decides whether the app may quit (spec §7.3). Interactive quits
 // (closing the window, Cmd+Q) first ask the interface, which runs the close
-// scenario and calls ConfirmQuit; signals and the end of the session quit
-// without asking.
+// scenario and calls ConfirmQuit; signals and the end of a Windows session
+// quit without asking. On macOS Wails reports logout as an ordinary quit, so
+// it asks too (README, Limitations).
 type Lifecycle struct {
 	allowQuit    atomic.Bool
 	requestClose func()
@@ -45,4 +46,19 @@ func (l *Lifecycle) ForceQuit() { l.quit() }
 func (l *Lifecycle) quit() {
 	l.allowQuit.Store(true)
 	l.once.Do(l.shutdown)
+}
+
+// wmEndSession is the Windows message sent when the session ends (winuser.h);
+// a non-zero wParam means it really ends.
+const wmEndSession = 0x0016
+
+// OnWindowsMessage is the Wails WndProcInterceptor: at the end of the session
+// it quits without asking, since Windows ends the process right after. It
+// never consumes the message, so Wails handles it as well.
+func (l *Lifecycle) OnWindowsMessage(_ uintptr, msg uint32, wParam, _ uintptr) (returnCode uintptr, shouldReturn bool) {
+	if msg == wmEndSession && wParam != 0 {
+		l.ForceQuit()
+	}
+
+	return 0, false
 }
