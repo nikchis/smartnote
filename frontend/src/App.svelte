@@ -5,14 +5,16 @@
   import MessageDialog from "./components/MessageDialog.svelte";
   import { VaultService } from "./lib/api";
   import { parseError } from "./lib/errors";
-  import ChangePassword from "./screens/ChangePassword.svelte";
+  import Main from "./screens/Main.svelte";
   import NewStorage from "./screens/NewStorage.svelte";
   import Unlock from "./screens/Unlock.svelte";
 
   type Screen = { kind: "loading" } | { kind: "new" } | { kind: "unlock" } | { kind: "main" } | { kind: "failed"; message: string };
 
   let screen: Screen = $state({ kind: "loading" });
-  let changingPassword = $state(false);
+  // Task 14 connects the synchronization state and the actions.
+  const offline = { connected: false, dirty: false, restoreAvailable: false, busy: false };
+  const notYet = () => {};
 
   onMount(async () => {
     try {
@@ -29,14 +31,7 @@
   {:else if screen.kind === "unlock"}
     <Unlock onUnlocked={() => (screen = { kind: "main" })} />
   {:else if screen.kind === "main"}
-    <!-- Main replaces this placeholder in task 13. -->
-    <div class="card">
-      <p>Local storage is unlocked.</p>
-      <button onclick={() => (changingPassword = true)}>Change password</button>
-    </div>
-    {#if changingPassword}
-      <ChangePassword onClose={() => (changingPassword = false)} />
-    {/if}
+    <Main sync={offline} onSettings={notYet} onBackup={notYet} onRestore={notYet} />
   {:else if screen.kind === "failed"}
     <div class="card">
       <h1>Smartnote</h1>
