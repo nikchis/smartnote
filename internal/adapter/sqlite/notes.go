@@ -300,6 +300,8 @@ func execOne(ctx context.Context, q querier, query string, args ...any) error {
 }
 
 // inTx runs f in a transaction and commits it, or rolls it back on error.
+// A failed Commit has already ended the transaction (the driver rolls it
+// back), so the rollback's sql.ErrTxDone is not reported.
 func inTx(ctx context.Context, db *sql.DB, f func(tx *sql.Tx) error) (err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -307,7 +309,7 @@ func inTx(ctx context.Context, db *sql.DB, f func(tx *sql.Tx) error) (err error)
 	}
 	defer func() {
 		if err != nil {
-			if rerr := tx.Rollback(); rerr != nil {
+			if rerr := tx.Rollback(); rerr != nil && !errors.Is(rerr, sql.ErrTxDone) {
 				err = errors.Join(err, fmt.Errorf("rollback: %w", rerr))
 			}
 		}
