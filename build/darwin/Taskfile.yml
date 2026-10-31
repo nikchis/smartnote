@@ -26,8 +26,8 @@ tasks:
   build:native:
     summary: Builds the application natively on macOS
     internal: true
+    # No go mod tidy here: a build must use go.mod and go.sum as committed.
     deps:
-      - task: common:go:mod:tidy
       - task: common:build:frontend
         vars:
           BUILD_FLAGS:
