@@ -1,13 +1,17 @@
-// Message dialogs of v1 (UDlgMsg): information, error, and a yes/no question.
-// Dialogs queue up and MessageDialog shows the first one.
+// Message dialogs of v1 (UDlgMsg): information, error, a yes/no question,
+// and a choice with Cancel. Dialogs queue up and MessageDialog shows the
+// first one.
 
-export type DialogKind = "info" | "error" | "ask";
+export type DialogKind = "info" | "error" | "ask" | "choose";
 
-type Pending = { kind: DialogKind; message: string; resolve: (yes: boolean) => void };
+/** Answer is the button pressed; OK of info and error is "yes". */
+export type Answer = "yes" | "no" | "cancel";
+
+type Pending = { kind: DialogKind; message: string; resolve: (a: Answer) => void };
 
 const state = $state<{ queue: Pending[] }>({ queue: [] });
 
-function show(kind: DialogKind, message: string): Promise<boolean> {
+function show(kind: DialogKind, message: string): Promise<Answer> {
   return new Promise((resolve) => state.queue.push({ kind, message, resolve }));
 }
 
@@ -16,6 +20,8 @@ export type Dialogs = {
   info(msg: string): Promise<void>;
   error(msg: string): Promise<void>;
   ask(msg: string): Promise<boolean>;
+  /** choose asks with Yes, No and Cancel; Cancel and Escape give "cancel". */
+  choose(msg: string): Promise<Answer>;
 };
 
 export const dialogs: Dialogs = {
@@ -25,17 +31,27 @@ export const dialogs: Dialogs = {
   async error(msg) {
     await show("error", msg);
   },
-  ask(msg) {
-    return show("ask", msg);
+  async ask(msg) {
+    return (await show("ask", msg)) === "yes";
+  },
+  choose(msg) {
+    return show("choose", msg);
   },
 };
 
 /** currentDialog is the dialog on screen, if any. */
 export function currentDialog(): { kind: DialogKind; message: string } | undefined {
-  return state.queue[0];
+  const d = state.queue[0];
+  return d && { kind: d.kind, message: d.message };
 }
 
-/** answer closes the dialog on screen; yes is false for "No". */
-export function answer(yes: boolean): void {
-  state.queue.shift()?.resolve(yes);
+/** answer closes the dialog on screen with the button pressed. */
+export function answer(a: Answer): void {
+  state.queue.shift()?.resolve(a);
+}
+
+/** dismiss is Escape: Cancel for a choice, No for any other dialog. */
+export function dismiss(): void {
+  const d = state.queue[0];
+  if (d) answer(d.kind === "choose" ? "cancel" : "no");
 }
