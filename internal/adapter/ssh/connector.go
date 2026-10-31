@@ -70,10 +70,12 @@ func (c *Connector) Open(ctx context.Context, s domain.ConnectionSettings, mode 
 	return sess, nil
 }
 
+// signer returns the client key, or nil when there is none. Its errors come
+// from the local storage, not the server, and are marked usecase.LocalError.
 func (c *Connector) signer(ctx context.Context) (gossh.Signer, error) {
 	pair, ok, err := c.keys.LoadKey(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load ssh key: %w", err)
+		return nil, usecase.LocalError{Err: fmt.Errorf("load ssh key: %w", err)}
 	}
 
 	if !ok {
@@ -82,7 +84,7 @@ func (c *Connector) signer(ctx context.Context) (gossh.Signer, error) {
 
 	signer, err := gossh.ParsePrivateKey(pair.PrivatePEM)
 	if err != nil {
-		return nil, fmt.Errorf("ssh key: %w", err)
+		return nil, usecase.LocalError{Err: fmt.Errorf("ssh key: %w", err)}
 	}
 
 	return signer, nil

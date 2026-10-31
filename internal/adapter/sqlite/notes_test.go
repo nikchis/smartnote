@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,5 +150,48 @@ func TestFieldMovedToOtherNote(t *testing.T) {
 
 	if _, err := s.GetNote(ctx, b.ID); !errors.Is(err, domain.ErrCorruptStorage) {
 		t.Errorf("GetNote = %v, want ErrCorruptStorage", err)
+	}
+}
+
+// TestInTxFailedCommit: a failed Commit already ends the transaction, so the
+// error must be the Commit's alone, without a "transaction has already been
+// committed or rolled back" from the rollback that follows it.
+func TestInTxFailedCommit(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := sql.Open("sqlite", "file::memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	db.SetMaxOpenConns(1)
+
+	for _, q := range []string{
+		"PRAGMA foreign_keys = ON",
+		"CREATE TABLE parent (id INTEGER PRIMARY KEY)",
+		// A deferred key is checked at COMMIT, which then fails.
+		"CREATE TABLE child (parent_id INTEGER REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED)",
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+
+	err = inTx(ctx, db, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO child (parent_id) VALUES (1)")
+		return err
+	})
+	if err == nil {
+		t.Fatal("inTx = nil, want the failed Commit's error")
+	}
+
+	if errors.Is(err, sql.ErrTxDone) || strings.Contains(err.Error(), "rollback") {
+		t.Errorf("inTx error = %q, want the Commit error without a rollback error", err)
+	}
+
+	if !strings.Contains(err.Error(), "FOREIGN KEY") {
+		t.Errorf("inTx error = %q, want the FOREIGN KEY error of Commit", err)
 	}
 }

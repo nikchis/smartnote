@@ -51,6 +51,10 @@ class FakeDialogs implements Dialogs {
     this.shown.push(`ask: ${msg}`);
     return this.answer;
   }
+  async choose(msg: string) {
+    this.shown.push(`choose: ${msg}`);
+    return this.answer ? ("yes" as const) : ("no" as const);
+  }
 }
 
 let api: FakeNotes;

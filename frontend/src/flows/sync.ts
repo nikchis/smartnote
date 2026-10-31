@@ -158,11 +158,19 @@ async function commitRestore(api: SyncApi, d: Dialogs): Promise<boolean> {
 /**
  * closeFlow is scenario 4: with unsaved changes and a connection it offers a
  * Backup, asking again only when the Backup deletes notes on the server or
- * overwrites newer data. A failed Backup asks "Close anyway?".
+ * overwrites newer data. Cancel on the offer keeps the window open. A failed
+ * Backup asks "Close anyway?".
  */
 export async function closeFlow(api: SyncApi, d: Dialogs, quit: () => Promise<void>): Promise<void> {
   const st = await api.state();
-  if (!st.dirty || !st.connected || !(await d.ask("Would you like to save your data changes to remote database?"))) {
+  if (!st.dirty || !st.connected) {
+    await quit();
+    return;
+  }
+
+  const save = await d.choose("Would you like to save your data changes to remote database?");
+  if (save === "cancel") return;
+  if (save === "no") {
     await quit();
     return;
   }

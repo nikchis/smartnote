@@ -8,8 +8,10 @@ import (
 // Lifecycle decides whether the app may quit (spec §7.3). Interactive quits
 // (closing the window, Cmd+Q) first ask the interface, which runs the close
 // scenario and calls ConfirmQuit; signals and the end of the session quit
-// without asking.
+// without asking. Until the interface is ready nothing would answer the
+// question, so an interactive quit is allowed at once.
 type Lifecycle struct {
+	ready        atomic.Bool
 	allowQuit    atomic.Bool
 	requestClose func()
 	shutdown     func()
@@ -23,10 +25,15 @@ func NewLifecycle(requestClose, shutdown func()) *Lifecycle {
 	return &Lifecycle{requestClose: requestClose, shutdown: shutdown}
 }
 
+// Ready reports that the interface listens for the close request; from now
+// on interactive quits ask it first.
+func (l *Lifecycle) Ready() { l.ready.Store(true) }
+
 // OnQuitRequested is the window close hook and ShouldQuit: it returns true
-// once quitting is allowed; otherwise it asks the interface and returns false.
+// once quitting is allowed or while the interface is not ready; otherwise it
+// asks the interface and returns false.
 func (l *Lifecycle) OnQuitRequested() bool {
-	if l.allowQuit.Load() {
+	if l.allowQuit.Load() || !l.ready.Load() {
 		return true
 	}
 

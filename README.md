@@ -65,7 +65,8 @@ connection, so the database never has to listen on a public address.
    A password works too; with a key, the password is tried after the key.
 
 4. In **Settings** fill in the SSH server, the database (host `127.0.0.1`, `localhost` or `::1`
-   as seen from the SSH server, port, name, user, password) and the sync phrase, press **Test**,
+   as seen from the SSH server, port, name, user, password) and the sync phrase; empty ports
+   mean 22 for SSH and 5432 for PostgreSQL, an empty database host means `127.0.0.1`. Press **Test**,
    then **OK**. On the first connection Smartnote asks whether to trust the server's host key
    and shows its SHA256 fingerprint; compare it with the host keys on the server,
    `for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done` (with OpenSSH defaults the

@@ -86,6 +86,8 @@
     const offState = Events.On("sync:state", (ev) => (sync = ev.data));
     // The close scenario runs on every screen; before unlocking it just quits.
     const offClose = Events.On("app:close-requested", () => void closeRequested());
+    // Until this call Go closes the window without asking: nothing listened yet.
+    void AppService.Ready();
 
     (async () => {
       try {
