@@ -139,4 +139,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - run: go install github.com/go-task/task/v3/cmd/task@$TASK_VERSION
+      # WebKit starts bubblewrap, which needs unprivileged user namespaces; Ubuntu 24.04
+      # runners restrict them through AppArmor, desktops with WebKitGTK allow them for bwrap.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: task smoke:appimage
