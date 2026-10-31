@@ -313,6 +313,31 @@ func TestTrustOfferedKeyForDialog(t *testing.T) {
 	}
 }
 
+// TestTrustOfferedKeyEmptyPort: the dialog may leave the SSH port empty; the
+// key offered for the default port must be trusted for it and survive OK.
+func TestTrustOfferedKeyEmptyPort(t *testing.T) {
+	c, settings, _ := newTestConnection(t, domain.ConnectionSettings{}, &fakeServer{openErr: offered()})
+	form := completeSettings()
+	form.SSHPort = 0
+
+	if _, err := c.Test(context.Background(), form); err == nil {
+		t.Fatal("Test: nil error")
+	}
+
+	got, err := c.TrustOfferedKey("SHA256:abc", form)
+	if err != nil {
+		t.Fatalf("TrustOfferedKey with an empty port: %v", err)
+	}
+
+	if err := c.Save(context.Background(), got); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if key := settings.s.TrustedKey(); key != "ssh-ed25519 AAAA" {
+		t.Errorf("saved trusted key = %q, want the offered key for %s", key, settings.s.SSHAddr())
+	}
+}
+
 func TestSaveDropsStaleTrust(t *testing.T) {
 	c, settings, _ := newTestConnection(t, domain.ConnectionSettings{}, &fakeServer{})
 	s := trusted()

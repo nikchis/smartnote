@@ -126,7 +126,8 @@ func (c *Connection) TrustHostKey(ctx context.Context, fingerprint string) error
 // at s's address last presented as unknown, for the settings dialog, which
 // saves it only on OK. Nothing is saved here.
 func (c *Connection) TrustOfferedKey(fingerprint string, s domain.ConnectionSettings) (domain.ConnectionSettings, error) {
-	offer, err := c.offer.take(fingerprint, s.SSHAddr())
+	// The dialog may leave the port empty; the key was offered for the default.
+	offer, err := c.offer.take(fingerprint, s.WithDefaults().SSHAddr())
 	if err != nil {
 		return domain.ConnectionSettings{}, err
 	}
