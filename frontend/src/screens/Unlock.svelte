@@ -3,7 +3,6 @@
   import { VaultService } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
   import { parseError } from "../lib/errors";
-  import { LIMITS } from "../lib/text";
 
   let { onUnlocked }: { onUnlocked: () => void } = $props();
 
@@ -37,7 +36,7 @@
   <h1>Smartnote</h1>
   <label>
     Password
-    <input type="password" bind:this={input} bind:value={password} maxlength={LIMITS.passwordMax} autocomplete="current-password" />
+    <input type="password" bind:this={input} bind:value={password} autocomplete="current-password" />
   </label>
   <button type="submit" disabled={password === "" || busy}>Unlock</button>
 </form>

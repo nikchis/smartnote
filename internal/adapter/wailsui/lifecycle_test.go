@@ -107,3 +107,39 @@ func TestLifecycleWindowsSessionEnd(t *testing.T) {
 		})
 	}
 }
+
+func TestLifecycleMacSessionEnd(t *testing.T) {
+	var requests, shutdowns int
+
+	l := NewLifecycle(func() { requests++ }, func() { shutdowns++ })
+
+	if !l.OnAppQuit(true) {
+		t.Fatal("OnAppQuit at the end of the session = false: macOS would cancel the logout")
+	}
+
+	if requests != 0 {
+		t.Errorf("requestClose calls = %d, want 0: the end of the session quits without asking", requests)
+	}
+
+	if shutdowns != 0 {
+		t.Errorf("shutdown calls = %d, want 0: Wails is already quitting", shutdowns)
+	}
+
+	if !l.OnQuitRequested() {
+		t.Error("window close after the session end quit = false, want true")
+	}
+}
+
+func TestLifecycleOrdinaryAppQuitAsks(t *testing.T) {
+	var requests int
+
+	l := NewLifecycle(func() { requests++ }, func() {})
+
+	if l.OnAppQuit(false) {
+		t.Error("OnAppQuit for Cmd+Q = true, want false: the UI must ask first")
+	}
+
+	if requests != 1 {
+		t.Errorf("requestClose calls = %d, want 1", requests)
+	}
+}

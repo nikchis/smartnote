@@ -3,8 +3,8 @@
   import { VaultService } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
   import { parseError } from "../lib/errors";
+  import { modal } from "../lib/modal";
   import { passwordPairOK } from "../lib/password";
-  import { LIMITS } from "../lib/text";
 
   let { onClose }: { onClose: () => void } = $props();
 
@@ -30,16 +30,16 @@
   }
 </script>
 
-<div class="backdrop">
+<div class="backdrop" use:modal>
   <form class="card" onsubmit={change}>
     <h2>Change password</h2>
     <label>
       New password
-      <input type="password" bind:value={password} maxlength={LIMITS.passwordMax} autocomplete="new-password" />
+      <input type="password" bind:value={password} autocomplete="new-password" />
     </label>
     <label>
       Confirm password
-      <input type="password" bind:value={confirm} maxlength={LIMITS.passwordMax} autocomplete="new-password" />
+      <input type="password" bind:value={confirm} autocomplete="new-password" />
     </label>
     <div class="buttons">
       <button type="submit" disabled={!ready || busy}>OK</button>

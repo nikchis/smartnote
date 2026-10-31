@@ -1,5 +1,6 @@
 <script lang="ts">
   import { answer, currentDialog } from "../lib/dialogs.svelte";
+  import { modal } from "../lib/modal";
 
   const dialog = $derived(currentDialog());
   let primary: HTMLButtonElement | undefined = $state();
@@ -22,7 +23,7 @@
 <svelte:window {onkeydown} />
 
 {#if dialog}
-  <div class="backdrop">
+  <div class="backdrop" use:modal>
     <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-message">
       <h2 id="dialog-title" class={dialog.kind}>{titles[dialog.kind]}</h2>
       <p id="dialog-message">{dialog.message}</p>

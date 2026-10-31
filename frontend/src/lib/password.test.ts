@@ -9,6 +9,7 @@ describe("passwordPairOK", () => {
     { name: "too long", pw: "x".repeat(65), confirm: "x".repeat(65), ok: false },
     { name: "mismatch", pw: "123456", confirm: "123457", ok: false },
     { name: "same after NFC", pw: "caféxx", confirm: "caféxx", ok: true },
+    { name: "64 characters in NFD", pw: "e\u0301".repeat(64), confirm: "\u00e9".repeat(64), ok: true },
     { name: "spaces count", pw: "  12  ", confirm: "  12  ", ok: true },
   ])("$name", ({ pw, confirm, ok }) => {
     expect(passwordPairOK(pw, confirm)).toBe(ok);

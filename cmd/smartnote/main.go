@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -36,27 +35,42 @@ const (
 )
 
 func main() {
-	if err := run(); err != nil {
+	logger, closeLog := openLog()
+	err := run(logger)
+	logStartError(logger, err)
+	closeLog()
+
+	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run() error {
-	logger, closeLog := openLog()
-	defer closeLog()
-
+func run(logger *slog.Logger) error {
 	dataDir, err := platform.DataDir()
 	if err != nil {
 		return fmt.Errorf("data directory: %w", err)
 	}
 
-	// The lock comes before anything touches the storage files.
-	release, err := platform.AcquireLock(dataDir)
-	if errors.Is(err, platform.ErrLocked) {
-		focusRunningInstance()
-		return err
+	assets, err := fs.Sub(frontend.Dist, "dist")
+	if err != nil {
+		return fmt.Errorf("frontend assets: %w", err)
 	}
 
+	lifecycle := wailsui.NewLifecycle(
+		func() { emit(wailsui.EventCloseRequested) },
+		func() { application.Get().Quit() },
+	)
+
+	// Wails' protection against a second instance comes first: a second
+	// instance brings the running window forward and ends here. Taking the
+	// data lock first would let a losing process claim Wails' name before the
+	// winner and end both.
+	app := newApp(lifecycle, assets)
+
+	// The lock comes before anything touches the storage files. It still
+	// fails if the protection above is unavailable or the previous instance
+	// is still closing.
+	release, err := platform.AcquireLock(dataDir)
 	if err != nil {
 		return err
 	}
@@ -78,9 +92,16 @@ func run() error {
 	})
 	defer finish()
 
-	app, lifecycle, err := newApp(wailsui.Env{Ctx: ctx, Log: logger}, store, finish)
+	app.OnShutdown(finish)
+
+	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger}, store, lifecycle)
 	if err != nil {
 		return err
+	}
+
+	// Services and the window come alive in Run, after this.
+	for _, s := range services {
+		app.RegisterService(s)
 	}
 
 	stopSignals := quitOnSignal(ctx, lifecycle)
@@ -93,24 +114,14 @@ func run() error {
 	return nil
 }
 
-// newApp builds the use cases over store, the Wails services and the window.
-func newApp(env wailsui.Env, store *sqlite.Store, finish func()) (*application.App, *wailsui.Lifecycle, error) {
-	assets, err := fs.Sub(frontend.Dist, "dist")
-	if err != nil {
-		return nil, nil, fmt.Errorf("frontend assets: %w", err)
-	}
-
-	services, lifecycle, err := newServices(env, store)
-	if err != nil {
-		return nil, nil, err
-	}
-
+// newApp creates the application with its window; services are registered
+// later, once the storage is open.
+func newApp(lifecycle *wailsui.Lifecycle, assets fs.FS) *application.App {
 	var window *application.WebviewWindow
 
 	app := application.New(application.Options{
 		Name:        appName,
 		Description: "Encrypted notes with remote backup",
-		Services:    services,
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
@@ -121,8 +132,8 @@ func newApp(env wailsui.Env, store *sqlite.Store, finish func()) (*application.A
 		Windows: application.WindowsOptions{WndProcInterceptor: lifecycle.OnWindowsMessage},
 		// SIGTERM and SIGINT quit without asking; see quitOnSignal.
 		DisableDefaultSignalHandler: true,
-		ShouldQuit:                  lifecycle.OnQuitRequested,
-		OnShutdown:                  finish,
+		// The end of a macOS session quits without the close question.
+		ShouldQuit: func() bool { return lifecycle.OnAppQuit(sessionEnding()) },
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: instanceID,
 			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
@@ -149,11 +160,11 @@ func newApp(env wailsui.Env, store *sqlite.Store, finish func()) (*application.A
 		}
 	})
 
-	return app, lifecycle, nil
+	return app
 }
 
 // newServices wires the use cases over store into the Wails services.
-func newServices(env wailsui.Env, store *sqlite.Store) ([]application.Service, *wailsui.Lifecycle, error) {
+func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecycle) ([]application.Service, error) {
 	// The local storage keeps milliseconds; a finer clock would make a saved
 	// note differ from the one returned to the interface.
 	clock := func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
@@ -163,17 +174,17 @@ func newServices(env wailsui.Env, store *sqlite.Store) ([]application.Service, *
 
 	vault, err := usecase.NewVault(store)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	notes, err := usecase.NewNotes(store, clock, uuid.New, changes)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	connector, err := ssh.NewConnector(store)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	syncer, err := usecase.NewSync(usecase.SyncDeps{
@@ -182,23 +193,18 @@ func newServices(env wailsui.Env, store *sqlite.Store) ([]application.Service, *
 		Warn:    func(err error) { wailsui.LogError(env.Log, "sync", err) },
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	connection, err := usecase.NewConnection(store, connector, gate, offer, syncer.ResetConnection)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	keys, err := usecase.NewKeys(store, ssh.KeyTool{})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-
-	lifecycle := wailsui.NewLifecycle(
-		func() { emit(wailsui.EventCloseRequested) },
-		func() { application.Get().Quit() },
-	)
 
 	return []application.Service{
 		application.NewService(wailsui.NewVaultService(env, vault)),
@@ -207,7 +213,7 @@ func newServices(env wailsui.Env, store *sqlite.Store) ([]application.Service, *
 		application.NewService(wailsui.NewConnectionService(env, connection)),
 		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{})),
 		application.NewService(wailsui.NewAppService(lifecycle)),
-	}, lifecycle, nil
+	}, nil
 }
 
 // emit sends an event to the interface of the running application.
@@ -232,18 +238,6 @@ func quitOnSignal(ctx context.Context, lifecycle *wailsui.Lifecycle) (stop func(
 	return stop
 }
 
-// focusRunningInstance hands over to the instance that holds the data
-// directory: Wails' protection against a second instance brings its window
-// forward and ends this process. It returns only if that instance has not
-// taken Wails' lock yet.
-func focusRunningInstance() {
-	application.New(application.Options{
-		Name:                        appName,
-		DisableDefaultSignalHandler: true,
-		SingleInstance:              &application.SingleInstanceOptions{UniqueID: instanceID},
-	})
-}
-
 // openLog opens the error log in the state directory. Without it the app
 // still runs and logs to stderr.
 func openLog() (logger *slog.Logger, closeLog func()) {
@@ -262,6 +256,14 @@ func openLog() (logger *slog.Logger, closeLog func()) {
 	}
 
 	return file, func() { closeQuietly(closer) }
+}
+
+// logStartError writes a failed start to the error log: started from the
+// desktop menu, stderr goes nowhere.
+func logStartError(logger *slog.Logger, err error) {
+	if err != nil {
+		logger.Error("start", applog.Err(err))
+	}
 }
 
 // logClose logs err, if any, from a step of shutting down.

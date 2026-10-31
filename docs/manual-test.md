@@ -50,3 +50,7 @@ Failures and notes:
   README now says to compare with every host key.
 - WebKitGTK keeps its own `storage` and `mediakeys` directories in the data directory
   (`~/.local/share/smartnote`); the app stores nothing there.
+- After the PR review, rechecked with the AppImage under Xvfb: two starts at the same moment leave
+  exactly one Smartnote running (8 rounds); a start that fails (data directory path is a file)
+  writes the error to `smartnote.log`; Settings takes the keyboard focus when it opens, and Tab
+  does not reach the Main screen behind it.

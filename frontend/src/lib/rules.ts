@@ -1,4 +1,4 @@
-// Button rules of the note editor (spec §7.1).
+// Button rules of the note editor (spec §7.1) and of the client key in Settings.
 import { normalizeText } from "./text";
 
 /**
@@ -30,4 +30,16 @@ export function buttons(s: EditorState): Buttons {
     list: !creating && s.hasNotes,
     history: s.hasVersions && s.mode === "edit",
   };
+}
+
+export type SettingsButtons = { test: boolean; save: boolean; generate: boolean; export: boolean; import: boolean };
+
+/**
+ * settingsButtons are the buttons of Settings that act on what was loaded.
+ * Until the settings load, OK would save the empty form; until hasKey loads,
+ * Generate could replace a key without the question.
+ */
+export function settingsButtons(loaded: boolean, hasKey: boolean | undefined): SettingsButtons {
+  const known = hasKey !== undefined;
+  return { test: loaded, save: loaded, generate: known, export: hasKey === true, import: known };
 }

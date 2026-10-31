@@ -16,7 +16,7 @@ Packages are not signed.
 | Ubuntu 26.04 (amd64) | `smartnote.deb` | `sudo apt install ./smartnote.deb` pulls in GTK 4 and WebKitGTK 6.0. |
 | Ubuntu desktop (amd64) | `smartnote-x86_64.AppImage` | `chmod +x` and run. A minimal system also needs `libegl1 libgles2 libfontconfig1 libfribidi0 libharfbuzz0b bubblewrap xdg-dbus-proxy`, which every Ubuntu desktop has. |
 | Windows 10/11 | `smartnote-amd64-installer.exe` | SmartScreen shows "Windows protected your PC": choose **More info**, then **Run anyway**. |
-| macOS | `smartnote.dmg` | Gatekeeper refuses an unsigned app: drag Smartnote to Applications, then either open **System Settings → Privacy & Security** and press **Open Anyway** after the first attempt, or run `xattr -dr com.apple.quarantine /Applications/smartnote.app`. |
+| macOS 12+ on Apple Silicon (arm64) | `smartnote.dmg` | Not for Intel Macs: build from source there. Gatekeeper refuses an unsigned app: drag Smartnote to Applications, then either open **System Settings → Privacy & Security** and press **Open Anyway** after the first attempt, or run `xattr -dr com.apple.quarantine /Applications/smartnote.app`. |
 
 Where the data lives:
 
@@ -42,7 +42,8 @@ connection, so the database never has to listen on a public address.
    ```
 
    and `pg_hba.conf` lets the user in from loopback with a password, e.g.
-   `host smartnote smartnote 127.0.0.1/32 scram-sha-256`.
+   `host smartnote smartnote 127.0.0.1/32 scram-sha-256` (and `host smartnote smartnote ::1/128
+   scram-sha-256` for the database host `localhost` or `::1`).
 
 2. Create the user and the database, and either create the schema for the user or let the
    application create it:
@@ -92,9 +93,8 @@ from it before they reach the server.
 - Backup and Restore replace the whole set of notes on the other side, as in v1. Before deleting
   anything they ask, with the number of notes to delete.
 - The sync phrase cannot be changed while the server holds notes.
-- On macOS, logging out or shutting down while Smartnote is open stops at the close question, as
-  any quit does; answer it and repeat the logout. On Windows the end of the session closes
-  Smartnote without the question.
+- Logging out or shutting down closes Smartnote without the close question, as SIGTERM does:
+  unsaved server backups are not made, the local notes are kept. Back up before logging out.
 
 ### Building from source
 

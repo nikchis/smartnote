@@ -75,20 +75,19 @@ func TestSettingsDTORoundTrip(t *testing.T) {
 		t.Errorf("TrustedFingerprint = %q, want %q", dto.TrustedFingerprint, gossh.FingerprintSHA256(key))
 	}
 
-	if got := dto.settings(); got != s {
-		t.Errorf("round trip = %+v, want %+v", got, s)
+	want := s
+	want.TrustedHostKey, want.TrustedHostAddr = "", ""
+
+	if got := dto.settings(); got != want {
+		t.Errorf("round trip = %+v, want %+v without the key, which ConnectionService adds", got, want)
 	}
 }
 
 func TestSettingsDTOBrokenTrustedKey(t *testing.T) {
 	dto := toSettingsDTO(domain.ConnectionSettings{TrustedHostKey: "not a key", TrustedHostAddr: "example.org:22"})
 
-	if dto.TrustedFingerprint != "" {
-		t.Errorf("TrustedFingerprint = %q, want empty for a key that does not parse", dto.TrustedFingerprint)
-	}
-
-	if dto.TrustedHostKey != "not a key" {
-		t.Errorf("TrustedHostKey = %q, want it kept so that Save does not drop it silently", dto.TrustedHostKey)
+	if dto.TrustedFingerprint != unreadableKey {
+		t.Errorf("TrustedFingerprint = %q, want %q for a key that does not parse", dto.TrustedFingerprint, unreadableKey)
 	}
 }
 

@@ -187,4 +187,71 @@ describe("Editor", () => {
 
     expect(ed.state).toMatchObject({ mode: "edit", info: "restored", savedInfo: "restored" });
   });
+
+  it("ignores a second Apply while the first Create runs", async () => {
+    const releases: (() => void)[] = [];
+    const create = api.Create.bind(api);
+    api.Create = async (name, info) => {
+      await new Promise<void>((r) => releases.push(r));
+      return create(name, info);
+    };
+    ed.startNew();
+    ed.name = "gamma";
+    ed.info = "third";
+    const first = ed.apply();
+    const second = ed.apply();
+    releases.forEach((r) => r());
+    await Promise.all([first, second]);
+
+    expect(api.calls.filter((c) => c.startsWith("Create"))).toEqual(["Create gamma"]);
+    expect(api.notes.filter((n) => n.name === "gamma")).toHaveLength(1);
+  });
+
+  it("locks the editor while Save runs", async () => {
+    await ed.select("a");
+    let release!: () => void;
+    const save = api.Save.bind(api);
+    api.Save = async (id, name, info) => {
+      await new Promise<void>((r) => (release = r));
+      return save(id, name, info);
+    };
+    ed.info = "first edit";
+    const applying = ed.apply();
+
+    expect(ed.locked).toBe(true);
+    expect(Object.values(ed.buttons).some(Boolean)).toBe(false);
+    await ed.select("b");
+    ed.startNew();
+    ed.cancel();
+    ed.useVersion("old");
+    expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "first edit" });
+
+    release();
+    await applying;
+    expect(ed.locked).toBe(false);
+    expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "first edit", savedInfo: "first edit" });
+  });
+
+  it("locks the editor while Delete runs", async () => {
+    await ed.select("a");
+    let release!: () => void;
+    const del = api.Delete.bind(api);
+    api.Delete = async (id) => {
+      await new Promise<void>((r) => (release = r));
+      return del(id);
+    };
+    const removing = ed.remove();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ed.locked).toBe(true);
+    await ed.select("b");
+    expect(ed.selected?.id).toBe("a");
+
+    release();
+    await removing;
+    expect(ed.busy).toBe(false);
+    expect(ed.state.mode).toBe("view");
+    expect(ed.notes.map((n) => n.id)).toEqual(["b"]);
+  });
 });

@@ -34,11 +34,11 @@
   <p>Create a password for the local storage ({LIMITS.passwordMin}–{LIMITS.passwordMax} characters).</p>
   <label>
     Password
-    <input type="password" bind:value={password} maxlength={LIMITS.passwordMax} autocomplete="new-password" />
+    <input type="password" bind:value={password} autocomplete="new-password" />
   </label>
   <label>
     Confirm password
-    <input type="password" bind:value={confirm} maxlength={LIMITS.passwordMax} autocomplete="new-password" />
+    <input type="password" bind:value={confirm} autocomplete="new-password" />
   </label>
   <button type="submit" disabled={!ready || busy}>Create storage</button>
 </form>

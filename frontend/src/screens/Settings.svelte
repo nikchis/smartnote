@@ -1,20 +1,25 @@
 <script lang="ts">
   // Settings edits the connection, the client SSH key and the trusted server
-  // key (v1 UDlgConnection). A key trusted during Test, like a reset, stays in
-  // the form and is saved only with OK (spec §6.1).
+  // key (v1 UDlgConnection). The form holds the server key's fingerprint only;
+  // a key trusted during Test, like a reset, is saved only with OK (spec §6.1).
   import { onMount } from "svelte";
   import StrengthMeter from "../components/StrengthMeter.svelte";
   import { ConnectionService, KeyService } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
   import { parseError, type UIError } from "../lib/errors";
   import { emptySettings, fromForm, toForm, type SettingsForm } from "../lib/settings";
+  import { modal } from "../lib/modal";
+  import { settingsButtons } from "../lib/rules";
   import { LIMITS, secretLen } from "../lib/text";
   import { trustQuestion } from "../flows/sync";
 
   let { onSaved, onClose }: { onSaved: () => void; onClose: () => void } = $props();
 
   let form: SettingsForm = $state(toForm(emptySettings));
-  let hasKey = $state(false);
+  /** loaded and hasKey stay unset until loaded, or when loading failed. */
+  let loaded = $state(false);
+  let hasKey: boolean | undefined = $state();
+  const allowed = $derived(settingsButtons(loaded, hasKey));
   let busy = $state("");
   let invalid = $state("");
   let passphrase: { value: string; retry: boolean } | undefined = $state();
@@ -22,6 +27,7 @@
   onMount(async () => {
     try {
       form = toForm(await ConnectionService.Load());
+      loaded = true;
       hasKey = await KeyService.HasKey();
     } catch (e) {
       await dialogs.error(parseError(e).message);
@@ -48,6 +54,7 @@
 
   function test() {
     return run("Connecting…", async () => {
+      if (!allowed.test) return;
       invalid = "";
       let empty: boolean;
       try {
@@ -64,6 +71,7 @@
 
   function save() {
     return run("Saving…", async () => {
+      if (!allowed.save) return;
       invalid = "";
       await ConnectionService.Save(fromForm(form));
       onSaved();
@@ -71,11 +79,12 @@
   }
 
   function resetTrust() {
-    form.trustedHostKey = form.trustedHostAddr = form.trustedFingerprint = "";
+    form.trustedFingerprint = "";
   }
 
   function generate() {
     return run("Generating…", async () => {
+      if (!allowed.generate) return;
       if (hasKey && !(await dialogs.ask("Are you sure you want to generate new key?\nCurrent key will be erased!"))) return;
       await KeyService.Generate();
       hasKey = true;
@@ -92,6 +101,7 @@
 
   function importKey(pass = "") {
     return run("Importing…", async () => {
+      if (!allowed.import) return;
       try {
         if (!(await KeyService.ImportFromFile(pass))) return;
       } catch (e) {
@@ -119,7 +129,7 @@
   const phraseShort = $derived(form.syncPhrase !== "" && secretLen(form.syncPhrase) < LIMITS.phraseMin);
 </script>
 
-<div class="backdrop">
+<div class="backdrop" use:modal>
   <form class="card settings" onsubmit={(e) => (e.preventDefault(), save())}>
     <h2>Settings</h2>
 
@@ -152,33 +162,33 @@
     <fieldset>
       <legend>Keys</legend>
       <div class="wide row">
-        <span class="muted">{hasKey ? "Client key is set." : "No client key."}</span>
+        <span class="muted">{hasKey === undefined ? "" : hasKey ? "Client key is set." : "No client key."}</span>
         <span class="spacer"></span>
-        <button type="button" onclick={generate} disabled={!!busy}>Generate</button>
-        <button type="button" onclick={exportPublic} disabled={!!busy || !hasKey}>Export public</button>
-        <button type="button" onclick={() => importKey()} disabled={!!busy}>Import</button>
+        <button type="button" onclick={generate} disabled={!!busy || !allowed.generate}>Generate</button>
+        <button type="button" onclick={exportPublic} disabled={!!busy || !allowed.export}>Export public</button>
+        <button type="button" onclick={() => importKey()} disabled={!!busy || !allowed.import}>Import</button>
       </div>
       <div class="wide row">
         <span class="muted" aria-invalid={invalid === "trusted_host_key"}>
-          Server key: {form.trustedFingerprint || (form.trustedHostKey ? "unreadable key" : "not trusted yet")}
+          Server key: {form.trustedFingerprint || "not trusted yet"}
         </span>
         <span class="spacer"></span>
-        <button type="button" onclick={resetTrust} disabled={!!busy || !form.trustedHostKey}>Reset</button>
+        <button type="button" onclick={resetTrust} disabled={!!busy || !form.trustedFingerprint}>Reset</button>
       </div>
     </fieldset>
 
     <div class="buttons">
       <span class="muted">{busy}</span>
       <span class="spacer"></span>
-      <button type="button" onclick={test} disabled={!!busy}>Test</button>
-      <button type="submit" disabled={!!busy}>OK</button>
+      <button type="button" onclick={test} disabled={!!busy || !allowed.test}>Test</button>
+      <button type="submit" disabled={!!busy || !allowed.save}>OK</button>
       <button type="button" onclick={onClose} disabled={!!busy}>Cancel</button>
     </div>
   </form>
 </div>
 
 {#if passphrase}
-  <div class="backdrop top">
+  <div class="backdrop top" use:modal>
     <form class="card" onsubmit={submitPassphrase}>
       <h2>Key passphrase</h2>
       <label>

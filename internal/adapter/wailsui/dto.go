@@ -27,9 +27,10 @@ type VersionDTO struct {
 	Info    string `json:"info"`
 }
 
-// SettingsDTO are the connection settings. TrustedHostKey and TrustedHostAddr
-// travel back and forth so that a key trusted in the settings dialog is saved
-// only with OK; TrustedFingerprint is shown and ignored on the way back.
+// SettingsDTO are the connection settings. The server key never crosses to
+// the interface (spec §6.1): TrustedFingerprint names it both ways. On the way
+// back it must name the saved key or the key trusted with TrustOfferedKey;
+// empty resets the trust.
 type SettingsDTO struct {
 	SSHHost            string `json:"sshHost"`
 	SSHPort            int    `json:"sshPort"`
@@ -41,8 +42,6 @@ type SettingsDTO struct {
 	DBUser             string `json:"dbUser"`
 	DBPassword         string `json:"dbPassword"`
 	SyncPhrase         string `json:"syncPhrase"`
-	TrustedHostKey     string `json:"trustedHostKey"`
-	TrustedHostAddr    string `json:"trustedHostAddr"`
 	TrustedFingerprint string `json:"trustedFingerprint"`
 }
 
@@ -100,29 +99,35 @@ func toSettingsDTO(s domain.ConnectionSettings) SettingsDTO {
 	return SettingsDTO{
 		SSHHost: s.SSHHost, SSHPort: s.SSHPort, SSHUser: s.SSHUser, SSHPassword: s.SSHPassword,
 		DBHost: s.DBHost, DBPort: s.DBPort, DBName: s.DBName, DBUser: s.DBUser, DBPassword: s.DBPassword,
-		SyncPhrase: s.SyncPhrase, TrustedHostKey: s.TrustedHostKey, TrustedHostAddr: s.TrustedHostAddr,
-		TrustedFingerprint: fingerprint(s.TrustedHostKey),
+		SyncPhrase: s.SyncPhrase, TrustedFingerprint: trustRef(s.TrustedHostKey),
 	}
 }
 
+// settings returns the settings without the trusted key, which
+// ConnectionService finds by TrustedFingerprint.
 func (d SettingsDTO) settings() domain.ConnectionSettings {
 	return domain.ConnectionSettings{
 		SSHHost: d.SSHHost, SSHPort: d.SSHPort, SSHUser: d.SSHUser, SSHPassword: d.SSHPassword,
 		DBHost: d.DBHost, DBPort: d.DBPort, DBName: d.DBName, DBUser: d.DBUser, DBPassword: d.DBPassword,
-		SyncPhrase: d.SyncPhrase, TrustedHostKey: d.TrustedHostKey, TrustedHostAddr: d.TrustedHostAddr,
+		SyncPhrase: d.SyncPhrase,
 	}
 }
 
-// fingerprint returns the SHA256 fingerprint of a key in authorized_keys
-// format, or "" when there is no key or it does not parse.
-func fingerprint(authorized string) string {
+// unreadableKey names a saved trusted key that does not parse, so that Save
+// keeps it rather than dropping it silently; the connection reports it.
+const unreadableKey = "unreadable key"
+
+// trustRef returns what the interface shows for a trusted key in
+// authorized_keys format: "" for none, its SHA256 fingerprint, or
+// unreadableKey.
+func trustRef(authorized string) string {
 	if authorized == "" {
 		return ""
 	}
 
 	key, _, _, _, err := gossh.ParseAuthorizedKey([]byte(authorized)) //nolint:dogsled // only the key matters
 	if err != nil {
-		return "" // the connection reports the broken key when it is used
+		return unreadableKey
 	}
 
 	return gossh.FingerprintSHA256(key)

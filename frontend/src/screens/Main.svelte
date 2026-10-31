@@ -53,11 +53,11 @@
   <section class="editor">
     <label>
       Name
-      <input bind:value={editor.name} maxlength={LIMITS.name} disabled={editor.mode === "view"} />
+      <input bind:value={editor.name} maxlength={LIMITS.name} disabled={editor.locked} />
     </label>
     <label class="grow">
       Text
-      <textarea bind:value={editor.info} maxlength={LIMITS.info} disabled={editor.mode === "view"}></textarea>
+      <textarea bind:value={editor.info} maxlength={LIMITS.info} disabled={editor.locked}></textarea>
     </label>
     <div class="meta">
       <span>{utf16Len(editor.info)}/{LIMITS.info}</span>

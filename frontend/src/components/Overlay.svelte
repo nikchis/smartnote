@@ -1,10 +1,12 @@
 <script lang="ts">
   // Overlay covers the window during an operation with the server, as
   // "Connecting…" and "Synchronizing…" did in v1.
+  import { modal } from "../lib/modal";
+
   let { text }: { text: string } = $props();
 </script>
 
-<div class="overlay" role="status" aria-live="polite">
+<div class="overlay" role="status" aria-live="polite" use:modal>
   <div class="box">{text}</div>
 </div>
 

@@ -6,19 +6,22 @@ import type { SettingsDTO } from "./api";
 export const emptySettings: SettingsDTO = {
   sshHost: "", sshPort: 0, sshUser: "", sshPassword: "",
   dbHost: "", dbPort: 0, dbName: "", dbUser: "", dbPassword: "",
-  syncPhrase: "", trustedHostKey: "", trustedHostAddr: "", trustedFingerprint: "",
+  syncPhrase: "", trustedFingerprint: "",
 };
 
 export type SettingsForm = Omit<SettingsDTO, "sshPort" | "dbPort"> & { sshPort: string; dbPort: string };
 
 /**
- * portValue converts a port field: empty is 0 (unset), an integer is itself
- * (Go checks the range), anything else is -1, which Go rejects as invalid.
+ * portValue converts a port field: empty is 0 (unset), a port 1–65535 is
+ * itself, anything else is -1, which Go rejects as invalid. Other numbers
+ * would not reach the validation intact: 0 means unset, and a long one fails
+ * JSON decoding in Go or turns into null, that is 0.
  */
 export function portValue(s: string): number {
   const t = s.trim();
   if (t === "") return 0;
-  return /^-?\d+$/.test(t) ? Number(t) : -1;
+  const n = /^\d{1,5}$/.test(t) ? Number(t) : 0;
+  return n >= 1 && n <= 65535 ? n : -1;
 }
 
 export function toForm(s: SettingsDTO): SettingsForm {

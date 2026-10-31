@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buttons, type EditorState } from "./rules";
+import { buttons, settingsButtons, type EditorState } from "./rules";
 
 const base: EditorState = {
   mode: "edit", name: "n", info: "i", savedName: "n", savedInfo: "i", hasVersions: false, hasNotes: true,
@@ -61,5 +61,23 @@ describe("buttons", () => {
 
   it("no notes: the list is inactive", () => {
     expect(buttons({ ...base, mode: "view", hasNotes: false }).list).toBe(false);
+  });
+});
+
+describe("settingsButtons", () => {
+  it("keeps Test, OK and every key action inactive while the settings load", () => {
+    expect(settingsButtons(false, undefined)).toEqual({ test: false, save: false, generate: false, export: false, import: false });
+  });
+
+  it("keeps the key actions inactive until it is known whether a key exists", () => {
+    expect(settingsButtons(true, undefined)).toEqual({ test: true, save: true, generate: false, export: false, import: false });
+  });
+
+  it("allows Generate and Import without a key", () => {
+    expect(settingsButtons(true, false)).toEqual({ test: true, save: true, generate: true, export: false, import: true });
+  });
+
+  it("allows Export with a key", () => {
+    expect(settingsButtons(true, true)).toEqual({ test: true, save: true, generate: true, export: true, import: true });
   });
 });

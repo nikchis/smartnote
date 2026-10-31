@@ -2,6 +2,7 @@
   // History lists the previous texts of a note by date; Use puts one into the
   // editor, which saves it only on Apply (v1 UDlgHistory).
   import type { VersionDTO } from "../lib/api";
+  import { modal } from "../lib/modal";
 
   let { versions, onUse, onClose }: { versions: VersionDTO[]; onUse: (info: string) => void; onClose: () => void } = $props();
 
@@ -15,7 +16,7 @@
 
 <svelte:window {onkeydown} />
 
-<div class="backdrop">
+<div class="backdrop" use:modal>
   <div class="card history" role="dialog" aria-modal="true" aria-label="History">
     <h2>History</h2>
     <div class="panes">

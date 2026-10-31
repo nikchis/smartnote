@@ -7,9 +7,8 @@ import (
 
 // Lifecycle decides whether the app may quit (spec §7.3). Interactive quits
 // (closing the window, Cmd+Q) first ask the interface, which runs the close
-// scenario and calls ConfirmQuit; signals and the end of a Windows session
-// quit without asking. On macOS Wails reports logout as an ordinary quit, so
-// it asks too (README, Limitations).
+// scenario and calls ConfirmQuit; signals and the end of the session quit
+// without asking.
 type Lifecycle struct {
 	allowQuit    atomic.Bool
 	requestClose func()
@@ -34,6 +33,18 @@ func (l *Lifecycle) OnQuitRequested() bool {
 	l.requestClose()
 
 	return false
+}
+
+// OnAppQuit is the Wails ShouldQuit hook. sessionEnding reports that macOS
+// asks to quit for logout, restart or shutdown: that quit is allowed at once,
+// since refusing it cancels the logout. Any other quit is OnQuitRequested.
+func (l *Lifecycle) OnAppQuit(sessionEnding bool) bool {
+	if sessionEnding {
+		l.allowQuit.Store(true)
+		return true
+	}
+
+	return l.OnQuitRequested()
 }
 
 // ConfirmQuit allows quitting and quits; the interface calls it at the end of

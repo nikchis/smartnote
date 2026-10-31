@@ -4,6 +4,8 @@ import type { Dialogs } from "./dialogs.svelte";
 import { parseError } from "./errors";
 import { buttons, type Buttons, type EditorState } from "./rules";
 
+const NO_BUTTONS: Buttons = { apply: false, cancel: false, new: false, delete: false, list: false, history: false };
+
 /** NotesApi is the part of NotesService the editor uses. */
 export type NotesApi = {
   List(): Promise<NoteDTO[] | null>;
@@ -21,6 +23,8 @@ export class Editor {
   mode: EditorState["mode"] = $state("view");
   name = $state("");
   info = $state("");
+  /** busy is set while Apply or Delete waits for Go; the editor is locked meanwhile. */
+  busy = $state(false);
 
   readonly state: EditorState = $derived({
     mode: this.mode,
@@ -31,7 +35,9 @@ export class Editor {
     hasVersions: this.versions.length > 0,
     hasNotes: this.notes.length > 0,
   });
-  readonly buttons: Buttons = $derived(buttons(this.state));
+  readonly buttons: Buttons = $derived(this.busy ? NO_BUTTONS : buttons(this.state));
+  /** locked disables the fields: nothing is selected, or an action runs. */
+  readonly locked: boolean = $derived(this.mode === "view" || this.busy);
 
   constructor(
     private readonly api: NotesApi,
@@ -59,12 +65,13 @@ export class Editor {
 
   /** select shows note id; an unsaved edit is lost without asking, as in v1. */
   async select(id: string): Promise<void> {
-    if (this.mode === "new") return;
+    if (this.mode === "new" || this.busy) return;
     const note = this.notes.find((n) => n.id === id);
     if (note) await this.show(note);
   }
 
   startNew(): void {
+    if (this.busy) return;
     this.mode = "new";
     this.name = "";
     this.info = "";
@@ -72,6 +79,7 @@ export class Editor {
 
   /** cancel leaves the new note, or restores the selected note's saved fields. */
   cancel(): void {
+    if (this.busy) return;
     if (this.selected) {
       this.mode = "edit";
       this.name = this.selected.name;
@@ -83,38 +91,48 @@ export class Editor {
 
   async apply(): Promise<void> {
     if (!this.buttons.apply) return;
-    try {
-      if (this.mode === "new") {
-        const note = await this.api.Create(this.name, this.info);
-        await this.reload(note);
-        await this.dialogs.info("Note has been successfully added.");
-      } else if (this.selected) {
-        const note = await this.api.Save(this.selected.id, this.name, this.info);
-        await this.reload(note);
-        await this.dialogs.info("Note has been successfully updated.");
-      }
-    } catch (e) {
-      await this.dialogs.error(parseError(e).message);
-    }
+    const creating = this.mode === "new";
+    const id = this.selected?.id;
+    if (!creating && !id) return;
+    await this.exclusive(async () => {
+      const note = creating ? await this.api.Create(this.name, this.info) : await this.api.Save(id!, this.name, this.info);
+      await this.reload(note);
+    }, creating ? "Note has been successfully added." : "Note has been successfully updated.");
   }
 
   async remove(): Promise<void> {
     const note = this.selected;
     if (!note || !this.buttons.delete) return;
     if (!(await this.dialogs.ask("Are you sure you want to remove this note?"))) return;
-    try {
+    await this.exclusive(async () => {
       await this.api.Delete(note.id);
       this.selected = undefined;
       await this.load();
-      await this.dialogs.info("Note has been successfully removed.");
-    } catch (e) {
-      await this.dialogs.error(parseError(e).message);
-    }
+    }, "Note has been successfully removed.");
   }
 
   /** useVersion puts an old text into the editor; only Apply saves it. */
   useVersion(info: string): void {
+    if (this.busy) return;
     this.info = info;
+  }
+
+  /**
+   * exclusive runs call with the editor locked, so that nothing typed or
+   * selected meanwhile is replaced by the answer, then shows done or the error.
+   */
+  private async exclusive(call: () => Promise<void>, done: string): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    let message: string | undefined;
+    try {
+      await call();
+    } catch (e) {
+      message = parseError(e).message;
+    } finally {
+      this.busy = false;
+    }
+    await (message === undefined ? this.dialogs.info(done) : this.dialogs.error(message));
   }
 
   private async reload(saved: NoteDTO): Promise<void> {
