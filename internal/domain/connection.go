@@ -7,8 +7,13 @@ import (
 	"strconv"
 )
 
-// DefaultDBHost is the database host used when settings leave it empty.
-const DefaultDBHost = "127.0.0.1"
+// Values used when settings leave a field empty; the settings form shows
+// them as placeholders.
+const (
+	DefaultDBHost  = "127.0.0.1"
+	DefaultSSHPort = 22
+	DefaultDBPort  = 5432
+)
 
 // ConnectionSettings describe the SSH server and the PostgreSQL database
 // reachable from it. Either all required fields are set, or none.
@@ -93,10 +98,23 @@ func (s ConnectionSettings) GoString() string { return s.String() }
 // LogValue keeps slog output as redacted as String.
 func (s ConnectionSettings) LogValue() slog.Value { return slog.StringValue(s.String()) }
 
-// WithDefaults returns s with an empty DBHost set to DefaultDBHost, unless s is empty.
+// WithDefaults returns s with an empty DBHost, SSHPort and DBPort set to
+// their defaults, unless s is empty. An invalid port is kept for Validate.
 func (s ConnectionSettings) WithDefaults() ConnectionSettings {
-	if !s.IsEmpty() && s.DBHost == "" {
+	if s.IsEmpty() {
+		return s
+	}
+
+	if s.DBHost == "" {
 		s.DBHost = DefaultDBHost
+	}
+
+	if s.SSHPort == 0 {
+		s.SSHPort = DefaultSSHPort
+	}
+
+	if s.DBPort == 0 {
+		s.DBPort = DefaultDBPort
 	}
 
 	return s

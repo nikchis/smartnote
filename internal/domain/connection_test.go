@@ -87,18 +87,33 @@ func TestConnectionSettings_Validate(t *testing.T) {
 
 func TestConnectionSettings_WithDefaults(t *testing.T) {
 	tests := []struct {
-		name       string
-		settings   ConnectionSettings
-		wantDBHost string
+		name     string
+		settings ConnectionSettings
+		want     ConnectionSettings
 	}{
-		{name: "empty settings stay empty", settings: ConnectionSettings{}, wantDBHost: ""},
-		{name: "missing db host gets default", settings: ConnectionSettings{SSHHost: "h"}, wantDBHost: DefaultDBHost},
-		{name: "db host is kept", settings: ConnectionSettings{SSHHost: "h", DBHost: "::1"}, wantDBHost: "::1"},
+		{name: "empty settings stay empty", settings: ConnectionSettings{}, want: ConnectionSettings{}},
+		{
+			name:     "missing db host and ports get defaults",
+			settings: ConnectionSettings{SSHHost: "h"},
+			want:     ConnectionSettings{SSHHost: "h", SSHPort: DefaultSSHPort, DBHost: DefaultDBHost, DBPort: DefaultDBPort},
+		},
+		{
+			name:     "set values are kept",
+			settings: ConnectionSettings{SSHHost: "h", SSHPort: 2222, DBHost: "::1", DBPort: 6432},
+			want:     ConnectionSettings{SSHHost: "h", SSHPort: 2222, DBHost: "::1", DBPort: 6432},
+		},
+		{
+			name:     "invalid ports stay invalid",
+			settings: ConnectionSettings{SSHHost: "h", SSHPort: -1, DBPort: -1},
+			want:     ConnectionSettings{SSHHost: "h", SSHPort: -1, DBHost: DefaultDBHost, DBPort: -1},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.settings.WithDefaults().DBHost; got != tt.wantDBHost {
-				t.Errorf("WithDefaults().DBHost = %q, want %q", got, tt.wantDBHost)
+			if got := tt.settings.WithDefaults(); got != tt.want {
+				// %v of ConnectionSettings is redacted, so print the fields under test.
+				t.Errorf("WithDefaults() = {SSHPort: %d, DBHost: %q, DBPort: %d}, want {SSHPort: %d, DBHost: %q, DBPort: %d}",
+					got.SSHPort, got.DBHost, got.DBPort, tt.want.SSHPort, tt.want.DBHost, tt.want.DBPort)
 			}
 		})
 	}

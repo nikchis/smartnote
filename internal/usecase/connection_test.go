@@ -108,18 +108,20 @@ func TestConnectionTestEmpty(t *testing.T) {
 	}
 }
 
-func TestConnectionTestDefaultsDBHost(t *testing.T) {
+func TestConnectionTestAppliesDefaults(t *testing.T) {
 	srv := &fakeServer{}
 	c, _, _ := newTestConnection(t, domain.ConnectionSettings{}, srv)
 	s := completeSettings()
-	s.DBHost = ""
+	s.DBHost, s.SSHPort, s.DBPort = "", 0, 0
 
 	if _, err := c.Test(context.Background(), s); err != nil {
-		t.Fatalf("Test: %v", err)
+		t.Fatalf("Test with empty ports and db host: %v", err)
 	}
 
-	if got := srv.settings[0].DBHost; got != domain.DefaultDBHost {
-		t.Errorf("Open got DBHost %q, want %q", got, domain.DefaultDBHost)
+	got := srv.settings[0]
+	if got.DBHost != domain.DefaultDBHost || got.SSHPort != domain.DefaultSSHPort || got.DBPort != domain.DefaultDBPort {
+		t.Errorf("Open got DBHost %q, SSHPort %d, DBPort %d; want %q, %d, %d",
+			got.DBHost, got.SSHPort, got.DBPort, domain.DefaultDBHost, domain.DefaultSSHPort, domain.DefaultDBPort)
 	}
 }
 
@@ -127,7 +129,7 @@ func TestConnectionTestValidates(t *testing.T) {
 	srv := &fakeServer{}
 	c, _, _ := newTestConnection(t, domain.ConnectionSettings{}, srv)
 	s := completeSettings()
-	s.SSHPort = 0
+	s.SSHPort = -1 // the form's value for a port that is not 1-65535
 
 	_, err := c.Test(context.Background(), s)
 	assertField(t, err, "ssh_port")
@@ -179,7 +181,7 @@ func TestConnectionTestBusy(t *testing.T) {
 func TestSaveRejectsInvalid(t *testing.T) {
 	c, settings, _ := newTestConnection(t, domain.ConnectionSettings{}, &fakeServer{})
 	s := completeSettings()
-	s.DBPort = 0
+	s.DBPort = -1
 
 	assertField(t, c.Save(context.Background(), s), "db_port")
 
@@ -188,17 +190,19 @@ func TestSaveRejectsInvalid(t *testing.T) {
 	}
 }
 
-func TestSaveDefaultsDBHost(t *testing.T) {
+func TestSaveAppliesDefaults(t *testing.T) {
 	c, settings, _ := newTestConnection(t, domain.ConnectionSettings{}, &fakeServer{})
 	s := completeSettings()
-	s.DBHost = ""
+	s.DBHost, s.SSHPort, s.DBPort = "", 0, 0
 
 	if err := c.Save(context.Background(), s); err != nil {
-		t.Fatalf("Save: %v", err)
+		t.Fatalf("Save with empty ports and db host: %v", err)
 	}
 
-	if got := settings.s.DBHost; got != domain.DefaultDBHost {
-		t.Errorf("saved DBHost %q, want %q", got, domain.DefaultDBHost)
+	got := settings.s
+	if got.DBHost != domain.DefaultDBHost || got.SSHPort != domain.DefaultSSHPort || got.DBPort != domain.DefaultDBPort {
+		t.Errorf("saved DBHost %q, SSHPort %d, DBPort %d; want %q, %d, %d",
+			got.DBHost, got.SSHPort, got.DBPort, domain.DefaultDBHost, domain.DefaultSSHPort, domain.DefaultDBPort)
 	}
 }
 
@@ -394,7 +398,7 @@ func TestSettingsWritesResetConnection(t *testing.T) {
 	}
 
 	s := completeSettings()
-	s.SSHPort = 0
+	s.SSHPort = -1
 	_ = c.Save(ctx, s)
 
 	if *resets != 3 {
