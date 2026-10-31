@@ -22,6 +22,9 @@ const keyComment = "smartnote"
 // minRSABits is the smallest RSA key accepted on import (NIST SP 800-131A).
 const minRSABits = 2048
 
+// fieldKeyFile names the imported key file in validation errors.
+const fieldKeyFile = "key_file"
+
 // KeyTool creates and parses client SSH keys. It implements usecase.KeyTool.
 type KeyTool struct{}
 
@@ -72,10 +75,10 @@ func (KeyTool) Import(data []byte, passphrase string) (domain.KeyPair, error) {
 func checkStrength(key crypto.PrivateKey) error {
 	switch k := key.(type) {
 	case *dsa.PrivateKey:
-		return &domain.ValidationError{Field: "key_file", Reason: "is a DSA key, which is no longer secure; use Ed25519 or RSA of at least 2048 bits"}
+		return &domain.ValidationError{Field: fieldKeyFile, Reason: "is a DSA key, which is no longer secure; use Ed25519 or RSA of at least 2048 bits"}
 	case *rsa.PrivateKey:
 		if bits := k.N.BitLen(); bits < minRSABits {
-			return &domain.ValidationError{Field: "key_file", Reason: fmt.Sprintf("is an RSA key of %d bits; at least %d are needed", bits, minRSABits)}
+			return &domain.ValidationError{Field: fieldKeyFile, Reason: fmt.Sprintf("is an RSA key of %d bits; at least %d are needed", bits, minRSABits)}
 		}
 	}
 
