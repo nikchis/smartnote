@@ -163,6 +163,7 @@ func TestInTxFailedCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = db.Close() })
 
 	db.SetMaxOpenConns(1)
