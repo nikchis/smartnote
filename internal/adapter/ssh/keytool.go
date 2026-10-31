@@ -2,8 +2,10 @@ package ssh
 
 import (
 	"crypto"
+	"crypto/dsa" //nolint:staticcheck // only to recognize and refuse DSA keys
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -16,6 +18,9 @@ import (
 
 // keyComment is the comment of keys this app writes.
 const keyComment = "smartnote"
+
+// minRSABits is the smallest RSA key accepted on import (NIST SP 800-131A).
+const minRSABits = 2048
 
 // KeyTool creates and parses client SSH keys. It implements usecase.KeyTool.
 type KeyTool struct{}
@@ -51,11 +56,30 @@ func (KeyTool) Import(data []byte, passphrase string) (domain.KeyPair, error) {
 		return domain.KeyPair{}, fmt.Errorf("import key: %w", err)
 	}
 
+	if err := checkStrength(key); err != nil {
+		return domain.KeyPair{}, err
+	}
+
 	if p, ok := key.(*ed25519.PrivateKey); ok {
 		key = *p // MarshalPrivateKey takes the value
 	}
 
 	return pairOf(key)
+}
+
+// checkStrength refuses keys too weak to protect the server: DSA and RSA
+// shorter than minRSABits. Ed25519 and ECDSA keys are accepted.
+func checkStrength(key crypto.PrivateKey) error {
+	switch k := key.(type) {
+	case *dsa.PrivateKey:
+		return &domain.ValidationError{Field: "key_file", Reason: "is a DSA key, which is no longer secure; use Ed25519 or RSA of at least 2048 bits"}
+	case *rsa.PrivateKey:
+		if bits := k.N.BitLen(); bits < minRSABits {
+			return &domain.ValidationError{Field: "key_file", Reason: fmt.Sprintf("is an RSA key of %d bits; at least %d are needed", bits, minRSABits)}
+		}
+	}
+
+	return nil
 }
 
 func pairOf(key crypto.PrivateKey) (domain.KeyPair, error) {
