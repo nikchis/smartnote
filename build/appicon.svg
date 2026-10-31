@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 256 256">
+  <title>Smartnote</title>
+  <defs>
+    <linearGradient id="cover" x1="0" y1="14" x2="0" y2="242" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a06446"/><stop offset="1" stop-color="#84472a"/>
+    </linearGradient>
+    <linearGradient id="spine" x1="0" y1="14" x2="0" y2="242" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343434"/><stop offset="1" stop-color="#1e1e1e"/>
+    </linearGradient>
+    <clipPath id="book"><path d="M 51 14 H 203 C 214 14 223 23 223 34 V 222 C 223 233 214 242 203 242 H 51 C 40 242 31 233 31 222 V 34 C 31 23 40 14 51 14 Z"/></clipPath>
+    <mask id="keyhole" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <rect width="256" height="256" fill="white"/>
+      <path d="M 150 156.5 C 146.4 156.5 143.5 159.4 143.5 163 C 143.5 165.4 144.8 167.5 146.8 168.6 V 182 H 153.2 V 168.6 C 155.2 167.5 156.5 165.4 156.5 163 C 156.5 159.4 153.6 156.5 150 156.5 Z" fill="black"/>
+    </mask>
+  </defs>
+  <g clip-path="url(#book)">
+    <path d="M 51 14 H 203 C 214 14 223 23 223 34 V 222 C 223 233 214 242 203 242 H 51 C 40 242 31 233 31 222 V 34 C 31 23 40 14 51 14 Z" fill="url(#cover)"/>
+    <rect x="31" y="14" width="46" height="228" fill="url(#spine)"/>
+    <path d="M 127 14 H 172 V 92 L 149.5 78 L 127 92 Z" fill="#df9e25"/>
+  </g>
+  <g fill="#2c2c2b" mask="url(#keyhole)">
+    <path d="M 126 141 V 131 C 126 118 136.5 107.5 149.5 107.5 C 162.5 107.5 173 118 173 131 V 148 H 163 V 131 C 163 123.5 157 117.5 149.5 117.5 C 142 117.5 136 123.5 136 131 V 141 Z"/>
+    <path d="M 118 148 H 182 V 188 H 118 Z"/>
+  </g>
+</svg>
