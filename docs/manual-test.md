@@ -11,7 +11,7 @@ Remove `~/.local/share/smartnote` before scenario 1 to start without a storage.
 
 | # | Scenario | Steps | Expected | .deb | AppImage |
 |---|---|---|---|---|---|
-| 1 | First start | Start Smartnote. Type a 5-character password twice; then 6 characters with a different confirmation; then 6 equal characters and press **Create storage**. | The New storage screen opens. **Create storage** is inactive for 5 characters and for different inputs, active for 6–64 equal ones. After creation the Main screen opens with an empty list. | not run | pass |
+| 1 | First start | Start Smartnote. Type a 5-character password twice; then 6 characters with a different confirmation; then 6 equal characters and press **Create storage**. | The New storage screen opens. **Create storage** is inactive for 5 characters and for different inputs, active for 6–64 equal ones. After creation the Main screen opens with an empty list. | pass (installed with `apt install` in a clean `ubuntu:26.04`) | pass |
 | 2 | Unlock | Quit and start again. Enter a wrong password and press Enter; then the right one. | Wrong: "Access to local storage denied.", the field is cleared. Right: the Main screen with the notes. | not run | pass |
 | 3 | New and Cancel | **New** → **Cancel** without typing. **New**, type only a name → **Cancel**. **New**, type a name and a text → **Apply**. | During New only **Cancel** is active (Apply needs both fields); the list, New and Delete are inactive. Cancel returns to the previous state. Apply shows "Note has been successfully added." and the note appears in the list. | not run | pass |
 | 4 | Edit and History | Change the text of a note → **Apply**. **History** → choose the version → **Use** → **Apply**. | "Note has been successfully updated." History lists the previous text with its date; Use puts it into the editor without saving; Apply saves it and History now has one more version. | not run | pass |
@@ -38,7 +38,8 @@ Tested by: Claude Code (scripted run) Date: 2026-10-31 Package versions: branch 
 
 How: the AppImage in a clean `ubuntu:26.04` container under Xvfb with openbox, driven by `xdotool`,
 checked on screenshots; the server was the OpenSSH test image and `postgres:17-alpine` sharing its
-network namespace. The `.deb` was not installed. Scenario 20 was not run; the break during Backup
+network namespace. The `.deb` was installed in a clean `ubuntu:26.04` container and checked with
+scenario 1 only. Scenario 20 was not run; the break during Backup
 is covered by the integration test `TestBackupCommitAckLost` and the use case tests (Review Focus 3).
 
 Failures and notes:
