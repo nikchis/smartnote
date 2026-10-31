@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { answer, currentDialog } from "../lib/dialogs.svelte";
+  import { answer, currentDialog, dismiss } from "../lib/dialogs.svelte";
   import { modal } from "../lib/modal";
 
   const dialog = $derived(currentDialog());
@@ -13,11 +13,11 @@
     if (!dialog) return;
     if (e.key === "Escape") {
       e.preventDefault();
-      answer(false);
+      dismiss();
     }
   }
 
-  const titles = { info: "Information", error: "Error", ask: "Question" } as const;
+  const titles = { info: "Information", error: "Error", ask: "Question", choose: "Question" } as const;
 </script>
 
 <svelte:window {onkeydown} />
@@ -28,11 +28,14 @@
       <h2 id="dialog-title" class={dialog.kind}>{titles[dialog.kind]}</h2>
       <p id="dialog-message">{dialog.message}</p>
       <div class="buttons">
-        {#if dialog.kind === "ask"}
-          <button bind:this={primary} onclick={() => answer(true)}>Yes</button>
-          <button onclick={() => answer(false)}>No</button>
+        {#if dialog.kind === "ask" || dialog.kind === "choose"}
+          <button bind:this={primary} onclick={() => answer("yes")}>Yes</button>
+          <button onclick={() => answer("no")}>No</button>
+          {#if dialog.kind === "choose"}
+            <button onclick={() => answer("cancel")}>Cancel</button>
+          {/if}
         {:else}
-          <button bind:this={primary} onclick={() => answer(true)}>OK</button>
+          <button bind:this={primary} onclick={() => answer("yes")}>OK</button>
         {/if}
       </div>
     </div>

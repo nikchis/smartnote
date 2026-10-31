@@ -9,6 +9,7 @@ func TestLifecycle(t *testing.T) {
 	var requests, shutdowns int
 
 	l := NewLifecycle(func() { requests++ }, func() { shutdowns++ })
+	l.Ready()
 
 	if l.OnQuitRequested() {
 		t.Error("first OnQuitRequested = true, want false: the UI must ask first")
@@ -30,6 +31,31 @@ func TestLifecycle(t *testing.T) {
 
 	if requests != 1 {
 		t.Errorf("requestClose calls = %d, want 1: quitting is already allowed", requests)
+	}
+}
+
+// TestLifecycleQuitsBeforeUIReady: until the interface has subscribed to the
+// close request, nothing would answer it, so closing the window is allowed
+// at once instead of being canceled forever.
+func TestLifecycleQuitsBeforeUIReady(t *testing.T) {
+	var requests, shutdowns int
+
+	l := NewLifecycle(func() { requests++ }, func() { shutdowns++ })
+
+	if !l.OnQuitRequested() {
+		t.Error("OnQuitRequested before Ready = false, want true: no interface would answer")
+	}
+
+	if !l.OnAppQuit(false) {
+		t.Error("OnAppQuit before Ready = false, want true")
+	}
+
+	if requests != 0 {
+		t.Errorf("requestClose calls = %d, want 0", requests)
+	}
+
+	if shutdowns != 0 {
+		t.Errorf("shutdown calls = %d, want 0: Wails quits after the last window closes", shutdowns)
 	}
 }
 
@@ -134,6 +160,7 @@ func TestLifecycleOrdinaryAppQuitAsks(t *testing.T) {
 	var requests int
 
 	l := NewLifecycle(func() { requests++ }, func() {})
+	l.Ready()
 
 	if l.OnAppQuit(false) {
 		t.Error("OnAppQuit for Cmd+Q = true, want false: the UI must ask first")

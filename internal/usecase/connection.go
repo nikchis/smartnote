@@ -64,6 +64,7 @@ func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res
 	}
 	defer leave()
 
+	s = s.WithDefaults()
 	if err := s.Validate(); err != nil {
 		return TestResult{}, err
 	}
@@ -72,7 +73,7 @@ func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res
 		return TestResult{}, fmt.Errorf("test connection: %w", domain.ErrNotConnected)
 	}
 
-	sess, err := c.remote.Open(ctx, s.WithDefaults(), OpenCheck)
+	sess, err := c.remote.Open(ctx, s, OpenCheck)
 	if err != nil {
 		c.offer.remember(err)
 		return TestResult{}, fmt.Errorf("test connection: %w", err)
@@ -86,12 +87,13 @@ func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res
 // address than s's is dropped, so the user is asked again. Empty settings are
 // allowed and switch the app to local-only work.
 func (c *Connection) Save(ctx context.Context, s domain.ConnectionSettings) error {
+	s = s.WithDefaults()
 	if err := s.Validate(); err != nil {
 		return err
 	}
 
 	return c.write(func() error {
-		if err := c.settings.SaveSettings(ctx, s.WithDefaults().WithoutStaleTrust()); err != nil {
+		if err := c.settings.SaveSettings(ctx, s.WithoutStaleTrust()); err != nil {
 			return fmt.Errorf("save settings: %w", err)
 		}
 
@@ -124,7 +126,8 @@ func (c *Connection) TrustHostKey(ctx context.Context, fingerprint string) error
 // at s's address last presented as unknown, for the settings dialog, which
 // saves it only on OK. Nothing is saved here.
 func (c *Connection) TrustOfferedKey(fingerprint string, s domain.ConnectionSettings) (domain.ConnectionSettings, error) {
-	offer, err := c.offer.take(fingerprint, s.SSHAddr())
+	// The dialog may leave the port empty; the key was offered for the default.
+	offer, err := c.offer.take(fingerprint, s.WithDefaults().SSHAddr())
 	if err != nil {
 		return domain.ConnectionSettings{}, err
 	}

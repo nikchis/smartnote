@@ -54,7 +54,8 @@ class FakeApi implements SyncApi {
 
 class FakeDialogs implements Dialogs {
   log: string[] = [];
-  answers: boolean[] = [];
+  /** answers for ask and choose in order; true is Yes, false is No. */
+  answers: (boolean | "cancel")[] = [];
   async info(msg: string) {
     this.log.push(`info: ${msg}`);
   }
@@ -63,7 +64,12 @@ class FakeDialogs implements Dialogs {
   }
   async ask(msg: string) {
     this.log.push(`ask: ${msg}`);
-    return this.answers.shift() ?? false;
+    return this.answers.shift() === true;
+  }
+  async choose(msg: string) {
+    this.log.push(`ask: ${msg}`);
+    const a = this.answers.shift() ?? false;
+    return a === "cancel" ? "cancel" : a ? "yes" : "no";
   }
   questions() {
     return this.log.filter((l) => l.startsWith("ask: ")).map((l) => l.slice(5));
@@ -272,6 +278,17 @@ describe("closeFlow", () => {
     expect(api.calls).toEqual(["prepareBackup", "commitBackup"]);
     expect(d.log.at(-1)).toBe("info: Data successfully synchronized.");
     expect(quits).toBe(1);
+  });
+
+  it("Cancel on the save question keeps the window without Backup", async () => {
+    api.st = { ...api.st, dirty: true };
+    d.answers = ["cancel"];
+
+    await closeFlow(api, d, quit);
+
+    expect(d.questions()).toEqual(["Would you like to save your data changes to remote database?"]);
+    expect(api.calls).toEqual([]);
+    expect(quits).toBe(0);
   });
 
   it("no to saving quits without Backup", async () => {

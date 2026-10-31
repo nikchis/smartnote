@@ -34,14 +34,7 @@ func (t *ChangeTracker) setOnChange(f func()) {
 // write reports a change without an error, the generation grows and the flag
 // is set before the lock is released.
 func (t *ChangeTracker) Edit(write func() (changed bool, err error)) error {
-	t.edit.Lock()
-
-	changed, err := write()
-	if err == nil && changed {
-		t.set(func() { t.gen++; t.dirty = true })
-	}
-	t.edit.Unlock()
-
+	changed, err := t.editLocked(write)
 	if err == nil && changed {
 		t.notify()
 	}
@@ -49,27 +42,51 @@ func (t *ChangeTracker) Edit(write func() (changed bool, err error)) error {
 	return err
 }
 
+// editLocked runs write under the edit lock and records a change before the
+// lock is released. The deferred unlock also covers a panic in write.
+func (t *ChangeTracker) editLocked(write func() (bool, error)) (bool, error) {
+	t.edit.Lock()
+	defer t.edit.Unlock()
+
+	changed, err := write()
+	if err == nil && changed {
+		t.set(func() { t.gen++; t.dirty = true })
+	}
+
+	return changed, err
+}
+
 // ApplyIfUnchanged runs apply with no local write in progress, provided the
 // generation is still gen, and then clears the flag. Otherwise it returns
 // domain.ErrLocalChanged without running apply.
 func (t *ChangeTracker) ApplyIfUnchanged(gen uint64, apply func() error) error {
+	if err := t.applyLocked(gen, apply); err != nil {
+		return err
+	}
+
+	t.notify()
+
+	return nil
+}
+
+// applyLocked runs apply under the edit lock if the generation is still gen
+// and clears the flag before the lock is released. The deferred unlock also
+// covers a panic in apply.
+func (t *ChangeTracker) applyLocked(gen uint64, apply func() error) error {
 	t.edit.Lock()
+	defer t.edit.Unlock()
+
 	if t.Generation() != gen {
-		t.edit.Unlock()
 		return domain.ErrLocalChanged
 	}
 
-	err := apply()
-	if err == nil {
-		t.set(func() { t.dirty = false })
-	}
-	t.edit.Unlock()
-
-	if err == nil {
-		t.notify()
+	if err := apply(); err != nil {
+		return err
 	}
 
-	return err
+	t.set(func() { t.dirty = false })
+
+	return nil
 }
 
 // MarkChanged records a local edit made without Edit: the generation grows
