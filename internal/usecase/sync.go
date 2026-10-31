@@ -228,7 +228,7 @@ func (s *Sync) afterRemote(err error) {
 // changed host key, or an SSH or database error. Errors of the local storage,
 // a canceled operation and the domain errors a reachable server returns do not.
 func disconnects(err error) bool {
-	if _, ok := errors.AsType[localError](err); ok {
+	if _, ok := errors.AsType[LocalError](err); ok {
 		return false
 	}
 
@@ -257,12 +257,13 @@ func disconnects(err error) bool {
 	return true
 }
 
-// localError marks an error of the local storage, which says nothing about
-// the server.
-type localError struct{ err error }
+// LocalError marks an error of the local storage, which says nothing about
+// the server: it does not disconnect. Adapters that read local data while
+// talking to the server wrap such errors in it.
+type LocalError struct{ Err error }
 
-func (e localError) Error() string { return e.err.Error() }
-func (e localError) Unwrap() error { return e.err }
+func (e LocalError) Error() string { return e.Err.Error() }
+func (e LocalError) Unwrap() error { return e.Err }
 
 // ResetConnection forgets what the last operation learned about the server:
 // the connection settings or the trusted key changed.
@@ -348,7 +349,7 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 	if !Diff(local.Notes, remote.Notes) {
 		if stored.ServerID != remote.ServerID || stored.Revision != remote.Revision {
 			if err := s.d.Local.SetSyncState(ctx, remote.ServerID, remote.Revision); err != nil {
-				return ConnectOutcome{}, fmt.Errorf("align revision: %w", localError{err})
+				return ConnectOutcome{}, fmt.Errorf("align revision: %w", LocalError{Err: err})
 			}
 		}
 
@@ -376,7 +377,7 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 func (s *Sync) snapshots(ctx context.Context, sess RemoteSession) (LocalSnapshot, RemoteSnapshot, error) {
 	local, err := s.d.Local.LocalSnapshot(ctx)
 	if err != nil {
-		return LocalSnapshot{}, RemoteSnapshot{}, fmt.Errorf("local snapshot: %w", localError{err})
+		return LocalSnapshot{}, RemoteSnapshot{}, fmt.Errorf("local snapshot: %w", LocalError{Err: err})
 	}
 
 	remote, err := sess.Snapshot(ctx)
@@ -482,7 +483,7 @@ func (s *Sync) backup(ctx context.Context, sess RemoteSession, plan BackupPlan) 
 	defer cancel()
 
 	if err := s.d.Local.SetSyncState(lctx, plan.ServerID, rev); err != nil {
-		return fmt.Errorf("store revision: %w", localError{err})
+		return fmt.Errorf("store revision: %w", LocalError{Err: err})
 	}
 
 	s.d.Changes.ClearIf(plan.Generation)
@@ -571,7 +572,7 @@ func (s *Sync) CommitRestore(ctx context.Context) error {
 func (s *Sync) open(ctx context.Context, mode OpenMode) (RemoteSession, error) {
 	settings, err := s.d.Settings.LoadSettings(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load settings: %w", localError{err})
+		return nil, fmt.Errorf("load settings: %w", LocalError{Err: err})
 	}
 
 	if settings.IsEmpty() {

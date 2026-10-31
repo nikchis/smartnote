@@ -289,6 +289,51 @@ func TestOpenRefusesInvalidSettings(t *testing.T) {
 	}
 }
 
+// failingKeys is a KeyLoader whose local storage fails.
+type failingKeys struct{ err error }
+
+func (k failingKeys) LoadKey(context.Context) (domain.KeyPair, bool, error) {
+	return domain.KeyPair{}, false, k.err
+}
+
+// TestOpenLocalKeyErrorIsLocal: a key that cannot be read from the local
+// storage says nothing about the server, so it must reach usecase as a
+// LocalError, which does not disconnect.
+func TestOpenLocalKeyErrorIsLocal(t *testing.T) {
+	errLocked := errors.New("storage is locked")
+
+	tests := []struct {
+		name   string
+		keys   KeyLoader
+		target error
+	}{
+		{name: "load fails", keys: failingKeys{err: errLocked}, target: errLocked},
+		{name: "unreadable key", keys: staticKeys{key: domain.KeyPair{PrivatePEM: []byte("not a key")}, has: true}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := NewConnector(tc.keys)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = c.Open(context.Background(), sshSettings(t, "127.0.0.1:22", ""), usecase.OpenCheck)
+			if err == nil {
+				t.Fatal("Open = nil error, want the key error")
+			}
+
+			if _, ok := errors.AsType[usecase.LocalError](err); !ok {
+				t.Errorf("Open = %v, want a usecase.LocalError", err)
+			}
+
+			if tc.target != nil && !errors.Is(err, tc.target) {
+				t.Errorf("Open = %v, want it to wrap %v", err, tc.target)
+			}
+		})
+	}
+}
+
 func TestDialSSHTransportErrors(t *testing.T) {
 	srv := newTestServer(t, nil)
 

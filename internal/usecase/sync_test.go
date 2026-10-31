@@ -709,6 +709,28 @@ func TestRestoreAbortsOnSnapshotError(t *testing.T) {
 	}
 }
 
+// TestLocalOpenErrorKeepsConnected: an error the connector marks LocalError
+// (the local SSH key cannot be read) says nothing about the server.
+func TestLocalOpenErrorKeepsConnected(t *testing.T) {
+	srv := &fakeServer{serverID: serverA}
+	f := newSyncFixture(t, LocalSnapshot{}, srv)
+	ctx := context.Background()
+
+	if _, err := f.sync.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	srv.openErr = LocalError{Err: errors.New("load ssh key: storage is locked")}
+
+	if _, err := f.sync.PrepareBackup(ctx); err == nil {
+		t.Fatal("PrepareBackup = nil error, want the local error")
+	}
+
+	if !f.sync.State().Connected {
+		t.Error("Connected = false after a local error: the server was not reached")
+	}
+}
+
 func TestWrongPhraseKeepsConnectedFalseNoWrites(t *testing.T) {
 	srv := &fakeServer{openErr: domain.ErrWrongSyncPhrase}
 	f := newSyncFixture(t, LocalSnapshot{Notes: []domain.Note{note(1, "a", "x")}}, srv)
