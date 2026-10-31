@@ -288,3 +288,47 @@ func TestOpenRefusesInvalidSettings(t *testing.T) {
 		t.Errorf("Open = %v, want a validation error before connecting", err)
 	}
 }
+
+func TestDialSSHTransportErrors(t *testing.T) {
+	srv := newTestServer(t, nil)
+
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	closedAddr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	wrongPassword := sshSettings(t, srv.addr, srv.authorizedKey())
+	wrongPassword.SSHPassword = "wrong"
+
+	tests := []struct {
+		name string
+		s    domain.ConnectionSettings
+	}{
+		{name: "closed port", s: sshSettings(t, closedAddr, "")},
+		{name: "wrong password", s: wrongPassword},
+		{name: "unknown host key", s: sshSettings(t, srv.addr, "")},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := dialSSH(context.Background(), tc.s, nil)
+			if err == nil {
+				t.Fatal("dialSSH succeeded")
+			}
+
+			te, ok := errors.AsType[*TransportError](err)
+			if !ok {
+				t.Fatalf("dialSSH = %v (%T), want *TransportError", err, err)
+			}
+
+			if te.Error() != te.Err.Error() {
+				t.Errorf("Error() = %q, want the wrapped text %q", te.Error(), te.Err.Error())
+			}
+		})
+	}
+}

@@ -44,6 +44,16 @@ tasks:
       - task: linux:create:appimage
       - task: linux:create:deb
 
+  package:windows:
+    summary: Builds the NSIS installer (on Windows, with makensis on PATH)
+    cmds:
+      - task: windows:package
+
+  package:darwin:
+    summary: Builds the .app bundle and the .dmg (on macOS)
+    cmds:
+      - task: darwin:package:dmg
+
   smoke:appimage:
     summary: Starts the AppImage in a clean ubuntu:26.04 container under Xvfb
     preconditions:

@@ -120,7 +120,17 @@ func openDatabase(ctx context.Context, s domain.ConnectionSettings, client *goss
 // dialSSH opens TCP and runs the SSH handshake within handshakeTimeout and
 // ctx. It authenticates with signer when given, then with the password. Only
 // a key trusted for this address is compared; any other is reported unknown.
+// Every error is a *TransportError.
 func dialSSH(ctx context.Context, s domain.ConnectionSettings, signer gossh.Signer) (*gossh.Client, error) {
+	client, err := handshake(ctx, s, signer)
+	if err != nil {
+		return nil, &TransportError{Err: err}
+	}
+
+	return client, nil
+}
+
+func handshake(ctx context.Context, s domain.ConnectionSettings, signer gossh.Signer) (*gossh.Client, error) {
 	addr := s.SSHAddr()
 
 	var auth []gossh.AuthMethod
@@ -192,3 +202,11 @@ func closeClient(client *gossh.Client) error {
 
 	return nil
 }
+
+// TransportError marks a failure of the SSH connection itself: TCP, the
+// handshake, the host key check or the authentication. Its text is the
+// wrapped error's; the UI reports it with code ssh.
+type TransportError struct{ Err error }
+
+func (e *TransportError) Error() string { return e.Err.Error() }
+func (e *TransportError) Unwrap() error { return e.Err }
