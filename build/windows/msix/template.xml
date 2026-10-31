@@ -10,15 +10,15 @@
     <Installer
         Path="smartnote"
         Arguments=""
-        InstallLocation="C:\Program Files\My Company\Smartnote">
+        InstallLocation="C:\Program Files\Nikita Chisnikov\Smartnote">
     </Installer>
     <PackageInformation
         PackageName="Smartnote"
         PackageDisplayName="Smartnote"
-        PublisherName="CN=My Company"
-        PublisherDisplayName="My Company"
+        PublisherName="CN=Nikita Chisnikov"
+        PublisherDisplayName="Nikita Chisnikov"
         Version="2.0.0.0"
-        PackageDescription="A smartnote application">
+        PackageDescription="A notepad for private records">
         <Capabilities>
             <Capability Name="runFullTrust" />
             
@@ -26,7 +26,7 @@
         <Applications>
             <Application
                 Id="com.nikchis.smartnote"
-                Description="A smartnote application"
+                Description="A notepad for private records"
                 DisplayName="Smartnote"
                 ExecutableName="smartnote"
                 EntryPoint="Windows.FullTrustApplication">
@@ -42,8 +42,8 @@
         <Properties>
             <Framework>false</Framework>
             <DisplayName>Smartnote</DisplayName>
-            <PublisherDisplayName>My Company</PublisherDisplayName>
-            <Description>A smartnote application</Description>
+            <PublisherDisplayName>Nikita Chisnikov</PublisherDisplayName>
+            <Description>A notepad for private records</Description>
             <Logo>Assets\AppIcon.png</Logo>
         </Properties>
     </PackageInformation>

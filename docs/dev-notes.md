@@ -30,8 +30,18 @@ and what the three delivery-risk checks showed. Date: 2026-10-30, Ubuntu 26.04, 
   (some ship `.go` files).
 - The root `Taskfile.yml` defines `MAIN_PKG: ./cmd/smartnote`; the platform Taskfiles under
   `build/` pass it to `go build` and to `wails3 generate bindings`.
-- Package metadata in `build/config.yml`, `build/linux/nfpm/nfpm.yaml`, `build/darwin/*.plist`
-  and `build/windows/*` is still the template's ("My Company"); it is filled in before release.
+- Package metadata (name, vendor, version, copyright, description) lives in `build/config.yml`;
+  `wails3 task common:update:build-assets` copies it into `build/darwin/*.plist`,
+  `build/windows/info.json`, `build/windows/nsis/wails_tools.nsh`, `build/linux/desktop` and
+  `build/linux/nfpm/nfpm.yaml`. That task rewrites `nfpm.yaml` from the Wails template, which
+  resets `maintainer` (to `${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>`, empty in CI) and
+  `homepage` (to `https://wails.io`): set them back after running it. `build/windows/msix/*.xml`
+  is not generated and is kept by hand. The task also creates `build/ios/`, which the project does
+  not use and does not keep.
+- The icon source is `build/appicon.svg`; `build/appicon.png` is its 1024×1024 rendering, and
+  `common:generate:icons` builds `windows/icon.ico` and `darwin/icons.icns` from that PNG.
+  There is no Icon Composer `Assets.car`: on macOS with actool 26 Wails would rebuild it, and
+  `icons.icns` with it, from `appicon.icon`, so macOS uses `icons.icns` (`CFBundleIconFile`).
 - The template's server-mode tasks (`build:server`, `run:server`, `build:docker`, `run:docker`)
   and `build/docker/Dockerfile.server` are removed: Wails server mode serves the bound services
   over HTTP with no authentication or Origin check, and the spec has no such mode. The unused

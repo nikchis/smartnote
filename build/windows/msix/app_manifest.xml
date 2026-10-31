@@ -9,14 +9,14 @@
   
   <Identity 
     Name="com.nikchis.smartnote"
-    Publisher="CN=My Company"
+    Publisher="CN=Nikita Chisnikov"
     Version="2.0.0.0" 
     ProcessorArchitecture="x64" />
   
   <Properties>
     <DisplayName>Smartnote</DisplayName>
-    <PublisherDisplayName>My Company</PublisherDisplayName>
-    <Description>A smartnote application</Description>
+    <PublisherDisplayName>Nikita Chisnikov</PublisherDisplayName>
+    <Description>A notepad for private records</Description>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
   
@@ -32,7 +32,7 @@
     <Application Id="com.nikchis.smartnote" Executable="smartnote" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="Smartnote"
-        Description="A smartnote application"
+        Description="A notepad for private records"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
