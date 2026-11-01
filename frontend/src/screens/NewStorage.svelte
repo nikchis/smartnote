@@ -30,7 +30,6 @@
 </script>
 
 <form class="card" onsubmit={create}>
-  <h1>Smartnote</h1>
   <p>Create a password for the local storage ({LIMITS.passwordMin}–{LIMITS.passwordMax} characters).</p>
   <label>
     Password

@@ -33,7 +33,6 @@
 </script>
 
 <form class="card" onsubmit={unlock}>
-  <h1>Smartnote</h1>
   <label>
     Password
     <input type="password" bind:this={input} bind:value={password} autocomplete="current-password" />

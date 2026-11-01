@@ -89,6 +89,39 @@ describe("modal", () => {
     m.destroy();
   });
 
+  it("moves the focus to the home element when nothing had the focus before", () => {
+    const home = add('<button data-focus-home id="first">alpha</button>');
+    (document.activeElement as HTMLElement | null)?.blur();
+    const overlay = add('<div class="overlay">Connecting…</div>');
+    modal(overlay).destroy();
+    overlay.remove();
+
+    expect(document.activeElement).toBe(home);
+  });
+
+  it("moves the focus to the home element when the previous one is gone", () => {
+    const home = add('<button data-focus-home id="first">alpha</button>');
+    const overlay = add('<div class="overlay">Connecting…</div>');
+    const o = modal(overlay);
+    const message = add('<div class="backdrop"><button>OK</button></div>');
+    const m = modal(message);
+    o.destroy();
+    overlay.remove();
+    m.destroy();
+    message.remove();
+
+    expect(document.activeElement).toBe(home);
+  });
+
+  it("prefers the previous focus to the home element", () => {
+    add('<button data-focus-home id="first">alpha</button>');
+    const dlg = add('<div class="backdrop"><button>OK</button></div>');
+    modal(dlg).destroy();
+    dlg.remove();
+
+    expect(document.activeElement?.id).toBe("settings");
+  });
+
   it("leaves an element inert that was inert before", () => {
     const aside = add("<aside inert></aside>");
     const m = modal(add('<div class="backdrop"><button>OK</button></div>'));

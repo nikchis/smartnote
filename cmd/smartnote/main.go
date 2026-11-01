@@ -32,6 +32,11 @@ const (
 	appName = "Smartnote"
 	// instanceID identifies Smartnote to Wails' protection against a second instance.
 	instanceID = "com.github.nikchis.smartnote"
+	// linuxAppID is the GTK application id, which Wayland reports as the
+	// window's app_id: desktops match it with the installed .desktop file to
+	// show the logo. It is the macOS bundle id and must differ from instanceID,
+	// because both become D-Bus names owned by the running instance.
+	linuxAppID = "com.nikchis.smartnote"
 )
 
 func main() {
@@ -65,7 +70,7 @@ func run(logger *slog.Logger) error {
 	// instance brings the running window forward and ends here. Taking the
 	// data lock first would let a losing process claim Wails' name before the
 	// winner and end both.
-	app := newApp(lifecycle, assets)
+	app := newApp(lifecycle, assets, logger)
 
 	// The lock comes before anything touches the storage files. It still
 	// fails if the protection above is unavailable or the previous instance
@@ -116,18 +121,20 @@ func run(logger *slog.Logger) error {
 
 // newApp creates the application with its window; services are registered
 // later, once the storage is open.
-func newApp(lifecycle *wailsui.Lifecycle, assets fs.FS) *application.App {
+func newApp(lifecycle *wailsui.Lifecycle, assets fs.FS, logger *slog.Logger) *application.App {
 	var window *application.WebviewWindow
 
 	app := application.New(application.Options{
 		Name:        appName,
 		Description: "Encrypted notes with remote backup",
+		Icon:        appIcon,
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
+		Linux: application.LinuxOptions{ApplicationID: linuxAppID},
 		// The end of a Windows session quits without the close question.
 		Windows: application.WindowsOptions{WndProcInterceptor: lifecycle.OnWindowsMessage},
 		// SIGTERM and SIGINT quit without asking; see quitOnSignal.
@@ -147,10 +154,20 @@ func newApp(lifecycle *wailsui.Lifecycle, assets fs.FS) *application.App {
 	})
 
 	window = app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:  appName,
-		Width:  1000,
-		Height: 640,
-		URL:    "/",
+		Title:     appName,
+		Width:     windowWidth,
+		Height:    windowHeight,
+		MinWidth:  windowMinWidth,
+		MinHeight: windowMinHeight,
+		URL:       "/",
+	})
+	fitToScreen(window)
+
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		// Without the icon the window still works; the failure is only logged.
+		if err := useWindowIcon(); err != nil {
+			logger.Error("window icon", applog.Err(err))
+		}
 	})
 
 	// Closing the window runs the close scenario in the interface first.

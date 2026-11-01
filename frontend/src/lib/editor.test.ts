@@ -73,9 +73,10 @@ beforeEach(async () => {
 });
 
 describe("Editor", () => {
-  it("starts with nothing selected", () => {
-    expect(ed.state.mode).toBe("view");
+  it("selects the first note after loading", () => {
     expect(ed.notes.map((n) => n.name)).toEqual(["alpha", "beta"]);
+    expect(ed.selected?.id).toBe("a");
+    expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "first" });
   });
 
   it("apply in new mode creates the note and selects it", async () => {
@@ -110,13 +111,13 @@ describe("Editor", () => {
     expect(ed.state.mode).toBe("edit");
   });
 
-  it("remove on Yes deletes and clears the selection", async () => {
+  it("remove on Yes deletes and selects the first remaining note", async () => {
     await ed.select("a");
     await ed.remove();
 
     expect(api.calls).toContain("Delete a");
     expect(d.shown).toEqual(["ask: Are you sure you want to remove this note?", "info: Note has been successfully removed."]);
-    expect(ed.state.mode).toBe("view");
+    expect(ed.state).toMatchObject({ mode: "edit", name: "beta" });
     expect(ed.notes.map((n) => n.id)).toEqual(["b"]);
   });
 
@@ -145,6 +146,28 @@ describe("Editor", () => {
     await ed.select("a");
 
     expect(ed.state).toMatchObject({ mode: "new", name: "draft" });
+  });
+
+  it("step moves the selection to the next or previous note and stops at the ends", async () => {
+    await ed.step(1);
+    expect(ed.selected?.id).toBe("b");
+
+    await ed.step(1);
+    expect(ed.selected?.id).toBe("b");
+
+    await ed.step(-1);
+    expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "first" });
+
+    await ed.step(-1);
+    expect(ed.selected?.id).toBe("a");
+  });
+
+  it("step is ignored while a new note is being created", async () => {
+    ed.startNew();
+    await ed.step(1);
+
+    expect(ed.state.mode).toBe("new");
+    expect(ed.selected?.id).toBe("a");
   });
 
   it("cancel in new mode returns to the previous note", async () => {
@@ -181,6 +204,7 @@ describe("Editor", () => {
     await ed.load();
     expect(ed.notes).toEqual([]);
     expect(ed.state.mode).toBe("view");
+    expect(ed.selected).toBeUndefined();
   });
 
   it("load after a Restore drops the edit and keeps an existing selection", async () => {
@@ -255,7 +279,7 @@ describe("Editor", () => {
     release();
     await removing;
     expect(ed.busy).toBe(false);
-    expect(ed.state.mode).toBe("view");
+    expect(ed.selected?.id).toBe("b");
     expect(ed.notes.map((n) => n.id)).toEqual(["b"]);
   });
 });

@@ -75,7 +75,6 @@
   }
   .list button.active {
     background: var(--accent);
-    color: var(--surface);
   }
   .text {
     margin: 0;
@@ -83,9 +82,9 @@
     overflow: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    font: inherit;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg);
+    font: var(--note-font);
+    border: 1px solid var(--field-border);
+    border-radius: 2px;
+    background: var(--field);
   }
 </style>

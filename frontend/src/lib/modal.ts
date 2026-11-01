@@ -32,10 +32,16 @@ function focusInside(node: HTMLElement): void {
   node.focus();
 }
 
+/** focusable tells whether el can take the focus back once a modal goes. */
+function focusable(el: HTMLElement | null | undefined): el is HTMLElement {
+  return !!el && el.isConnected && el !== document.body && !el.closest("[inert]");
+}
+
 /**
  * modal is a Svelte action for the root element of a modal window: while it
  * is mounted, the rest of the window takes no focus, keys or clicks. When it
- * goes, the focus returns to where it was.
+ * goes, the focus returns to where it was; if that is gone or nothing had
+ * the focus, it goes to the element marked data-focus-home, if any.
  */
 export function modal(node: HTMLElement): { destroy(): void } {
   const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -47,7 +53,8 @@ export function modal(node: HTMLElement): { destroy(): void } {
       const i = open.indexOf(node);
       if (i >= 0) open.splice(i, 1);
       refresh();
-      if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
+      const target = focusable(previous) ? previous : document.querySelector<HTMLElement>("[data-focus-home]");
+      if (focusable(target)) target.focus();
     },
   };
 }
