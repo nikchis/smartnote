@@ -1,6 +1,14 @@
 <script lang="ts">
-  // Main lists the notes and edits the selected one (v1 UMain). The bottom
-  // bar starts the actions of task 14 through the props.
+  // Main lists the notes and edits the selected one, laid out as v1 UMain:
+  // the list on the left, the editor group on the right and the status bar
+  // with Save/Restore, the credits, the password key and Settings.
+  import { tick } from "svelte";
+  import historyIcon from "../assets/icons/history.png";
+  import newIcon from "../assets/icons/new.png";
+  import passwordIcon from "../assets/icons/password.png";
+  import removeIcon from "../assets/icons/remove.png";
+  import restoreIcon from "../assets/icons/restore.png";
+  import saveIcon from "../assets/icons/save.png";
   import { NotesService, type StateDTO } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
   import { Editor } from "../lib/editor.svelte";
@@ -19,65 +27,104 @@
   const b = $derived(editor.buttons);
   let showHistory = $state(false);
   let changingPassword = $state(false);
+  let list: HTMLElement | undefined = $state();
 
   /** reload reads the notes again, after a Restore; an unsaved edit is lost. */
   export function reload(): Promise<void> {
     return editor.load();
   }
 
+  /**
+   * focusSelected puts the focus on the selected row. While a modal covers the
+   * window the row is inert; the modal moves the focus there when it closes.
+   */
+  async function focusSelected(): Promise<void> {
+    await tick();
+    const row = list?.querySelector<HTMLElement>("[data-focus-home]");
+    if (row && !row.closest("[inert]")) row.focus();
+  }
+
   $effect(() => {
-    void editor.load();
+    void editor.load().then(focusSelected);
   });
+
+  /** onListKey moves through the list with the arrow keys, as in the v1 grid. */
+  function onListKey(e: KeyboardEvent): void {
+    const delta = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+    if (delta === 0) return;
+    e.preventDefault();
+    void editor.step(delta).then(focusSelected);
+  }
 
   const updated = $derived(editor.mode === "edit" && editor.selected ? new Date(editor.selected.updated).toLocaleString() : "");
 </script>
 
 <div class="main">
-  <aside class="list" aria-label="Notes">
-    <ul>
-      {#each editor.notes as note (note.id)}
-        <li>
-          <button
-            class:active={editor.selected?.id === note.id}
-            disabled={!b.list}
-            onclick={() => editor.select(note.id)}
-          >
-            <span class="name">{note.name}</span>
-            <span class="date">{new Date(note.updated).toLocaleString()}</span>
-          </button>
-        </li>
-      {/each}
-    </ul>
-  </aside>
+  <div class="content">
+    <div class="list" bind:this={list}>
+      <div class="head">Name</div>
+      <ul aria-label="Notes">
+        {#each editor.notes as note (note.id)}
+          {@const active = editor.selected?.id === note.id}
+          <li>
+            <button class:active data-focus-home={active ? "" : undefined} disabled={!b.list} onclick={() => editor.select(note.id)} onkeydown={onListKey}>
+              {note.name}
+            </button>
+          </li>
+        {/each}
+      </ul>
+    </div>
 
-  <section class="editor">
-    <label>
-      Name
-      <input bind:value={editor.name} maxlength={LIMITS.name} disabled={editor.locked} />
-    </label>
-    <label class="grow">
-      Text
-      <textarea bind:value={editor.info} maxlength={LIMITS.info} disabled={editor.locked}></textarea>
-    </label>
-    <div class="meta">
-      <span>{utf16Len(editor.info)}/{LIMITS.info}</span>
-      <span>{updated}</span>
-    </div>
-    <div class="buttons left">
-      <button onclick={() => editor.startNew()} disabled={!b.new}>New</button>
-      <button type="submit" onclick={() => editor.apply()} disabled={!b.apply}>Apply</button>
-      <button onclick={() => editor.cancel()} disabled={!b.cancel}>Cancel</button>
-      <button onclick={() => editor.remove()} disabled={!b.delete}>Delete</button>
-      <button onclick={() => (showHistory = true)} disabled={!b.history}>History</button>
-    </div>
-  </section>
+    <section class="editor">
+      <div class="fields">
+        <label class="name">
+          Name:
+          <input bind:value={editor.name} maxlength={LIMITS.name} disabled={editor.locked} />
+        </label>
+        <label class="muted">
+          Updated:
+          <input class="updated" value={updated} readonly tabindex="-1" />
+        </label>
+        <label class="muted">
+          Length:
+          <input class="length" value="{utf16Len(editor.info)}/{LIMITS.info}" readonly tabindex="-1" />
+        </label>
+        <button class="history" onclick={() => (showHistory = true)} disabled={!b.history}>
+          <img src={historyIcon} alt="" />History
+        </button>
+      </div>
+      <textarea bind:value={editor.info} maxlength={LIMITS.info} disabled={editor.locked} aria-label="Text"></textarea>
+      <div class="actions">
+        <button class="apply" type="submit" onclick={() => editor.apply()} disabled={!b.apply}>Apply changes</button>
+        <div class="center">
+          <button title="Add a new note" onclick={() => editor.startNew()} disabled={!b.new}>
+            <img src={newIcon} alt="" />New
+          </button>
+          <button title="Remove current note" onclick={() => editor.remove()} disabled={!b.delete}>
+            <img src={removeIcon} alt="" />Remove
+          </button>
+        </div>
+        <button class="cancel" onclick={() => editor.cancel()} disabled={!b.cancel}>Cancel changes</button>
+      </div>
+    </section>
+  </div>
 
   <footer class="bar">
-    <button onclick={() => (changingPassword = true)}>Change password</button>
-    <button onclick={onSettings}>Settings</button>
+    <button title="Save data to remote storage" onclick={onBackup} disabled={!sync.connected || !sync.dirty || sync.busy}>
+      <img class="mono" src={saveIcon} alt="" />Save
+    </button>
+    <button title="Restore data from remote storage" onclick={onRestore} disabled={!sync.connected || !sync.restoreAvailable || sync.busy}>
+      <img class="mono" src={restoreIcon} alt="" />Restore
+    </button>
     <span class="spacer"></span>
-    <button onclick={onBackup} disabled={!sync.connected || !sync.dirty || sync.busy}>Backup</button>
-    <button onclick={onRestore} disabled={!sync.connected || !sync.restoreAvailable || sync.busy}>Restore</button>
+    <span class="credit">MIT License</span>
+    <span class="credit">© Nikita Chisnikov, 2015–2026</span>
+    <span class="credit">github.com/nikchis/smartnote</span>
+    <span class="spacer"></span>
+    <button title="Set new password" aria-label="Set new password" onclick={() => (changingPassword = true)}>
+      <img src={passwordIcon} alt="" />
+    </button>
+    <button title="Connection settings" onclick={onSettings}>Settings</button>
   </footer>
 </div>
 
@@ -101,75 +148,161 @@
     width: 100%;
     height: 100%;
     display: grid;
-    grid-template-columns: 16rem 1fr;
     grid-template-rows: 1fr auto;
   }
-  .list {
-    overflow: auto;
-    border-right: 1px solid var(--border);
-    background: var(--surface);
-  }
-  .list ul {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .list button {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.1rem;
-    border: none;
-    border-radius: 0;
-    border-bottom: 1px solid var(--border);
-    background: none;
-    text-align: left;
-  }
-  .list button.active {
-    background: var(--accent);
-    color: var(--surface);
-  }
-  .list .name {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .list .date {
-    font-size: 0.85em;
-    opacity: 0.75;
-  }
-  .editor {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+  .content {
+    display: grid;
+    grid-template-columns: 13.6rem 1fr;
+    gap: 0.75rem;
     min-height: 0;
     padding: 0.75rem;
   }
-  .grow {
-    flex: 1;
+  button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    white-space: nowrap;
+  }
+  img {
+    width: 16px;
+    height: 16px;
+    flex: none;
+  }
+  /* The v1 Save and Restore glyphs are black; the dark skin shows them light. */
+  img.mono {
+    filter: invert(1);
+  }
+
+  /* The list: one "Name" column with striped rows, as the v1 grid. */
+  .list {
+    display: flex;
+    flex-direction: column;
     min-height: 0;
+    border: 1px solid var(--border);
+    background: var(--row);
+  }
+  .head {
+    padding: 0.2rem 0.4rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--border);
+  }
+  .list ul {
+    flex: 1;
+    margin: 0;
+    padding: 0;
+    overflow: auto;
+    list-style: none;
+  }
+  .list button {
+    display: block;
+    width: 100%;
+    padding: 0.15rem 0.4rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: none;
+    text-align: left;
+  }
+  .list li:nth-child(odd) button {
+    background: var(--stripe);
+  }
+  .list button:disabled {
+    opacity: 1;
+    color: var(--muted);
+  }
+  /* As in the v1 grid, the selected row is framed with dots, not filled. */
+  .list li button.active,
+  .list button:focus-visible {
+    outline: 1px dotted var(--text);
+    outline-offset: -2px;
+  }
+
+  /* The editor group: fields, text, Apply | New Remove | Cancel. */
+  .editor {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-width: 0;
+    min-height: 0;
+    padding: 0.6rem;
+    border: 1px solid var(--border);
+  }
+  .fields {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .fields label {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+    white-space: nowrap;
+  }
+  .fields .name {
+    flex: 1;
+    min-width: 0;
+    color: inherit;
+  }
+  .name input {
+    flex: 1;
+    min-width: 0;
+  }
+  .updated,
+  .length {
+    color: var(--muted);
+    text-align: center;
+  }
+  .updated {
+    width: 11rem;
+  }
+  .length {
+    width: 6rem;
   }
   textarea {
     flex: 1;
+    min-height: 0;
     resize: none;
+    font: var(--note-font);
   }
-  .meta {
-    display: flex;
-    justify-content: space-between;
-    color: var(--muted);
+  .actions {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 0.5rem;
   }
-  .left {
-    justify-content: flex-start;
+  .apply {
+    justify-self: start;
   }
-  .bar {
-    grid-column: 1 / -1;
+  .center {
     display: flex;
     gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
+  }
+  .cancel {
+    justify-self: end;
+  }
+
+  /* The status bar. */
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.2rem 0.3rem;
     border-top: 1px solid var(--border);
     background: var(--surface);
+    font-size: 0.85rem;
+  }
+  .bar button {
+    padding: 0.2rem 0.5rem;
+  }
+  .credit {
+    padding: 0 0.75rem;
+    color: var(--muted);
+  }
+  .credit + .credit {
+    border-left: 1px solid var(--border);
   }
   .spacer {
     flex: 1;

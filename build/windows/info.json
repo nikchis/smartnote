@@ -1,10 +1,10 @@
 {
 	"fixed": {
-		"file_version": "2.0.0"
+		"file_version": "2.0.1"
 	},
 	"info": {
 		"0409": {
-			"ProductVersion": "2.0.0",
+			"ProductVersion": "2.0.1",
 			"CompanyName": "Nikita Chisnikov",
 			"FileDescription": "A notepad for private records",
 			"LegalCopyright": "© 2026, Nikita Chisnikov",

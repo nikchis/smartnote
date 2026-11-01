@@ -28,6 +28,13 @@ Where the data lives:
 
 The log holds errors only, without passwords, the sync phrase, keys, note names and texts or the
 connection string. Only one Smartnote runs at a time: a second start brings the open window forward.
+On Linux the logo of the title bar is written to `$XDG_CACHE_HOME/smartnote/icons`
+(`~/.cache/smartnote/icons`), because GTK 4 takes window icons from an icon theme only; it holds
+nothing else and is written again if deleted. The application id is `com.nikchis.smartnote`, and the
+`.deb` and `.rpm` install `com.nikchis.smartnote.desktop` under that name, so Wayland desktops show the logo for
+the window. The interface uses Liberation Sans (`fonts-liberation`), the notes DejaVu Sans Mono 13pt
+(`fonts-dejavu-core`); both are dependencies of the packages. The colors are the dark skin of v1, whatever
+theme the system prefers.
 
 ### Server setup
 
@@ -66,7 +73,7 @@ connection, so the database never has to listen on a public address.
 
 4. In **Settings** fill in the SSH server, the database (host `127.0.0.1`, `localhost` or `::1`
    as seen from the SSH server, port, name, user, password) and the sync phrase; empty ports
-   mean 22 for SSH and 5432 for PostgreSQL, an empty database host means `127.0.0.1`. Press **Test**,
+   mean 22 for SSH and 5432 for PostgreSQL, an empty database host means `127.0.0.1`. Press **Test connection**,
    then **OK**. On the first connection Smartnote asks whether to trust the server's host key
    and shows its SHA256 fingerprint; compare it with the host keys on the server,
    `for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done` (with OpenSSH defaults the

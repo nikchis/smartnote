@@ -106,7 +106,9 @@ WebKitGTK development packages and Xvfb; the probe was removed afterwards.
 ## Check 3: packages and the AppImage in a clean container
 
 `task build` and `task package:linux` produce `bin/smartnote`, `bin/smartnote.deb` and
-`bin/smartnote-x86_64.AppImage`. The `.deb` depends on `libgtk-4-1` and `libwebkitgtk-6.0-4`.
+`bin/smartnote-x86_64.AppImage`. The `.deb` depends on `libgtk-4-1`, `libwebkitgtk-6.0-4`,
+`fonts-liberation` (the interface font; `liberation-sans-fonts` in the `.rpm`, `ttf-liberation` for Arch) and
+`fonts-dejavu-core` (DejaVu Sans Mono for the notes; `dejavu-sans-mono-fonts`, `ttf-dejavu`).
 
 `task smoke:appimage` runs `build/linux/smoke-appimage.sh` in `ubuntu:26.04`. With only
 `xvfb` and `xauth` installed, as first planned, the AppImage does not start:

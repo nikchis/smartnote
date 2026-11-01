@@ -3,6 +3,9 @@
   // key (v1 UDlgConnection). The form holds the server key's fingerprint only;
   // a key trusted during Test, like a reset, is saved only with OK (spec §6.1).
   import { onMount } from "svelte";
+  import exportIcon from "../assets/icons/export.png";
+  import gearIcon from "../assets/icons/gear.png";
+  import importIcon from "../assets/icons/import.png";
   import StrengthMeter from "../components/StrengthMeter.svelte";
   import { ConnectionService, KeyService } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
@@ -133,25 +136,29 @@
   <form class="card settings" onsubmit={(e) => (e.preventDefault(), save())}>
     <h2>Settings</h2>
 
-    <fieldset>
-      <legend>SSH server</legend>
-      <label class="wide">Host <input bind:value={form.sshHost} aria-invalid={invalid === "ssh_host"} /></label>
-      <label>Port <input bind:value={form.sshPort} inputmode="numeric" placeholder="22" aria-invalid={invalid === "ssh_port"} /></label>
-      <label>User <input bind:value={form.sshUser} aria-invalid={invalid === "ssh_user"} /></label>
-      <label>Password <input type="password" bind:value={form.sshPassword} autocomplete="off" /></label>
-    </fieldset>
+    <!-- SSH server and Database side by side, as in v1 UDlgConnection. -->
+    <div class="pair">
+      <fieldset>
+        <legend>SSH server</legend>
+        <label class="wide">Host <input bind:value={form.sshHost} aria-invalid={invalid === "ssh_host"} /></label>
+        <label>Port <input bind:value={form.sshPort} inputmode="numeric" placeholder="22" aria-invalid={invalid === "ssh_port"} /></label>
+        <label>User <input bind:value={form.sshUser} aria-invalid={invalid === "ssh_user"} /></label>
+        <label>Password <input type="password" bind:value={form.sshPassword} autocomplete="off" /></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Database</legend>
+        <label>Host <input bind:value={form.dbHost} placeholder="127.0.0.1" aria-invalid={invalid === "db_host"} /></label>
+        <label>Port <input bind:value={form.dbPort} inputmode="numeric" placeholder="5432" aria-invalid={invalid === "db_port"} /></label>
+        <label>Name <input bind:value={form.dbName} aria-invalid={invalid === "db_name"} /></label>
+        <label>User <input bind:value={form.dbUser} aria-invalid={invalid === "db_user"} /></label>
+        <label>Password <input type="password" bind:value={form.dbPassword} autocomplete="off" /></label>
+      </fieldset>
+    </div>
 
     <fieldset>
-      <legend>Database</legend>
-      <label>Host <input bind:value={form.dbHost} placeholder="127.0.0.1" aria-invalid={invalid === "db_host"} /></label>
-      <label>Port <input bind:value={form.dbPort} inputmode="numeric" placeholder="5432" aria-invalid={invalid === "db_port"} /></label>
-      <label>Name <input bind:value={form.dbName} aria-invalid={invalid === "db_name"} /></label>
-      <label>User <input bind:value={form.dbUser} aria-invalid={invalid === "db_user"} /></label>
-      <label>Password <input type="password" bind:value={form.dbPassword} autocomplete="off" /></label>
-    </fieldset>
-
-    <fieldset>
-      <legend>Sync phrase</legend>
+      <!-- The v1 group of the salt had the gear too. -->
+      <legend><img src={gearIcon} alt="" />Sync phrase</legend>
       <label class="wide">
         Phrase (at least {LIMITS.phraseMin} characters, the same on every device)
         <input type="password" bind:value={form.syncPhrase} autocomplete="off" aria-invalid={invalid === "sync_phrase" || phraseShort} />
@@ -164,9 +171,9 @@
       <div class="wide row">
         <span class="muted">{hasKey === undefined ? "" : hasKey ? "Client key is set." : "No client key."}</span>
         <span class="spacer"></span>
-        <button type="button" onclick={generate} disabled={!!busy || !allowed.generate}>Generate</button>
-        <button type="button" onclick={exportPublic} disabled={!!busy || !allowed.export}>Export public</button>
-        <button type="button" onclick={() => importKey()} disabled={!!busy || !allowed.import}>Import</button>
+        <button type="button" onclick={generate} disabled={!!busy || !allowed.generate}><img src={gearIcon} alt="" />Generate</button>
+        <button type="button" onclick={exportPublic} disabled={!!busy || !allowed.export}><img src={exportIcon} alt="" />Export public</button>
+        <button type="button" onclick={() => importKey()} disabled={!!busy || !allowed.import}><img src={importIcon} alt="" />Import</button>
       </div>
       <div class="wide row">
         <span class="muted" aria-invalid={invalid === "trusted_host_key"}>
@@ -177,12 +184,14 @@
       </div>
     </fieldset>
 
-    <div class="buttons">
-      <span class="muted">{busy}</span>
-      <span class="spacer"></span>
-      <button type="button" onclick={test} disabled={!!busy || !allowed.test}>Test</button>
-      <button type="submit" disabled={!!busy || !allowed.save}>OK</button>
-      <button type="button" onclick={onClose} disabled={!!busy}>Cancel</button>
+    <!-- OK on the left, Test connection in the middle, Cancel on the right, as in v1. -->
+    <div class="actions">
+      <div class="row">
+        <button type="submit" disabled={!!busy || !allowed.save}>OK</button>
+        <span class="muted">{busy}</span>
+      </div>
+      <button type="button" onclick={test} disabled={!!busy || !allowed.test}>Test connection</button>
+      <button class="cancel" type="button" onclick={onClose} disabled={!!busy}>Cancel</button>
     </div>
   </form>
 </div>
@@ -217,9 +226,15 @@
     z-index: 6;
   }
   .settings {
-    width: min(40rem, 94vw);
+    width: min(60rem, 94vw);
     max-height: 94vh;
     overflow: auto;
+  }
+  .pair {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    align-items: start;
+    gap: 0.75rem;
   }
   fieldset {
     display: grid;
@@ -245,5 +260,30 @@
   }
   input[aria-invalid="true"] {
     border-color: var(--danger);
+  }
+  .actions {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .cancel {
+    justify-self: end;
+  }
+  /* Labels are bright here, as the captions of the v1 form. */
+  label {
+    color: var(--text);
+  }
+  /* The key buttons carry the v1 glyphs. */
+  button,
+  legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  img {
+    width: 16px;
+    height: 16px;
+    flex: none;
   }
 </style>

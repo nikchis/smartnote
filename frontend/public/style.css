@@ -1,28 +1,26 @@
+/* One theme, whatever the system prefers: the colors of the v1 skin. */
 :root {
-  color-scheme: light dark;
-  font-family: system-ui, sans-serif;
-  font-size: 14px;
-  --bg: #f4f4f5;
-  --surface: #ffffff;
-  --text: #18181b;
-  --muted: #71717a;
-  --border: #d4d4d8;
-  --accent: #2563eb;
-  --danger: #dc2626;
-  --backdrop: rgb(0 0 0 / 0.35);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #18181b;
-    --surface: #27272a;
-    --text: #f4f4f5;
-    --muted: #a1a1aa;
-    --border: #3f3f46;
-    --accent: #60a5fa;
-    --danger: #f87171;
-    --backdrop: rgb(0 0 0 / 0.55);
-  }
+  color-scheme: dark;
+  /* Liberation Sans has the metrics of Arial, the font of v1. */
+  font-family: "Liberation Sans", Arial, Helvetica, sans-serif;
+  font-size: 17px;
+  /* The text of the notes, in the editor and in History: DejaVu Sans Mono, as in the terminal. */
+  --note-font: 13pt "DejaVu Sans Mono", "Liberation Mono", monospace;
+  --bg: #4e5161;
+  --surface: #464958;
+  --field: #424554;
+  --field-border: #3c3f4d;
+  --button: #626677;
+  --button-hover: #6d7184;
+  --text: #e6e8f2;
+  --muted: #8e92a3;
+  --border: #393c49;
+  --row: #454758;
+  --stripe: #494557;
+  --accent: #6582b9;
+  --danger: #f87171;
+  --backdrop: rgb(0 0 0 / 0.45);
+  scrollbar-color: #bec0cf #3e404e;
 }
 
 html,
@@ -73,20 +71,35 @@ button {
   color: inherit;
 }
 
+/* A field shows its text bright even inside a muted label. */
+input,
+textarea {
+  color: var(--text);
+}
+
 input,
 textarea {
   padding: 0.4rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: 1px solid var(--field-border);
+  border-radius: 2px;
+  background: var(--field);
+}
+
+input:read-only {
   background: var(--bg);
 }
 
+/* Flat buttons of the v1 skin; a disabled one keeps its face and greys its text. */
 button {
   padding: 0.4rem 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--surface);
+  border: 1px solid var(--button);
+  border-radius: 2px;
+  background: var(--button);
   cursor: pointer;
+}
+
+button:enabled:hover {
+  background: var(--button-hover);
 }
 
 button[type="submit"] {
@@ -94,8 +107,12 @@ button[type="submit"] {
 }
 
 button:disabled {
-  opacity: 0.5;
+  color: var(--muted);
   cursor: default;
+}
+
+button:disabled img {
+  opacity: 0.5;
 }
 
 .buttons {

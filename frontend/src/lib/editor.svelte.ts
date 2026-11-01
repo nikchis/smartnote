@@ -46,7 +46,8 @@ export class Editor {
 
   /**
    * load reads the notes, for the first time or after a Restore: an unsaved
-   * edit is lost, the selected note stays selected if it still exists.
+   * edit is lost, the selected note stays selected if it still exists,
+   * otherwise the first note is selected.
    */
   async load(): Promise<void> {
     try {
@@ -55,7 +56,8 @@ export class Editor {
       await this.dialogs.error(parseError(e).message);
       return;
     }
-    const keep = this.selected && this.notes.find((n) => n.id === this.selected?.id);
+    // Without a selection to keep, the first note is shown, as the v1 grid focused it.
+    const keep = (this.selected && this.notes.find((n) => n.id === this.selected?.id)) || this.notes[0];
     if (keep) {
       await this.show(keep);
     } else {
@@ -68,6 +70,16 @@ export class Editor {
     if (this.mode === "new" || this.busy) return;
     const note = this.notes.find((n) => n.id === id);
     if (note) await this.show(note);
+  }
+
+  /**
+   * step selects the note delta rows away from the selected one, as the
+   * arrow keys moved through the v1 grid; it stops at the ends of the list.
+   */
+  async step(delta: number): Promise<void> {
+    const at = this.notes.findIndex((n) => n.id === this.selected?.id);
+    const next = this.notes[Math.min(Math.max(at + delta, 0), this.notes.length - 1)];
+    if (next && next.id !== this.selected?.id) await this.select(next.id);
   }
 
   startNew(): void {

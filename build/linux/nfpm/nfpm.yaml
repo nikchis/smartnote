@@ -6,7 +6,7 @@
 name: "smartnote"
 arch: ${GOARCH}
 platform: "linux"
-version: "2.0.0"
+version: "2.0.1"
 section: "default"
 priority: "extra"
 maintainer: "Nikita Chisnikov <chisnikov@gmail.com>"
@@ -21,13 +21,17 @@ contents:
     dst: "/usr/local/bin/smartnote"
   - src: "./build/appicon.png"
     dst: "/usr/share/icons/hicolor/128x128/apps/smartnote.png"
+  # Named after the GTK application id (linuxAppID in cmd/smartnote), so Wayland desktops match the window with it.
   - src: "./build/linux/smartnote.desktop"
-    dst: "/usr/share/applications/smartnote.desktop"
+    dst: "/usr/share/applications/com.nikchis.smartnote.desktop"
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
+# fonts-liberation: the interface font, Liberation Sans; fonts-dejavu-core: DejaVu Sans Mono, the font of the notes.
 depends:
   - libgtk-4-1
   - libwebkitgtk-6.0-4
+  - fonts-liberation
+  - fonts-dejavu-core
 
 # Distribution-specific overrides for different package formats
 overrides:
@@ -36,12 +40,16 @@ overrides:
     depends:
       - gtk4
       - webkitgtk6.0
+      - liberation-sans-fonts
+      - dejavu-sans-mono-fonts
 
   # Arch Linux packages
   archlinux:
     depends:
       - gtk4
       - webkitgtk-6.0
+      - ttf-liberation
+      - ttf-dejavu
 
 # scripts section to ensure desktop database is updated after install
 scripts:
@@ -56,15 +64,21 @@ scripts:
 # depends:
 #   - libgtk-3-0
 #   - libwebkit2gtk-4.1-0
+#   - fonts-liberation
+#   - fonts-dejavu-core
 # overrides:
 #   rpm:
 #     depends:
 #       - gtk3
 #       - webkit2gtk4.1
+#       - liberation-sans-fonts
+#       - dejavu-sans-mono-fonts
 #   archlinux:
 #     depends:
 #       - gtk3
 #       - webkit2gtk-4.1
+#       - ttf-liberation
+#       - ttf-dejavu
 #
 # replaces:
 #   - foobar
