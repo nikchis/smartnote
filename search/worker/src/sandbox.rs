@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SandboxLevel {
-    /// Landlock restricts every file-system change and TCP, seccomp denies new sockets.
+    /// On every thread of the process: Landlock restricts every file-system change and TCP
+    /// bind and connect, and seccomp denies new sockets, `io_uring_setup` and the `setxattr`
+    /// family (extended attributes are a write to the file system that Landlock does not cover).
     Full,
     /// The kernel enforces only part of it (an older kernel or a failed layer).
     Partial,

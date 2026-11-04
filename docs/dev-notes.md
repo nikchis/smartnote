@@ -228,3 +228,32 @@ CI job `package` installs the toolchain of `search/rust-toolchain.toml`, caches 
 (the signed bundle on macOS) with `ORT_DISABLE_TELEMETRY=1`. The model release `model-e5s-1` must be
 published before `task model:fetch` can work in CI; locally `MODEL_BASE_URL=file:///…/` points it
 at a directory.
+
+## Search: maintenance notes
+
+- Storage format 2 is one-way. `internal/adapter/sqlite` migrates a format 1 storage to 2 (table
+  `note_embedding`) at the first unlock, after the password check, in one transaction; 2.0.0 and
+  2.0.1 then refuse it with "Data was created by a newer version of Smartnote.". The only way back
+  is Backup to the server with the new version and Restore into a new storage of 2.0.x (README,
+  "Installation").
+- Restarts of the worker (`internal/adapter/searchworker/backoff.go`): pauses 1, 2, 4, 8, 16 s; the
+  engine gives up after 5 failed restarts within 10 minutes (at the sixth failure) and the search
+  stays unavailable until the next start. While no worker is ready, and when a search times out,
+  `Search` fails with `usecase.ErrSearchUnavailable` (interface: `Search unavailable`, never
+  `No matches`); three search timeouts in a row restart the worker. The search bar searches the
+  current query again when the word search becomes ready.
+- What the worker writes reaches `smartnote.log` only as a closed vocabulary: a stderr line is
+  logged when it matches a form of `internal/adapter/searchworker/stderr.go`, otherwise as
+  `search worker stderr: unrecognized line` with its length; the `msg` of an error reply only when
+  it is in `knownErrorTexts` (`protocol.go`). A new `eprintln!` in `search/worker/src` needs its
+  form there: `TestStderrFormsCoverWorker` reads the worker sources and fails until it is added.
+- `make search-asan` runs the unsafe code (the zeroing allocator `search/zalloc`, the hardening and
+  the sandbox of the worker, `-p worker --lib`) under AddressSanitizer
+  (`RUSTFLAGS=-Zsanitizer=address`, `--target x86_64-unknown-linux-gnu`). It needs a nightly
+  toolchain (`rustup toolchain install nightly`) and is not part of CI. Last run 2026-11-04 with
+  nightly 1.100.0 (4b6d04e70 2026-09-13): `zalloc` 3 + 4 tests, `worker` 126 tests, no sanitizer
+  report.
+- In CI (`CI=true`) on Linux with feature `test-probes`, `search/worker/build.rs` fails when `gdb`
+  or `strace` is missing instead of marking their tests ignored: the core dump test and the system
+  call test are evidence for the search spec (criterion 5). Locally a missing tool still only
+  ignores its test.

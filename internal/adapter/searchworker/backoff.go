@@ -14,7 +14,8 @@ const failureWindow = 10 * time.Minute
 // restartPolicy decides what follows a failure of the worker: the n-th
 // failure within failureWindow is followed by pause n, and a failure past the
 // last pause ends the restarts. With the default pauses the first failure
-// starts the restarts and the fifth failed restart ends them.
+// starts the restarts and the engine gives up after 5 failed restarts within
+// 10 minutes, at the sixth failure (spec §8.1, §11).
 type restartPolicy struct {
 	pauses   []time.Duration
 	failures []time.Time // within the window, oldest first

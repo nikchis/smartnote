@@ -298,8 +298,9 @@ func (s *Search) rebuild(ctx context.Context, start bool) error {
 // rebuildLocked replaces the queued commands with a reset and upserts of all
 // stored notes, with their readable embeddings; unreadable ones are deleted.
 // The caller holds the edit lock, so later writes enqueue after the snapshot.
-// If the notes cannot be listed, only the reset is enqueued: an empty index
-// is better than one that does not match the store.
+// If the notes cannot be listed, only the reset is enqueued: the index then
+// holds only the notes saved after it, a partial index, until the next
+// rebuild (the next unlock, Restore or worker restart).
 func (s *Search) rebuildLocked(ctx context.Context) error {
 	s.mu.Lock()
 	active := s.active

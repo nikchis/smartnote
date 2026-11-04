@@ -28,7 +28,9 @@ func Harden() error {
 
 	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
 
-	// The Go runtime has already set WER_FAULT_REPORTING_NO_UI; keep its flags.
+	// Keep the flags already set: at start the Go runtime ORs in
+	// WER_FAULT_REPORTING_NO_UI (runtime.osinit → preventErrorDialogs in
+	// runtime/signal_windows.go, checked in go1.27.3, the toolchain of go.mod).
 	var flags uint32
 
 	getFlags := kernel32.NewProc("WerGetFlags")
