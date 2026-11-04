@@ -128,7 +128,7 @@ impl LexicalIndex {
     /// [`MAX_DOCS`] documents in rank order.
     ///
     /// `first` of the hits is `None`: the index does not hold the text. The engine gets the
-    /// offset from [`first_match`](Self::first_match) with the form of the line, only for
+    /// highlight from [`match_ranges`](Self::match_ranges) with the form of the line, only for
     /// displayed hits.
     ///
     /// # Errors
@@ -189,18 +189,13 @@ impl LexicalIndex {
         Ok(hits)
     }
 
-    /// Byte offset in `form` of the first match of `q` (the `first` of a word hit, which
-    /// [`search`](Self::search) leaves `None`): the start of [`match_range`](Self::match_range).
+    /// Byte ranges in `form` of every match of `q` (the highlight of a word hit, which
+    /// [`search`](Self::search) leaves without one): each token whose analyzed term is a term of
+    /// a word of `q`, and each occurrence of a phrase of `q` (consecutive tokens, from the start
+    /// of the first to the end of the last). Sorted by start, of ranges starting together the
+    /// longer first, so the first range is the place to select.
     #[must_use]
-    pub fn first_match(&self, form: &str, q: &Query) -> Option<usize> {
-        self.match_range(form, q).map(|r| r.start)
-    }
-
-    /// Byte range in `form` of the first match of `q`: the first token whose analyzed term is
-    /// a term of a word of `q`, or a phrase of `q` (consecutive tokens, from the start of the
-    /// first to the end of the last). Of matches starting together, the longer one.
-    #[must_use]
-    pub fn match_range(&self, form: &str, q: &Query) -> Option<Range<usize>> {
+    pub fn match_ranges(&self, form: &str, q: &Query) -> Vec<Range<usize>> {
         let tokens = self.analyze(form);
         let words: Vec<String> = q
             .words
@@ -210,19 +205,20 @@ impl LexicalIndex {
             .collect();
         let by_word = tokens
             .iter()
-            .find(|t| words.contains(&t.text))
+            .filter(|t| words.contains(&t.text))
             .map(|t| t.offset_from..t.offset_to);
-        let by_phrase = q.phrases.iter().filter_map(|p| {
+        let by_phrase = q.phrases.iter().flat_map(|p| {
             let terms: Vec<String> = self.analyze(p).into_iter().map(|t| t.text).collect();
             tokens
                 .windows(terms.len().max(1))
-                .find(|w| !terms.is_empty() && w.iter().map(|t| &t.text).eq(terms.iter()))
-                .and_then(|w| Some(w.first()?.offset_from..w.last()?.offset_to))
+                .filter(|w| !terms.is_empty() && w.iter().map(|t| &t.text).eq(terms.iter()))
+                .filter_map(|w| Some(w.first()?.offset_from..w.last()?.offset_to))
+                .collect::<Vec<_>>()
         });
-        by_word
-            .into_iter()
-            .chain(by_phrase)
-            .min_by_key(|r| (r.start, Reverse(r.end)))
+        let mut ranges: Vec<Range<usize>> = by_word.chain(by_phrase).collect();
+        ranges.sort_by_key(|r| (r.start, Reverse(r.end)));
+        ranges.dedup();
+        ranges
     }
 
     /// Query for a word or a phrase: a term for one token, a phrase for several; none when the
@@ -344,33 +340,43 @@ mod tests {
     }
 
     #[test]
-    fn words_first_match_offset() {
+    fn words_match_ranges() {
         let index = index(&[]);
         let form = "ключ лежит в менеджере паролей";
-        let at = |q: &str| index.first_match(form, &parse_query(q));
-        assert_eq!(at("пароли"), Some(form.find("паролей").expect("in form")));
+        let ranges = |q: &str| index.match_ranges(form, &parse_query(q));
+        let span = |s: &str| {
+            let at = form.find(s).expect("in form");
+            at..at + s.len()
+        };
+        assert_eq!(ranges("пароли"), [span("паролей")]);
+        assert_eq!(ranges("\"лежит в\""), [span("лежит в")]);
+        // A phrase and a word starting together: the longer first, then the word.
         assert_eq!(
-            at("\"лежит в\""),
-            Some(form.find("лежит").expect("in form"))
+            ranges("лежит \"лежит в менеджере\""),
+            [span("лежит в менеджере"), span("лежит")]
         );
-        assert_eq!(at("zzz"), None);
+        assert_eq!(ranges("zzz"), Vec::<Range<usize>>::new());
     }
 
     #[test]
-    fn words_match_range() {
+    fn words_match_ranges_every_word_and_occurrence() {
         let index = index(&[]);
-        let form = "ключ лежит в менеджере паролей";
-        let range = |q: &str| index.match_range(form, &parse_query(q));
-        let span = |s: &str| {
-            let at = form.find(s).expect("in form");
-            Some(at..at + s.len())
+        let form = "встречи с клиентами, и снова встреча";
+        let at = |s: &str, from: usize| {
+            let start = from + form[from..].find(s).expect("in form");
+            start..start + s.len()
         };
-        assert_eq!(range("пароли"), span("паролей"));
-        assert_eq!(range("\"лежит в\""), span("лежит в"));
+        let second = form.rfind("встреча").expect("in form");
         assert_eq!(
-            range("лежит \"лежит в менеджере\""),
-            span("лежит в менеджере")
+            index.match_ranges(form, &parse_query("встреча клиент")),
+            [at("встречи", 0), at("клиентами", 0), at("встреча", second)]
         );
-        assert_eq!(range("zzz"), None);
+
+        let form = "a b, a b";
+        assert_eq!(
+            index.match_ranges(form, &parse_query("\"a b\"")),
+            [0..3, 5..8],
+            "every occurrence of a phrase"
+        );
     }
 }

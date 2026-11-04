@@ -173,12 +173,13 @@ pub fn dot(a: &[f32; DIM], b: &[f32; DIM]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-/// Snippet of `line`: at most [`SNIPPET_CHARS`] characters around `mark` (a UTF-16 range in
-/// `line`, clamped to it), or from the start of the line without a mark, with the part of the
-/// mark inside the snippet as a UTF-16 range of the snippet. The snippet is an exact substring
-/// of `line`, cut on character boundaries; the frontend adds any ellipsis.
+/// Snippet of `line`: at most [`SNIPPET_CHARS`] characters around the first of `marks` (UTF-16
+/// ranges in `line`, clamped to it), or from the start of the line without one, with the parts
+/// of all marks inside the snippet as UTF-16 ranges of the snippet, sorted, overlaps merged. The
+/// snippet is an exact substring of `line`, cut on character boundaries; the frontend adds any
+/// ellipsis.
 #[must_use]
-pub fn snippet(line: &str, mark: Option<Range<u32>>) -> (String, Vec<[u32; 2]>) {
+pub fn snippet(line: &str, marks: &[Range<u32>]) -> (String, Vec<[u32; 2]>) {
     // (byte, UTF-16) offsets of every character start and of the end.
     let mut bounds: Vec<(usize, u32)> = Vec::with_capacity(line.len() + 1);
     let mut units = 0_u32;
@@ -189,10 +190,12 @@ pub fn snippet(line: &str, mark: Option<Range<u32>>) -> (String, Vec<[u32; 2]>) 
     bounds.push((line.len(), units));
     let chars = bounds.len() - 1;
 
-    let mark = mark
+    let clamped: Vec<Range<u32>> = marks
+        .iter()
         .map(|r| r.start.min(units)..r.end.min(units))
-        .filter(|r| r.start < r.end);
-    let (from, to) = match &mark {
+        .filter(|r| r.start < r.end)
+        .collect();
+    let (from, to) = match clamped.first() {
         _ if chars <= SNIPPET_CHARS => (0, chars),
         None => (0, SNIPPET_CHARS),
         Some(r) => {
@@ -206,20 +209,32 @@ pub fn snippet(line: &str, mark: Option<Range<u32>>) -> (String, Vec<[u32; 2]>) 
         }
     };
     let ((from_byte, from_units), (to_byte, to_units)) = (bounds[from], bounds[to]);
-    let marks = mark
+    let mut inside: Vec<[u32; 2]> = clamped
+        .iter()
         .map(|r| {
             [
-                r.start.saturating_sub(from_units),
+                r.start.max(from_units).min(to_units) - from_units,
                 r.end.min(to_units).saturating_sub(from_units),
             ]
         })
         .filter(|[s, e]| s < e)
-        .into_iter()
         .collect();
-    (line[from_byte..to_byte].to_owned(), marks)
+    inside.sort_unstable();
+    let mut merged: Vec<[u32; 2]> = Vec::with_capacity(inside.len());
+    for [s, e] in inside {
+        match merged.last_mut() {
+            Some(last) if s < last[1] => last[1] = last[1].max(e),
+            _ => merged.push([s, e]),
+        }
+    }
+    (line[from_byte..to_byte].to_owned(), merged)
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::single_range_in_vec_init,
+    reason = "a slice of one range is one mark, the argument of `snippet`"
+)]
 mod tests {
     use super::*;
 
@@ -365,38 +380,74 @@ mod tests {
     #[test]
     fn snippet_short_line_whole() {
         assert_eq!(
-            snippet("short needle", Some(6..12)),
+            snippet("short needle", &[6..12]),
             ("short needle".to_owned(), vec![[6, 12]])
         );
-        assert_eq!(snippet("short", None), ("short".to_owned(), Vec::new()));
-        assert_eq!(snippet("", Some(0..4)), (String::new(), Vec::new()));
+        assert_eq!(snippet("short", &[]), ("short".to_owned(), Vec::new()));
+        assert_eq!(snippet("", &[0..4]), (String::new(), Vec::new()));
     }
 
     #[test]
     fn snippet_window_edges() {
         let line = "x".repeat(300);
-        let (s, marks) = snippet(&line, Some(0..3));
+        let (s, marks) = snippet(&line, &[0..3]);
         assert_eq!((s.len(), marks), (160, vec![[0, 3]]));
-        let (s, marks) = snippet(&line, Some(297..300));
+        let (s, marks) = snippet(&line, &[297..300]);
         assert_eq!((s.len(), marks), (160, vec![[157, 160]]));
         // A mark longer than the snippet starts it and is clipped.
-        let (s, marks) = snippet(&line, Some(100..290));
+        let (s, marks) = snippet(&line, &[100..290]);
         assert_eq!((s.len(), marks), (160, vec![[0, 160]]));
         // Without a mark: the start of the line.
-        assert_eq!(snippet(&line, None).0.len(), 160);
+        assert_eq!(snippet(&line, &[]).0.len(), 160);
     }
 
     #[test]
     fn snippet_surrogates() {
         let line = format!("{}needle{}", "😀".repeat(200), "😀".repeat(200));
         let start = 400;
-        let (s, marks) = snippet(&line, Some(start..start + 6));
+        let (s, marks) = snippet(&line, &[start..start + 6]);
         assert_eq!(s.chars().count(), 160);
         let units: Vec<u16> = s.encode_utf16().collect();
         let [a, b] = marks[0];
         assert_eq!(
             String::from_utf16_lossy(&units[a as usize..b as usize]),
             "needle"
+        );
+    }
+
+    #[test]
+    fn snippet_marks_every_range() {
+        assert_eq!(
+            snippet("needle and needle", &[0..6, 11..17]),
+            ("needle and needle".to_owned(), vec![[0, 6], [11, 17]])
+        );
+        // Unsorted and overlapping marks come out sorted and merged.
+        assert_eq!(
+            snippet("abcdef", &[3..5, 0..2, 1..3]).1,
+            vec![[0, 3], [3, 5]]
+        );
+    }
+
+    #[test]
+    fn snippet_window_follows_the_first_mark() {
+        let line = format!(
+            "{}aim{}far{}",
+            "x".repeat(100),
+            "y".repeat(50),
+            "z".repeat(300)
+        );
+        let (s, marks) = snippet(&line, &[100..103, 153..156, 400..403]);
+        assert_eq!(s.chars().count(), 160);
+        let from = line.find(&s).expect("a substring of the line");
+        let units = |[a, b]: [u32; 2]| &s[a as usize..b as usize];
+        assert!(
+            from <= 100 && from + 160 >= 103,
+            "the window holds the first mark"
+        );
+        assert_eq!(
+            marks.iter().map(|&m| units(m)).collect::<Vec<_>>(),
+            ["aim", "far"],
+            "the marks inside the window, not the one beyond it"
         );
     }
 }

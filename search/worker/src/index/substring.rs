@@ -2,6 +2,7 @@
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::ops::Range;
 
 use memchr::memmem;
 
@@ -56,6 +57,18 @@ pub fn find_substring<'a>(
         }
     }
     hits
+}
+
+/// Byte ranges in `form` of every occurrence of `needle`, from the start, without overlaps
+/// (the highlight of a substring hit). An empty needle has none.
+#[must_use]
+pub fn substring_ranges(form: &str, needle: &str) -> Vec<Range<usize>> {
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    memmem::find_iter(form.as_bytes(), needle.as_bytes())
+        .map(|at| at..at + needle.len())
+        .collect()
 }
 
 #[cfg(test)]
@@ -113,5 +126,17 @@ mod tests {
             0
         );
         assert_eq!(find_substring(std::iter::empty(), "abc", 3, 50).len(), 0);
+    }
+
+    #[test]
+    fn substring_ranges_every_occurrence() {
+        assert_eq!(substring_ranges("a == b == c", "=="), [2..4, 7..9]);
+        assert_eq!(
+            substring_ranges("aaaa", "aa"),
+            [0..2, 2..4],
+            "not overlapping"
+        );
+        assert_eq!(substring_ranges("abc", "x"), Vec::<Range<usize>>::new());
+        assert_eq!(substring_ranges("abc", ""), Vec::<Range<usize>>::new());
     }
 }

@@ -4,7 +4,7 @@ pub mod lexical;
 pub mod substring;
 
 pub use lexical::LexicalIndex;
-pub use substring::find_substring;
+pub use substring::{find_substring, substring_ranges};
 
 /// Internal number of a note.
 pub type NoteKey = u64;
@@ -19,8 +19,7 @@ pub struct LineHit {
     /// Rank of the line within its kind of search; larger is better.
     pub score: f32,
     /// Byte offset of the first match in the search form of the line. `Some` for substring
-    /// hits; `None` for word hits, whose offset comes from
-    /// [`LexicalIndex::first_match`] with the line's form, called by the engine only for
-    /// displayed hits.
+    /// hits; `None` for word hits: the engine gets their ranges from
+    /// [`LexicalIndex::match_ranges`] with the line's form, only for displayed hits.
     pub first: Option<usize>,
 }

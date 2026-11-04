@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use crate::embed::{ChunkVec, DIM, Record, text_hash};
-use crate::index::{LexicalIndex, LineHit, NoteKey, find_substring};
+use crate::index::{LexicalIndex, LineHit, NoteKey, find_substring, substring_ranges};
 use crate::protocol::messages::{Hit, NoteIn, Source};
 use crate::rank::{self, BRANCH_K, Fused, PER_NOTE, TAU_ALONE, TAU_CONFIRM};
 use crate::text::{Query, SearchForm, search_form};
@@ -76,8 +76,9 @@ struct LineEntry {
 
 /// What a hit highlights.
 enum Highlight {
-    /// A UTF-16 range within the line.
-    Match(Range<u32>),
+    /// UTF-16 ranges within the line, sorted; the first is the selection of the hit. Empty when
+    /// the word index finds no match in the line.
+    Match(Vec<Range<u32>>),
     /// Lines `first..=last` of `info`: a semantic chunk without lexical matches.
     Chunk { first: u32, last: u32 },
 }
@@ -418,13 +419,14 @@ impl Engine {
         let source = note.source_line(f.line);
         let text_of_line = if f.line == 0 { &note.name } else { &note.info };
         let (start, end, text, (snippet, marks)) = match highlight {
-            Highlight::Match(r) => {
+            Highlight::Match(ranges) => {
+                let r = ranges.first().cloned().unwrap_or(0..0);
                 let bytes = utf16_to_byte(source, r.start)..utf16_to_byte(source, r.end);
                 (
                     line.utf16 + r.start,
                     line.utf16 + r.end,
                     source.get(bytes).unwrap_or_default().to_owned(),
-                    rank::snippet(source, Some(r)),
+                    rank::snippet(source, &ranges),
                 )
             }
             Highlight::Chunk { first, last } => {
@@ -436,7 +438,7 @@ impl Engine {
                     a.utf16,
                     end,
                     text_of_line.get(bytes).unwrap_or_default().to_owned(),
-                    rank::snippet(source, None),
+                    rank::snippet(source, &[]),
                 )
             }
         };
@@ -453,8 +455,8 @@ impl Engine {
         })
     }
 
-    /// What the hit of a fused line highlights: the substring match, else the word match (the
-    /// line start when the analyzer finds none), else the semantic chunk.
+    /// What the hit of a fused line highlights: every occurrence of the substring, else every
+    /// word and phrase match (none when the analyzer finds none), else the semantic chunk.
     fn highlight(
         &self,
         f: &Fused,
@@ -464,24 +466,26 @@ impl Engine {
         semantic: &SemanticList,
     ) -> Highlight {
         let form = &line.form;
-        let by_substring = substring
+        let to_utf16 = |r: Range<usize>| form.utf16_at(r.start)..form.utf16_end_at(r.end);
+        let needle = substring
             .iter()
-            .find(|h| h.note == f.note && h.line == f.line)
-            .and_then(|h| Some((h.first?, q.substring.as_deref()?.len())));
-        if let Some((first, len)) = by_substring {
-            return Highlight::Match(form.utf16_at(first)..form.utf16_end_at(first + len));
+            .any(|h| h.note == f.note && h.line == f.line)
+            .then_some(q.substring.as_deref())
+            .flatten();
+        if let Some(needle) = needle {
+            let ranges = substring_ranges(&form.text, needle);
+            return Highlight::Match(ranges.into_iter().map(to_utf16).collect());
         }
         if f.sources.contains(&Source::Words) {
-            let range = self
+            let ranges = self
                 .lexical
                 .as_ref()
-                .and_then(|index| index.match_range(&form.text, q))
-                .map_or(0..0, |r| form.utf16_at(r.start)..form.utf16_end_at(r.end));
-            return Highlight::Match(range);
+                .map_or_else(Vec::new, |index| index.match_ranges(&form.text, q));
+            return Highlight::Match(ranges.into_iter().map(to_utf16).collect());
         }
         match semantic.chunks.get(&(f.note, f.line)) {
             Some(&(first, last)) => Highlight::Chunk { first, last },
-            None => Highlight::Match(0..0),
+            None => Highlight::Match(Vec::new()),
         }
     }
 }
@@ -715,7 +719,10 @@ mod tests {
 
     #[test]
     fn failed_embedding_not_queued_until_next_upsert() {
-        let mut e = engine(vec![note("a", 4, "name", "one"), note("b", 5, "name", "two")]);
+        let mut e = engine(vec![
+            note("a", 4, "name", "one"),
+            note("b", 5, "name", "two"),
+        ]);
         assert_eq!(e.counts(), (2, 2));
         e.embedding_failed("a", 3);
         assert_eq!(e.counts(), (2, 2), "an older revision changes nothing");
@@ -726,6 +733,30 @@ mod tests {
         assert!(e.upsert(note("a", 6, "name", "one more")).is_some());
         assert_eq!(e.counts(), (2, 2), "the next upsert queues it again");
         assert!(e.note_for_embedding("a").is_some());
+    }
+
+    #[test]
+    fn search_marks_every_query_word() {
+        let info = "Встречи с клиентами переносятся на четверг.";
+        let e = engine(vec![note("a", 1, "Встречи", info)]);
+        let hits = search(&e, "встреча клиент");
+        let h = hits.iter().find(|h| h.line == 1).expect("line 1");
+        assert_eq!(h.text, "Встречи", "the selection is the first range");
+        assert_eq!((h.start, h.end), (0, 7));
+        let marked: Vec<String> = h
+            .marks
+            .iter()
+            .map(|&[s, e]| utf16_slice(&h.snippet, s, e))
+            .collect();
+        assert_eq!(marked, ["Встречи", "клиентами"]);
+    }
+
+    #[test]
+    fn search_marks_every_substring_occurrence() {
+        let e = engine(vec![note("a", 1, "name", "a == b == c")]);
+        let h = &search(&e, "==")[0];
+        assert_eq!((h.start, h.end, h.text.as_str()), (2, 4, "=="));
+        assert_eq!(h.marks, vec![[2, 4], [7, 9]]);
     }
 
     #[test]
