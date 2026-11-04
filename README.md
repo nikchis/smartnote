@@ -1,3 +1,5 @@
+**English** | [Русский](README.ru.md)
+
 # Smartnote
 
 A notepad for private records on Linux, Windows and macOS. Notes are kept in an encrypted local

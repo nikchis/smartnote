@@ -1,3 +1,5 @@
+**English** | [Русский](security.ru.md)
+
 # Security
 
 What Smartnote protects, from whom, and what it does not protect: the threat model of the local

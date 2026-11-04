@@ -1,3 +1,5 @@
+**English** | [Русский](install.ru.md)
+
 # Installation and upgrade
 
 How to install Smartnote on Linux, Windows and macOS, what semantic search needs from the system,

@@ -1,3 +1,5 @@
+**English** | [Русский](limitations.ru.md)
+
 # Limitations
 
 Behaviour that may surprise a user who keeps notes on a server or works on several devices. For

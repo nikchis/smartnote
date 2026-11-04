@@ -1,3 +1,5 @@
+**English** | [Русский](search.ru.md)
+
 # Search
 
 How to find a note and a line in it: words, phrases, fragments of code and search by meaning, and
@@ -55,8 +57,8 @@ or more.
 
 - A line found only by meaning is shown when it is close enough to the query, at most 3 such lines
   per answer. It has no highlight; `Enter` selects its whole fragment.
-- The threshold is strict: most queries in another language than the note find nothing by meaning
-  and show `No matches`. Words and substrings remain the main way to search.
+- The threshold is strict: most queries in a language other than that of the note find nothing by
+  meaning and show `No matches`. Words and substrings remain the main way to search.
 - Semantic search needs AVX2 on x86-64 CPUs and, on Windows, the Visual C++ Redistributable
   ([Installation](install.md#semantic-search-requirements)). Without them words, phrases and
   substrings still work.

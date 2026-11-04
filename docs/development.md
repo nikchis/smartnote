@@ -1,3 +1,5 @@
+**English** | [Русский](development.ru.md)
+
 # Development notes
 
 How the code of the Wails v3 application is laid out and what the three delivery-risk checks of

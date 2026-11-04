@@ -1,3 +1,5 @@
+**English** | [Русский](smoke-windows-macos.ru.md)
+
 # Smoke test on Windows and macOS
 
 A checklist for the unsigned Windows and macOS packages, including the search checks that CI

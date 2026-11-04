@@ -1,3 +1,5 @@
+**English** | [Русский](README.ru.md)
+
 # Smartnote documentation
 
 The index of the Smartnote documentation: guides for users first, then notes for developers who

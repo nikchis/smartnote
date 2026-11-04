@@ -1,3 +1,5 @@
+**English** | [Русский](manual-test.ru.md)
+
 # Manual acceptance test
 
 The acceptance scenarios of the application and of the search, with the results recorded for each
@@ -9,7 +11,8 @@ OpenSSH image from `internal/adapter/ssh/testdata/sshd` (user `tester`, password
 forwarding allowed) and `postgres:17-alpine` started with `--network container:<sshd>` and
 `listen_addresses=127.0.0.1`, so the SSH server reaches it as `127.0.0.1`.
 
-Mark each scenario in the **Result** column: `pass`, `fail` (with a note) or `not run`.
+Mark each scenario in the column of its package (`.deb`, AppImage): `pass`, `fail` (with a note) or
+`not run`.
 Remove `~/.local/share/smartnote` before scenario 1 to start without a storage.
 
 | # | Scenario | Steps | Expected | .deb | AppImage |

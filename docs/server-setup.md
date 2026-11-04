@@ -1,3 +1,5 @@
+**English** | [Русский](server-setup.ru.md)
+
 # Server setup
 
 How to prepare your own server so that Smartnote backs up the notes to it and restores them from it.

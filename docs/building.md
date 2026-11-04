@@ -1,3 +1,5 @@
+**English** | [Русский](building.ru.md)
+
 # Building from source
 
 The tools, system packages and commands needed to build, test and package Smartnote, for

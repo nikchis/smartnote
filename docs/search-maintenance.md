@@ -1,3 +1,5 @@
+**English** | [Русский](search-maintenance.ru.md)
+
 # Search maintenance
 
 Notes for developers who change the search: the storage format, how the application restarts the

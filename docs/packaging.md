@@ -1,3 +1,5 @@
+**English** | [Русский](packaging.ru.md)
+
 # Packaging
 
 What goes into the Linux, Windows and macOS packages and how the package tasks build them: the
