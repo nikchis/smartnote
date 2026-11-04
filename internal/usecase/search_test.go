@@ -152,6 +152,14 @@ func (f *searchFixture) send(t *testing.T, ev SearchEvent) {
 	}
 }
 
+// handled returns once every event sent before is handled: the event
+// goroutine of Run handles one event at a time and takes the next one only
+// after that, and an empty event does nothing.
+func (f *searchFixture) handled(t *testing.T) {
+	t.Helper()
+	f.send(t, SearchEvent{})
+}
+
 // receive returns the value from ch or fails the test.
 func receive[T any](t *testing.T, ch <-chan T, what string) T {
 	t.Helper()
@@ -589,7 +597,8 @@ func TestSearchStatusWaitsForRebuild(t *testing.T) {
 	ready := SearchStatus{Notes: 1, Lexical: SearchReady, Semantic: SearchReady}
 
 	f.send(t, SearchEvent{Status: &loading})
-	f.send(t, SearchEvent{Status: &ready}) // returns once the first status is handled
+	f.send(t, SearchEvent{Status: &ready})
+	f.handled(t)
 
 	if n := f.statusCount(); n != 0 {
 		t.Fatalf("%d statuses published before the rebuild was applied", n)
@@ -617,6 +626,7 @@ func TestSearchStatusWaitsForRebuild(t *testing.T) {
 	receive(t, entered, "the restart's Upsert")
 	f.send(t, SearchEvent{Status: &ready})
 	f.send(t, SearchEvent{Status: &ready})
+	f.handled(t)
 
 	if n := f.statusCount(); n != 2 {
 		t.Fatalf("%d statuses, want 2: the restart's are held until its rebuild is applied", n)
