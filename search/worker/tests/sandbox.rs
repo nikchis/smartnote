@@ -67,8 +67,12 @@ fn sandbox_blocks_writes_and_network() {
         ("open_existing_for_write", "EACCES"),
         ("tcp_connect_127.0.0.1:9", "EACCES"),
         ("udp_socket", "EPERM"),
+        ("socketpair", "EPERM"),
         ("io_uring_setup", "EPERM"),
+        ("setxattr", "EPERM"),
         ("read_file", "ok"),
+        ("thread_create_file", "EACCES"),
+        ("thread_udp_socket", "EPERM"),
         ("extra_fds_include_socket", "yes"),
         ("level", "full"),
     ];
@@ -80,6 +84,10 @@ fn sandbox_blocks_writes_and_network() {
         );
     }
     assert!(!dir.0.join("new.txt").exists(), "the file was created");
+    assert!(
+        !dir.0.join("thread.txt").exists(),
+        "the early thread created its file"
+    );
     assert_eq!(
         fs::read_to_string(dir.0.join("existing.txt")).expect("read existing file"),
         "probe"
@@ -94,8 +102,11 @@ fn sandbox_control_without_apply() {
         "create_file",
         "open_existing_for_write",
         "udp_socket",
+        "socketpair",
         "io_uring_setup",
         "read_file",
+        "thread_create_file",
+        "thread_udp_socket",
     ] {
         assert_eq!(
             results.get(name).map(String::as_str),
@@ -109,6 +120,17 @@ fn sandbox_control_without_apply() {
         matches!(tcp, Some("ok" | "ECONNREFUSED")),
         "tcp_connect: {tcp:?}"
     );
+    // A file system without user extended attributes reports ENOTSUP; under the sandbox
+    // seccomp answers before the file system is asked.
+    let xattr = results.get("setxattr").map(String::as_str);
+    assert!(
+        matches!(xattr, Some("ok" | "ENOTSUP")),
+        "setxattr: {xattr:?}"
+    );
     assert!(!results.contains_key("level"), "{results:?}");
     assert!(dir.0.join("new.txt").exists(), "the file was not created");
+    assert!(
+        dir.0.join("thread.txt").exists(),
+        "the early thread did not create its file"
+    );
 }

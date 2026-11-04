@@ -1,15 +1,19 @@
 //! Test helper (feature `test-probes`): applies the worker's sandbox and tries the operations
 //! it must deny (spec §12.5). Used by `tests/sandbox.rs`.
 //!
-//! - `probe_sandbox <dir>` — opens a TCP socket, applies [`worker::sandbox::apply`], then tries
-//!   each operation and prints `name=result` per line (`ok` or the errno name), followed by
-//!   `extra_fds_include_socket=yes|no` and `level=full|partial|none`.
+//! - `probe_sandbox <dir>` — opens a TCP socket and starts a second thread, applies
+//!   [`worker::sandbox::apply`], then tries each operation and prints `name=result` per line
+//!   (`ok` or the errno name), followed by `extra_fds_include_socket=yes|no` and
+//!   `level=full|partial|none`. The `thread_*` operations run in the thread that existed
+//!   before the sandbox.
 //! - `probe_sandbox off <dir>` — the same operations without the sandbox (control run).
 //!
-//! `<dir>` must hold a file `existing.txt`; the probe creates `new.txt` next to it.
+//! `<dir>` must hold a file `existing.txt`; the probe creates `new.txt` and `thread.txt` next
+//! to it.
 #![allow(
     unsafe_code,
-    reason = "raw socket, connect and io_uring_setup calls through libc; every block is commented"
+    reason = "raw socket, connect, setxattr and io_uring_setup calls through libc; every block \
+              is commented"
 )]
 
 use std::process::ExitCode;
@@ -40,13 +44,18 @@ fn run(dir: &str, sandbox: bool) -> ExitCode {
 
 #[cfg(target_os = "linux")]
 mod linux {
+    use std::ffi::CString;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Write};
     use std::mem::size_of;
     use std::net::{Ipv4Addr, UdpSocket};
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::net::UnixStream;
     use std::path::Path;
     use std::process::ExitCode;
+    use std::sync::mpsc;
+    use std::thread;
 
     use worker::sandbox::{self, SandboxLevel};
 
@@ -64,7 +73,28 @@ mod linux {
                 return ExitCode::FAILURE;
             }
         };
+        // Started before the sandbox: the sandbox must reach threads that already run.
+        let (start, started) = mpsc::channel::<()>();
+        let thread_file = dir.join("thread.txt");
+        let early_thread = thread::spawn(move || {
+            started.recv().ok()?;
+            Some([
+                ("thread_create_file", outcome(File::create_new(thread_file))),
+                (
+                    "thread_udp_socket",
+                    outcome(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))),
+                ),
+            ])
+        });
         let level = sandbox.then(sandbox::apply);
+        let thread_results = start
+            .send(())
+            .ok()
+            .and_then(|()| early_thread.join().ok().flatten());
+        let Some(thread_results) = thread_results else {
+            eprintln!("the early thread failed");
+            return ExitCode::FAILURE;
+        };
 
         let results = [
             (
@@ -80,14 +110,16 @@ mod linux {
                 "udp_socket",
                 outcome(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))),
             ),
+            ("socketpair", outcome(UnixStream::pair())),
             ("io_uring_setup", outcome(io_uring_setup())),
+            ("setxattr", outcome(set_xattr(&existing))),
             ("read_file", outcome(fs::read(&existing))),
         ];
         let socket_reported = sandbox::extra_open_fds().contains(&tcp.as_raw_fd());
 
         let mut out = io::stdout().lock();
         let mut report = || -> io::Result<()> {
-            for (name, result) in &results {
+            for (name, result) in results.iter().chain(&thread_results) {
                 writeln!(out, "{name}={result}")?;
             }
             let yes_no = if socket_reported { "yes" } else { "no" };
@@ -119,6 +151,7 @@ mod linux {
                 Some(libc::EACCES) => "EACCES".to_owned(),
                 Some(libc::EPERM) => "EPERM".to_owned(),
                 Some(libc::ECONNREFUSED) => "ECONNREFUSED".to_owned(),
+                Some(libc::ENOTSUP) => "ENOTSUP".to_owned(),
                 Some(code) => format!("errno{code}"),
                 None => format!("error({err})"),
             },
@@ -163,6 +196,25 @@ mod linux {
                 socket.as_raw_fd(),
                 (&raw const addr).cast::<libc::sockaddr>(),
                 len,
+            )
+        };
+        check(rc.into()).map(drop)
+    }
+
+    /// Sets the extended attribute `user.smartnote.probe` of `path`.
+    fn set_xattr(path: &Path) -> io::Result<()> {
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other)?;
+        let name = c"user.smartnote.probe";
+        let value = b"probe";
+        // SAFETY: `path` and `name` are NUL-terminated strings and `value` holds `value.len()`
+        // bytes; all outlive the call and are only read.
+        let rc = unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                name.as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
             )
         };
         check(rc.into()).map(drop)

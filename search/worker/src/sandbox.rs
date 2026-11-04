@@ -19,13 +19,17 @@ pub enum SandboxLevel {
 
 /// Restricts the current process irreversibly (spec §10.2 pp. 2–4): `PR_SET_NO_NEW_PRIVS`,
 /// then Landlock (no file-system changes anywhere, no TCP bind or connect, abstract Unix
-/// sockets and signals scoped to the process), then seccomp (`socket`, `socketpair` and
-/// `io_uring_setup` fail with `EPERM`). Reading files and mapping them stays allowed.
+/// sockets and signals scoped to the process), then seccomp (`socket`, `socketpair`,
+/// `io_uring_setup` and the `setxattr` family fail with `EPERM`). Reading files and mapping
+/// them stays allowed.
 ///
 /// Requires the model files to be read and closed already: descriptors opened before stay
-/// usable (check them with [`extra_open_fds`]). Restricts the calling thread and the threads
-/// it creates later, so call it before any other thread exists. Applies whatever the kernel
-/// supports and never fails; the result tells how much. Not Linux: [`SandboxLevel::None`].
+/// usable (check them with [`extra_open_fds`]). Call it before any other thread exists: the
+/// calling thread and the threads it creates later are always restricted, threads that
+/// already run only where the kernel can synchronise them (seccomp always, Landlock since
+/// ABI 8); otherwise the result is at most [`SandboxLevel::Partial`]. Applies whatever the
+/// kernel supports and never fails; the result tells how much. Not Linux:
+/// [`SandboxLevel::None`].
 #[must_use]
 pub fn apply() -> SandboxLevel {
     os::apply()
@@ -45,7 +49,8 @@ mod os {
 
     use landlock::{
         ABI, Access, AccessFs, AccessNet, BitFlags, CompatLevel, Compatible, LandlockStatus,
-        RestrictionStatus, Ruleset, RulesetAttr, RulesetError, RulesetStatus, Scope,
+        RestrictSelfAttr, RestrictionStatus, Ruleset, RulesetAttr, RulesetError, RulesetStatus,
+        Scope,
     };
     use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
 
@@ -54,26 +59,50 @@ mod os {
     /// The Landlock ABI the ruleset is written for; older kernels get what they support.
     const LANDLOCK_ABI: ABI = ABI::V6;
 
+    /// `setxattrat` (Linux 6.13): the same number on every architecture; libc 0.2.191 has no
+    /// constant for it.
+    const SYS_SETXATTRAT: libc::c_long = 463;
+
     /// System calls that fail with `EPERM` under seccomp: Landlock does not restrict UDP and
-    /// other socket families, and `io_uring` would bypass seccomp for socket operations.
-    const DENIED_SYSCALLS: [libc::c_long; 3] = [
+    /// other socket families, `io_uring` would bypass seccomp for socket operations, and
+    /// Landlock does not restrict extended attributes, which could carry note text to disk.
+    const DENIED_SYSCALLS: [libc::c_long; 7] = [
         libc::SYS_socket,
         libc::SYS_socketpair,
         libc::SYS_io_uring_setup,
+        libc::SYS_setxattr,
+        libc::SYS_lsetxattr,
+        libc::SYS_fsetxattr,
+        SYS_SETXATTRAT,
     ];
+
+    /// `__X32_SYSCALL_BIT`: x32 system calls pass the `AUDIT_ARCH_X86_64` check of the filter
+    /// under their own numbers (`0x4000_0000 | nr` for every call of [`DENIED_SYSCALLS`]).
+    #[cfg(target_arch = "x86_64")]
+    const X32_SYSCALL_BIT: i64 = 0x4000_0000;
 
     pub(super) fn apply() -> SandboxLevel {
         // Without no_new_privs an unprivileged process can enforce neither Landlock nor seccomp.
         if !set_no_new_privs() {
             return SandboxLevel::None;
         }
-        let landlock_abi = restrict_landlock();
+        let landlock = restrict_landlock();
+        let seccomp = deny_syscalls().is_ok();
+        let abi = landlock.map(|l| l.abi);
         Enforced {
-            fs: coverage(fs_rights(), landlock_abi),
-            net: coverage(net_rights(), landlock_abi),
-            seccomp: deny_syscalls().is_ok(),
+            fs: coverage(fs_rights(), abi),
+            net: coverage(net_rights(), abi),
+            seccomp,
+            // Counted after the restrictions: a single thread now means that every later
+            // thread descends from the restricted one.
+            every_thread: landlock.is_some_and(|l| l.all_threads) || thread_count() == Some(1),
         }
         .level()
+    }
+
+    /// Threads of the process, `None` when `/proc/self/task` cannot be read.
+    fn thread_count() -> Option<usize> {
+        Some(fs::read_dir("/proc/self/task").ok()?.count())
     }
 
     pub(super) fn extra_open_fds() -> Vec<i32> {
@@ -112,9 +141,19 @@ mod os {
         AccessNet::BindTcp | AccessNet::ConnectTcp
     }
 
-    /// Enforces the Landlock ruleset and returns the ABI it was enforced with, `None` when
-    /// Landlock enforces nothing.
-    fn restrict_landlock() -> Option<ABI> {
+    /// The enforced Landlock domain.
+    #[derive(Clone, Copy, Debug)]
+    struct Landlock {
+        /// The ABI it was enforced with.
+        abi: ABI,
+        /// It applies to every thread of the process (`LANDLOCK_RESTRICT_SELF_TSYNC`, ABI 8),
+        /// not only to the calling thread.
+        all_threads: bool,
+    }
+
+    /// Enforces the Landlock ruleset on every thread where the kernel can (ABI 8), otherwise
+    /// on the calling thread; `None` when Landlock enforces nothing.
+    fn restrict_landlock() -> Option<Landlock> {
         let restrict = || -> Result<RestrictionStatus, RulesetError> {
             Ruleset::default()
                 .set_compatibility(CompatLevel::BestEffort)
@@ -122,21 +161,34 @@ mod os {
                 .handle_access(net_rights())?
                 .scope(Scope::AbstractUnixSocket | Scope::Signal)?
                 .create()?
+                .all_threads(true)?
                 .restrict_self()
         };
         let status = restrict().ok()?;
         match (status.ruleset, status.landlock) {
             (RulesetStatus::NotEnforced, _) => None,
-            (_, LandlockStatus::Available { effective_abi, .. }) => Some(effective_abi),
+            (_, LandlockStatus::Available { effective_abi, .. }) => Some(Landlock {
+                abi: effective_abi,
+                all_threads: status.all_threads,
+            }),
             (_, _) => None,
         }
     }
 
-    fn deny_syscalls() -> seccompiler::Result<()> {
+    /// The numbers of [`DENIED_SYSCALLS`] for the filter, with their x32 aliases on `x86_64`.
+    fn denied_syscall_numbers() -> Vec<i64> {
         #[allow(clippy::useless_conversion, reason = "c_long is i32 on 32-bit targets")]
-        let rules = DENIED_SYSCALLS
-            .iter()
-            .map(|&nr| (i64::from(nr), Vec::new()))
+        let native = DENIED_SYSCALLS.iter().map(|&nr| i64::from(nr));
+        #[cfg(target_arch = "x86_64")]
+        let native = native.flat_map(|nr| [nr, X32_SYSCALL_BIT | nr]);
+        native.collect()
+    }
+
+    /// Installs the seccomp filter on every thread of the process (TSYNC).
+    fn deny_syscalls() -> seccompiler::Result<()> {
+        let rules = denied_syscall_numbers()
+            .into_iter()
+            .map(|nr| (nr, Vec::new()))
             .collect();
         let filter = SeccompFilter::new(
             rules,
@@ -145,7 +197,7 @@ mod os {
             std::env::consts::ARCH.try_into()?,
         )?;
         let program: BpfProgram = filter.try_into()?;
-        seccompiler::apply_filter(&program)
+        seccompiler::apply_filter_all_threads(&program)
     }
 
     /// How much of one Landlock layer is enforced.
@@ -177,15 +229,18 @@ mod os {
         fs: Coverage,
         net: Coverage,
         seccomp: bool,
+        /// Landlock restricts every thread of the process: it was synchronised to all of
+        /// them, or the process had a single thread.
+        every_thread: bool,
     }
 
     impl Enforced {
         /// `Full` when the file-system rights, the network rights and seccomp all apply
-        /// (the Landlock scopes do not count), `None` when nothing does.
+        /// (the Landlock scopes do not count) to every thread, `None` when nothing applies.
         fn level(self) -> SandboxLevel {
-            match (self.fs, self.net, self.seccomp) {
-                (Coverage::Full, Coverage::Full, true) => SandboxLevel::Full,
-                (Coverage::None, Coverage::None, false) => SandboxLevel::None,
+            match (self.fs, self.net, self.seccomp, self.every_thread) {
+                (Coverage::Full, Coverage::Full, true, true) => SandboxLevel::Full,
+                (Coverage::None, Coverage::None, false, _) => SandboxLevel::None,
                 _ => SandboxLevel::Partial,
             }
         }
@@ -232,18 +287,75 @@ mod os {
         fn level_is_full_only_with_every_layer() {
             use Coverage::{Full, None, Partial};
             let cases = [
-                (Full, Full, true, SandboxLevel::Full),
-                (Full, Full, false, SandboxLevel::Partial),
-                (Partial, Full, true, SandboxLevel::Partial),
-                (Full, None, true, SandboxLevel::Partial),
-                (None, None, true, SandboxLevel::Partial),
-                (Partial, None, false, SandboxLevel::Partial),
-                (None, None, false, SandboxLevel::None),
+                (Full, Full, true, true, SandboxLevel::Full),
+                (Full, Full, false, true, SandboxLevel::Partial),
+                (Partial, Full, true, true, SandboxLevel::Partial),
+                (Full, None, true, true, SandboxLevel::Partial),
+                (None, None, true, true, SandboxLevel::Partial),
+                (Partial, None, false, true, SandboxLevel::Partial),
+                (None, None, false, true, SandboxLevel::None),
+                // Other threads ran and Landlock could not be synchronised to them (ABI < 8).
+                (Full, Full, true, false, SandboxLevel::Partial),
+                (None, None, false, false, SandboxLevel::None),
             ];
-            for (fs, net, seccomp, level) in cases {
-                let enforced = Enforced { fs, net, seccomp };
+            for (fs, net, seccomp, every_thread, level) in cases {
+                let enforced = Enforced {
+                    fs,
+                    net,
+                    seccomp,
+                    every_thread,
+                };
                 assert_eq!(enforced.level(), level, "{enforced:?}");
             }
+        }
+
+        #[test]
+        fn deny_list_covers_sockets_io_uring_and_xattrs() {
+            let numbers = denied_syscall_numbers();
+            let native = [
+                libc::SYS_socket,
+                libc::SYS_socketpair,
+                libc::SYS_io_uring_setup,
+                libc::SYS_setxattr,
+                libc::SYS_lsetxattr,
+                libc::SYS_fsetxattr,
+                SYS_SETXATTRAT,
+            ];
+            for nr in native {
+                assert!(numbers.contains(&nr), "{nr}: {numbers:?}");
+                #[cfg(target_arch = "x86_64")]
+                assert!(
+                    numbers.contains(&(0x4000_0000 | nr)),
+                    "x32 {nr}: {numbers:?}"
+                );
+            }
+            let per_call = if cfg!(target_arch = "x86_64") { 2 } else { 1 };
+            assert_eq!(numbers.len(), native.len() * per_call, "{numbers:?}");
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        #[test]
+        fn deny_list_matches_kernel_numbers() {
+            // From arch/x86/entry/syscalls/syscall_64.tbl; x32 adds 0x4000_0000.
+            assert_eq!(
+                denied_syscall_numbers(),
+                [
+                    41,
+                    0x4000_0029,
+                    53,
+                    0x4000_0035,
+                    425,
+                    0x4000_01a9,
+                    188,
+                    0x4000_00bc,
+                    189,
+                    0x4000_00bd,
+                    190,
+                    0x4000_00be,
+                    463,
+                    0x4000_01cf,
+                ]
+            );
         }
 
         #[test]
