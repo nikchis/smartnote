@@ -4,7 +4,7 @@ import wails from "@wailsio/runtime/plugins/vite";
 
 // The dev server injects component CSS as inline <style> elements, which the
 // strict CSP in index.html blocks. Allow inline styles in dev mode only; the
-// production build keeps the policy unchanged (see docs/dev-notes.md).
+// production build keeps the policy unchanged (see docs/development.md).
 function devInlineStyles(): Plugin {
   const strict = "style-src 'self';";
   return {

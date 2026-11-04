@@ -29,7 +29,7 @@ type UIError struct {
 
 // Error returns e as a JSON object. Wails rejects the call's promise with an
 // Error whose message is this text, so the interface parses the code from it
-// whatever else Wails adds (docs/dev-notes.md, check 1).
+// whatever else Wails adds (docs/development.md, check 1).
 func (e *UIError) Error() string {
 	b, err := json.Marshal(e)
 	if err != nil { // a struct of strings always marshals

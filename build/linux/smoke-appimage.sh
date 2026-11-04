@@ -8,7 +8,7 @@
 #
 # The AppImage relies on the host for libraries from the AppImage exclude list
 # and for bubblewrap (WebKitGTK sandbox); every Ubuntu desktop has them, a bare
-# container does not, so they are installed here. See docs/dev-notes.md.
+# container does not, so they are installed here. See docs/development.md.
 set -eu
 appimage="$1"
 searchsmoke="${2:?usage: smoke-appimage.sh APPIMAGE SEARCHSMOKE}"
