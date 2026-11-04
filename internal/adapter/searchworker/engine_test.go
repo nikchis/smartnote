@@ -336,6 +336,9 @@ func TestEngineHelloAndSearch(t *testing.T) {
 		t.Fatalf("Search after Remove: %v, %v", hits, err)
 	}
 
+	// stderr is logged by its own goroutine: wait for the line, then count.
+	e.log.waitLine(t, "source=search-worker", "fake: started mode=ok")
+
 	if n := e.log.countLines("source=search-worker", "fake: started mode=ok"); n != 1 {
 		t.Fatalf("%d stderr records of the start, want 1; log:\n%s", n, strings.Join(e.log.lines(), "\n"))
 	}
