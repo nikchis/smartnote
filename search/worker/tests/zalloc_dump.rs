@@ -1,6 +1,10 @@
 //! Freed memory holds no note text: a core dump of a process that built and freed strings
 //! and a tantivy index contains no copy of the marker (spec §6.9, §12.5).
 //!
+//! Stack memory is out of the allocator's reach: the probe runs, as the worker does, with
+//! glibc's cache of thread stacks off (`GLIBC_TUNABLES`), so the stacks of finished threads
+//! are unmapped. Without it CI runners kept 3 copies in a cached 2 MiB thread stack.
+//!
 //! The probe runs under `gdb` (its parent, so `ptrace_scope=1` allows it), aborts after
 //! freeing everything, and `gdb` writes its core file. Ignored when `gdb` is not found at
 //! build time (see `build.rs`).
@@ -27,6 +31,10 @@ fn marker_copies_in_core(zeroing: bool) -> Copies {
         .join(format!("probe_zalloc-{}-{mode}.core", std::process::id()));
     let generate = format!("generate-core-file {}", core.display());
     let mut gdb = Command::new("gdb");
+    // As the Go side starts the worker (internal/adapter/searchworker, workerEnv): glibc
+    // frees the stacks of finished threads instead of caching them, so the stacks of
+    // tantivy's threads, which hold the marker, leave the process.
+    gdb.env("GLIBC_TUNABLES", "glibc.pthread.stack_cache_size=0");
     gdb.args(["-nx", "-batch", "-iex", "set debuginfod enabled off"])
         .args(["-ex", "set startup-with-shell off", "-ex", "run"])
         .args(["-ex", "info proc mappings", "-ex", &generate, "--args"])
