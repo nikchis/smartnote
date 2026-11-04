@@ -14,3 +14,7 @@ build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 *.db-journal
 *.db.tmp
 .test-coverage
+build/model/
+build/model-src/
+tools/model/.venv/
+__pycache__/

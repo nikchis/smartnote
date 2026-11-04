@@ -1,0 +1,10 @@
+{
+  "release": "model-e5s-1",
+  "base_url": "https://github.com/nikchis/smartnote/releases/download/model-e5s-1/",
+  "files": {
+    "manifest.json": "2cc8a414d89e4d3ecba939bbb489d3046ed1d4e2f5684434ca1f1251a5d38ed2",
+    "model.onnx": "c46a1576ab4287e2aa42ba78d6ebb9dd5f697791f893be1c278343d605fe9aa0",
+    "tokenizer.json": "8886738596136ff0028af1e7417e71ac3981a911d6fd658cd93a2d1f1a96ecd0",
+    "tokenizer.kit": "f28a8061dde1b0efd16bcec11420372f6babdc42c8b914d407622a51b949a241"
+  }
+}

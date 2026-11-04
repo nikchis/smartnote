@@ -72,3 +72,27 @@ tasks:
     summary: Builds Docker image for cross-compilation (~800MB download)
     cmds:
       - task: common:setup:docker
+
+  model:build:
+    summary: |
+      Prepares the search model from the pinned e5-small revision into MODEL_DIR (default build/model)
+      and checks it: tools/model/build.py, model-tool convert, tools/model/verify.py, kitoken parity.
+      Needs uv and cargo. Source files are cached in build/model-src.
+    vars:
+      MODEL_DIR: '{{.MODEL_DIR | default "build/model"}}'
+      MODEL_PATH: '{{if osIsAbs .MODEL_DIR}}{{.MODEL_DIR}}{{else}}{{joinPath .ROOT_DIR .MODEL_DIR}}{{end}}'
+      SOURCES: '{{joinPath .ROOT_DIR "build" "model-src"}}'
+    env:
+      SMARTNOTE_MODEL_DIR: '{{.MODEL_PATH}}'
+    cmds:
+      - uv run --project tools/model --locked python tools/model/build.py --sources "{{.SOURCES}}" --out "{{.MODEL_PATH}}"
+      - cd search && cargo run --locked --release -p model-tool -- convert "{{.MODEL_PATH}}"
+      - uv run --project tools/model --locked python tools/model/verify.py --sources "{{.SOURCES}}" --model-dir "{{.MODEL_PATH}}"
+      - cd search && cargo test --locked --release -p model-tool --test parity -- --ignored
+
+  model:fetch:
+    summary: |
+      Downloads the search model files listed in model.lock.json into build/model and checks their SHA-256.
+      MODEL_BASE_URL overrides the release URL (local work only, e.g. file:///path/to/dir/).
+    cmds:
+      - go run ./tools/modelfetch -lock model.lock.json -out build/model
