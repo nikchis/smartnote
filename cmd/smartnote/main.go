@@ -194,7 +194,17 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		return nil, err
 	}
 
-	notes, err := usecase.NewNotes(store, clock, uuid.New, changes)
+	// The engine stays unavailable and Run is not started until the search
+	// worker is connected; the index hooks already run.
+	search, err := usecase.NewSearch(usecase.SearchDeps{
+		Engine: newUnavailableEngine(), Notes: store, Embeddings: store, Changes: changes,
+		Warn: func(err error) { wailsui.LogError(env.Log, "search", err) },
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	notes, err := usecase.NewNotes(store, clock, uuid.New, changes, search)
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +218,7 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		Local: store, Settings: store, Remote: connector, Changes: changes, IDs: uuid.New, Gate: gate, Offer: offer,
 		OnState: func(s usecase.State) { emit(wailsui.EventSyncState, wailsui.ToStateDTO(s)) },
 		Warn:    func(err error) { wailsui.LogError(env.Log, "sync", err) },
+		Index:   search,
 	})
 	if err != nil {
 		return nil, err
