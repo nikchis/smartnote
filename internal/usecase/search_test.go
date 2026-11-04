@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -263,6 +264,75 @@ func TestSearchRebuildBatches(t *testing.T) {
 	}
 
 	f.waitMatchesStore(t)
+}
+
+// upsertPayload is the text and embedding bytes of the notes of one Upsert.
+func upsertPayload(notes []IndexedNote) int {
+	size := 0
+	for _, n := range notes {
+		size += len(n.Name) + len(n.Info) + len(n.Embedding)
+	}
+
+	return size
+}
+
+// Cached embeddings make a batch of 100 notes larger than the 16 MiB frame of
+// the worker protocol, so batches are bounded by size too; a note over the
+// budget on its own still goes, alone (spec §7.1).
+func TestSearchRebuildBatchesBySize(t *testing.T) {
+	// The longest valid name and text of 2-byte letters, with an embedding
+	// record of 125 chunks (194 922 bytes), as in the review of PR 6.
+	name := strings.Repeat("я", 64)
+	info := strings.TrimSuffix(strings.Repeat(strings.Repeat("я", 64)+"\n", 126), "\n")
+	record := bytes.Repeat([]byte{1}, 194922)
+
+	notes := make([]domain.Note, 100)
+	records := map[uuid.UUID][]byte{}
+
+	for i := range notes {
+		notes[i] = domain.Note{ID: uuid.New(), Name: name, Info: info}
+		if err := notes[i].Validate(); err != nil {
+			t.Fatal(err)
+		}
+
+		records[notes[i].ID] = record
+	}
+
+	huge := domain.Note{ID: uuid.New(), Name: "huge", Info: "x"}
+	notes = append(notes, huge)
+	records[huge.ID] = bytes.Repeat([]byte{2}, upsertBytes+1)
+
+	f := newSearchFixture(t, notes...)
+	f.embeddings.records = records
+	f.run(t)
+	f.waitMatchesStore(t)
+
+	_, calls := f.engine.snapshot()
+
+	total := 0
+
+	for _, c := range calls[1:] {
+		if c.Kind != "upsert" {
+			t.Fatalf("commands = %v, want reset and upserts", kinds(calls))
+		}
+
+		total += len(c.Notes)
+
+		size := upsertPayload(c.Notes)
+		if size > upsertBytes && len(c.Notes) > 1 {
+			t.Errorf("upsert of %d notes carries %d bytes, want at most %d", len(c.Notes), size, upsertBytes)
+		}
+
+		for _, n := range c.Notes {
+			if !bytes.Equal(n.Embedding, records[n.ID]) {
+				t.Errorf("note %v lost its cached embedding", n.ID)
+			}
+		}
+	}
+
+	if total != len(notes) {
+		t.Errorf("%d notes upserted, want %d", total, len(notes))
+	}
 }
 
 func TestSearchOrderSaveDuringRebuild(t *testing.T) {

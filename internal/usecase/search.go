@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -138,6 +137,18 @@ var ErrSearchUnavailable = errors.New("search unavailable")
 
 // upsertBatch is the most notes one Upsert carries (spec §3.2, §7.2).
 const upsertBatch = 100
+
+// upsertBytes bounds the name, text and embedding bytes of the notes of one
+// Upsert of a rebuild: half the 16 MiB frame of the worker protocol, the rest
+// is room for the encoding. Cached embeddings make 100 notes far larger than
+// their text: 100 valid notes with records of 125 chunks need 21 MB.
+//
+// A note over this budget goes alone, and alone it always fits the frame: a
+// name of 64 and a text of 8192 UTF-16 units are at most 192 and 24 576
+// bytes of UTF-8; every chunk of the record takes at least one new char of
+// the text, so a record has at most 8192 chunks of 1561 bytes (a 1536-byte
+// vector and its line numbers) and some 100 bytes more, 12.8 MB in all.
+const upsertBytes = 8 << 20
 
 // errSearchRunning is returned by a Run while another one runs.
 var errSearchRunning = errors.New("search: already running")
@@ -381,10 +392,11 @@ func (s *Search) readableEmbeddings(ctx context.Context) map[uuid.UUID][]byte {
 	return records
 }
 
-// enqueueRebuild enqueues a reset and upserts of notes in batches, each note
-// with a new change number, and cmdRebuilt with the number of this rebuild
-// after them, which it returns; statuses are held until the sender reaches
-// it, and Query is unavailable meanwhile when cause is a restart.
+// enqueueRebuild enqueues a reset and upserts of notes in batches of at most
+// upsertBatch notes and upsertBytes bytes (a larger note goes alone), each
+// note with a new change number, and cmdRebuilt with the number of this
+// rebuild after them, which it returns; statuses are held until the sender
+// reaches it, and Query is unavailable meanwhile when cause is a restart.
 func (s *Search) enqueueRebuild(notes []domain.Note, embeddings map[uuid.UUID][]byte, cause rebuildCause) uint64 {
 	s.statusMu.Lock()
 	s.rebuildSeq++
@@ -400,16 +412,28 @@ func (s *Search) enqueueRebuild(notes []domain.Note, embeddings map[uuid.UUID][]
 
 	cmds := []indexCommand{{kind: cmdReset}}
 
-	for batch := range slices.Chunk(notes, upsertBatch) {
-		indexed := make([]IndexedNote, 0, len(batch))
+	var (
+		batch []IndexedNote
+		size  int
+	)
 
-		for _, n := range batch {
-			rev := s.nextRevLocked()
-			s.revs[n.ID] = rev
-			indexed = append(indexed, IndexedNote{ID: n.ID, Rev: rev, Name: n.Name, Info: n.Info, Embedding: embeddings[n.ID]})
+	for _, n := range notes {
+		rev := s.nextRevLocked()
+		s.revs[n.ID] = rev
+		in := IndexedNote{ID: n.ID, Rev: rev, Name: n.Name, Info: n.Info, Embedding: embeddings[n.ID]}
+		inSize := len(in.Name) + len(in.Info) + len(in.Embedding)
+
+		if len(batch) == upsertBatch || (len(batch) > 0 && size+inSize > upsertBytes) {
+			cmds = append(cmds, indexCommand{kind: cmdUpsert, notes: batch})
+			batch, size = nil, 0
 		}
 
-		cmds = append(cmds, indexCommand{kind: cmdUpsert, notes: indexed})
+		batch = append(batch, in)
+		size += inSize
+	}
+
+	if len(batch) > 0 {
+		cmds = append(cmds, indexCommand{kind: cmdUpsert, notes: batch})
 	}
 
 	s.queue.push(append(cmds, indexCommand{kind: cmdRebuilt, rebuild: seq})...)

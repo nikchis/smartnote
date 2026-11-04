@@ -364,6 +364,51 @@ func TestEngineUpsertOverLimit(t *testing.T) {
 	}
 }
 
+// An upsert whose cached embeddings do not fit one frame is sent again
+// without them, and the worker computes them, instead of losing the notes.
+// The notes are those of the review of PR 6: 100 valid notes with records of
+// 125 chunks, 21 MB in one upsert.
+func TestEngineUpsertOverFrameDropsEmbeddings(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "ok", nil)
+	e.start(t)
+
+	ctx := t.Context()
+	name := strings.Repeat("я", 64)
+	info := strings.TrimSuffix(strings.Repeat(strings.Repeat("я", 64)+"\n", 126), "\n")
+	record := make([]byte, 194922)
+
+	notes := make([]usecase.IndexedNote, maxUpsert)
+	for i := range notes {
+		notes[i] = usecase.IndexedNote{ID: uuid.New(), Rev: 1, Name: name, Info: info, Embedding: record}
+	}
+
+	if err := e.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if err := e.Upsert(ctx, notes); err != nil {
+		t.Fatalf("Upsert of %d notes with cached embeddings: %v", len(notes), err)
+	}
+
+	// The worker got them without the records: it reports new ones.
+	seen := map[uuid.UUID]bool{}
+
+	e.waitEvent(t, "an embedded event for every note", func(ev usecase.SearchEvent) bool {
+		if ev.Embedded != nil {
+			seen[ev.Embedded.ID] = true
+		}
+
+		return len(seen) == len(notes)
+	})
+
+	hits, err := e.Search(ctx, "я", 100)
+	if err != nil || len(hits) != len(notes) {
+		t.Fatalf("Search: %d hits, %v; want %d", len(hits), err, len(notes))
+	}
+}
+
 func TestEngineFloodDoesNotBlockReplies(t *testing.T) {
 	t.Parallel()
 

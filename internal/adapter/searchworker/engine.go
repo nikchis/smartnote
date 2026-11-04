@@ -233,18 +233,35 @@ func (e *Engine) Reset(ctx context.Context) error {
 
 // Upsert adds or replaces up to 100 notes; more are an error, as the worker
 // takes at most 100 per message (spec §7.2) and usecase.Search sends batches
-// of 100.
+// of 100. Notes whose cached embeddings make the message larger than a frame
+// are sent again without them: the worker computes them anew.
 func (e *Engine) Upsert(ctx context.Context, notes []usecase.IndexedNote) error {
 	if len(notes) > maxUpsert {
 		return fmt.Errorf("search worker: upsert of %d notes, at most %d", len(notes), maxUpsert)
 	}
 
 	in := make([]noteIn, len(notes))
+	cached := false
+
 	for i, n := range notes {
 		in[i] = noteIn{ID: n.ID.String(), Rev: n.Rev, Name: n.Name, Info: n.Info, Emb: n.Embedding}
+		cached = cached || n.Embedding != nil
 	}
 
-	return e.command(ctx, func(req uint64) any { return &upsertMsg{T: tUpsert, Req: req, Notes: in} })
+	upsert := func(req uint64) any { return &upsertMsg{T: tUpsert, Req: req, Notes: in} }
+
+	err := e.command(ctx, upsert)
+	if !cached || !errors.Is(err, errFrameTooLarge) {
+		return err
+	}
+
+	e.cfg.Log.Warn("search worker: upsert over the frame limit, sent without cached embeddings", slog.Int("notes", len(in)))
+
+	for i := range in {
+		in[i].Emb = nil
+	}
+
+	return e.command(ctx, upsert)
 }
 
 // Remove removes notes.
