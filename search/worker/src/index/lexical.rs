@@ -1,6 +1,8 @@
 //! Word search: a tantivy RAM index with one document per line (spec §6.5).
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::ops::Range;
 
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, PhraseQuery, Query as TantivyQuery, TermQuery};
@@ -188,10 +190,17 @@ impl LexicalIndex {
     }
 
     /// Byte offset in `form` of the first match of `q` (the `first` of a word hit, which
-    /// [`search`](Self::search) leaves `None`): the first token whose analyzed term is
-    /// a term of a word of `q`, or the start of a phrase of `q` (consecutive tokens).
+    /// [`search`](Self::search) leaves `None`): the start of [`match_range`](Self::match_range).
     #[must_use]
     pub fn first_match(&self, form: &str, q: &Query) -> Option<usize> {
+        self.match_range(form, q).map(|r| r.start)
+    }
+
+    /// Byte range in `form` of the first match of `q`: the first token whose analyzed term is
+    /// a term of a word of `q`, or a phrase of `q` (consecutive tokens, from the start of the
+    /// first to the end of the last). Of matches starting together, the longer one.
+    #[must_use]
+    pub fn match_range(&self, form: &str, q: &Query) -> Option<Range<usize>> {
         let tokens = self.analyze(form);
         let words: Vec<String> = q
             .words
@@ -202,15 +211,18 @@ impl LexicalIndex {
         let by_word = tokens
             .iter()
             .find(|t| words.contains(&t.text))
-            .map(|t| t.offset_from);
+            .map(|t| t.offset_from..t.offset_to);
         let by_phrase = q.phrases.iter().filter_map(|p| {
             let terms: Vec<String> = self.analyze(p).into_iter().map(|t| t.text).collect();
             tokens
                 .windows(terms.len().max(1))
                 .find(|w| !terms.is_empty() && w.iter().map(|t| &t.text).eq(terms.iter()))
-                .map(|w| w[0].offset_from)
+                .and_then(|w| Some(w.first()?.offset_from..w.last()?.offset_to))
         });
-        by_word.into_iter().chain(by_phrase).min()
+        by_word
+            .into_iter()
+            .chain(by_phrase)
+            .min_by_key(|r| (r.start, Reverse(r.end)))
     }
 
     /// Query for a word or a phrase: a term for one token, a phrase for several; none when the
@@ -342,5 +354,23 @@ mod tests {
             Some(form.find("лежит").expect("in form"))
         );
         assert_eq!(at("zzz"), None);
+    }
+
+    #[test]
+    fn words_match_range() {
+        let index = index(&[]);
+        let form = "ключ лежит в менеджере паролей";
+        let range = |q: &str| index.match_range(form, &parse_query(q));
+        let span = |s: &str| {
+            let at = form.find(s).expect("in form");
+            Some(at..at + s.len())
+        };
+        assert_eq!(range("пароли"), span("паролей"));
+        assert_eq!(range("\"лежит в\""), span("лежит в"));
+        assert_eq!(
+            range("лежит \"лежит в менеджере\""),
+            span("лежит в менеджере")
+        );
+        assert_eq!(range("zzz"), None);
     }
 }
