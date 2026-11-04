@@ -741,16 +741,22 @@ struct NoteWork {
 }
 
 impl NoteWork {
-    fn new(model: &Model, job: NoteJob) -> Self {
+    fn new(model: &Model, mut job: NoteJob) -> Self {
         let lines: Vec<&str> = job.lines.iter().map(String::as_str).collect();
-        let spans = chunk_note(
+        let note = chunk_note(
             &job.name,
             &lines,
             &|text| model.count_tokens(text),
             &ChunkParams::default(),
         );
-        let chunks = Vec::with_capacity(spans.len());
-        Self { job, spans, chunks }
+        // Every chunk is embedded with the part of the name it was measured with.
+        job.name.truncate(note.name_len);
+        let chunks = Vec::with_capacity(note.spans.len());
+        Self {
+            job,
+            spans: note.spans,
+            chunks,
+        }
     }
 
     /// Embeds the next chunk; `true` when every chunk is done (also for a note without any).

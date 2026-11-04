@@ -6,7 +6,7 @@ pub mod files;
 pub mod model;
 pub mod record;
 
-pub use chunk::{ChunkParams, ChunkSpan, chunk_note};
+pub use chunk::{ChunkParams, ChunkSpan, Chunks, chunk_note};
 pub use files::{Manifest, ModelFiles, OrtLibrary, has_avx2};
 pub use model::{DIM, DISABLE_TELEMETRY, Model, load_ort};
 pub use record::{ChunkVec, RECORD_VERSION, Record, index_id, text_hash};

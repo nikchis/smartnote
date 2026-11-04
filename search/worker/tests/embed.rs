@@ -24,7 +24,8 @@ use std::time::Instant;
 
 use serde::Deserialize;
 use worker::embed::{
-    ChunkParams, DIM, Manifest, Model, ModelFiles, OrtLibrary, chunk_note, has_avx2, load_ort,
+    ChunkParams, ChunkSpan, DIM, Manifest, Model, ModelFiles, OrtLibrary, chunk_note, has_avx2,
+    load_ort,
 };
 
 const MIN_COSINE: f32 = 0.9999;
@@ -123,6 +124,23 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Chunks a note with the model's own token counts and checks that every model input, the
+/// prefix with the part of the name kept and the special tokens included, fits `p.max`.
+fn assert_chunks_fit(model: &Model, name: &str, lines: &[&str], p: &ChunkParams) -> Vec<ChunkSpan> {
+    let chunks = chunk_note(name, lines, &|t| model.count_tokens(t), p);
+    let kept = &name[..chunks.name_len];
+    for span in &chunks.spans {
+        let first = span.first as usize - 1;
+        let body = match span.window {
+            Some((start, end)) => lines[first][start..end].to_owned(),
+            None => lines[first..span.last as usize].join("\n"),
+        };
+        let tokens = model.count_tokens(&format!("passage: {kept}\n{body}")) + 2;
+        assert!(tokens <= p.max, "{span:?}: {tokens} tokens");
+    }
+    chunks.spans
+}
+
 fn model_embeddings_match_reference() {
     let model_dir = required_path("SMARTNOTE_MODEL_DIR");
     let ort_lib = required_path("SMARTNOTE_ORT_LIB");
@@ -185,21 +203,24 @@ fn model_embeddings_match_reference() {
     let note = note.join("\n\n");
     let lines: Vec<&str> = note.split('\n').collect();
     let p = ChunkParams::default();
-    let spans = chunk_note("Long note", &lines, &|t| model.count_tokens(t), &p);
+    let spans = assert_chunks_fit(&model, "Long note", &lines, &p);
     assert!(
         spans.iter().any(|s| s.window.is_some()),
         "the long line is cut"
     );
-    for span in &spans {
-        let first = span.first as usize - 1;
-        let body = match span.window {
-            Some((start, end)) => lines[first][start..end].to_owned(),
-            None => lines[first..span.last as usize].join("\n"),
-        };
-        let tokens = model.count_tokens(&format!("passage: Long note\n{body}")) + 2;
-        assert!(tokens <= p.max, "{span:?}: {tokens} tokens");
-    }
     show!("{} chunks of a long note", spans.len());
+
+    // From the review of PR 6: a valid name of 64 U+FDFA expands to some 390 tokens; its chunks
+    // still fit the model input, so the distinct tail of the text reaches the model.
+    let name = "\u{FDFA}".repeat(64);
+    let line = format!("{} cat", "я".repeat(124));
+    let spans = assert_chunks_fit(&model, &name, &[line.as_str()], &p);
+    let last = spans.last().expect("a chunk");
+    assert!(
+        last.window.is_none_or(|w| w.1 == line.len()),
+        "the tail is covered: {last:?}"
+    );
+    show!("{} chunks under an expanding name", spans.len());
 
     // Timing of one chunk of about 256 tokens with the prefix and special tokens.
     let body: String = (1..=16)

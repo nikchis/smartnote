@@ -43,10 +43,23 @@ pub struct ChunkSpan {
     pub window: Option<(usize, usize)>,
 }
 
+/// Chunks of a note.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Chunks {
+    /// Length in bytes of the start of the name that the prefix of every chunk carries.
+    pub name_len: usize,
+    /// The chunks in order.
+    pub spans: Vec<ChunkSpan>,
+}
+
 /// Splits the lines of `info` into chunks.
 ///
 /// `count` gives the number of tokens of a text without special tokens. The budget of a chunk
-/// includes the prefix `passage: <name>\n` and two special tokens. Paragraphs (runs of
+/// includes the prefix `passage: <name>\n` and two special tokens. A name whose prefix would
+/// take more than half of `max` (some characters expand to many tokens) is cut on a char
+/// boundary until it takes no more; [`Chunks::name_len`] tells the part kept, which the
+/// embedding of every chunk must use. Every chunk, prefix included, then fits `max`, so the
+/// model input is never cut off. Paragraphs (runs of
 /// non-empty lines) are packed whole up to `target`, so boundaries fall on empty lines; a
 /// paragraph over `target` is split by lines with `overlap_lines` shared lines; a line over
 /// `max` is cut into windows of `window` tokens sharing `window_overlap` tokens. A chunk under
@@ -58,7 +71,7 @@ pub fn chunk_note(
     lines: &[&str],
     count: &dyn Fn(&str) -> usize,
     p: &ChunkParams,
-) -> Vec<ChunkSpan> {
+) -> Chunks {
     // sums[i] = tokens of lines 0..i, an empty line counting 0.
     let sums = iter::once(0)
         .chain(lines.iter().scan(0, |total, line| {
@@ -66,14 +79,35 @@ pub fn chunk_note(
             Some(*total)
         }))
         .collect();
+    let name_len = prefix_name_len(name, count, p);
     let chunker = Chunker {
         lines,
         sums,
-        prefix: count(&format!("passage: {name}\n")) + SPECIAL_TOKENS,
+        prefix: prefix_tokens(&name[..name_len], count),
         count,
         p,
     };
-    chunker.run()
+    Chunks {
+        name_len,
+        spans: chunker.run(),
+    }
+}
+
+/// Tokens of the prefix of a chunk with `name`, special tokens included.
+fn prefix_tokens(name: &str, count: &dyn Fn(&str) -> usize) -> usize {
+    count(&format!("passage: {name}\n")) + SPECIAL_TOKENS
+}
+
+/// Length in bytes of the longest start of `name`, on a char boundary, whose prefix takes at
+/// most half of `max`: the whole name as a rule.
+fn prefix_name_len(name: &str, count: &dyn Fn(&str) -> usize, p: &ChunkParams) -> usize {
+    let fits = |end: usize| prefix_tokens(&name[..end], count) <= p.max / 2;
+    if fits(name.len()) {
+        return name.len();
+    }
+    let bounds: Vec<usize> = name.char_indices().map(|(at, _)| at).collect();
+    // bounds[0] is 0: the empty name always fits.
+    bounds[last_fitting(0, bounds.len() - 1, |i| fits(bounds[i]))]
 }
 
 /// `<s>` and `</s>` around every input of the model.
@@ -134,6 +168,10 @@ impl Chunker<'_> {
         }
         pieces.extend(current);
         self.join_small(&mut pieces);
+        debug_assert!(
+            pieces.iter().all(|c| self.prefix + c.tokens <= self.p.max),
+            "a chunk over the model input"
+        );
         pieces.iter().map(span).collect()
     }
 
@@ -214,7 +252,8 @@ impl Chunker<'_> {
     }
 
     /// Cuts line `i` into windows of at most the window budget that share `window_overlap`
-    /// tokens.
+    /// tokens. The budget is what `window` leaves after the prefix, but at least half of
+    /// `window`, and never more than `max` leaves: the prefix takes at most half of `max`.
     fn split_line(&self, i: usize, pieces: &mut Vec<Piece>) {
         let line = self.lines[i];
         // Char boundaries of the line, its end included.
@@ -228,6 +267,7 @@ impl Chunker<'_> {
             .window
             .saturating_sub(self.prefix)
             .max(self.p.window / 2)
+            .min(self.p.max.saturating_sub(self.prefix))
             .max(1);
         let tokens = |from: usize, to: usize| (self.count)(&line[bounds[from]..bounds[to]]);
         let last = bounds.len() - 1;
@@ -384,7 +424,7 @@ mod tests {
 
     fn chunk(lines: &[String]) -> Vec<ChunkSpan> {
         let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
-        chunk_note("N", &lines, &words, &ChunkParams::default())
+        chunk_note("N", &lines, &words, &ChunkParams::default()).spans
     }
 
     /// Tokens of a chunk with its prefix and special tokens.
@@ -537,6 +577,55 @@ mod tests {
                 .iter()
                 .all(|s| s.first == 12 && s.last == 12 && s.window.is_some())
         );
+    }
+
+    /// Like `words`, but U+FDFA counts 7 tokens, as it about does with the pinned tokenizer.
+    fn expanding(text: &str) -> usize {
+        words(text) + 6 * text.chars().filter(|&c| c == '\u{FDFA}').count()
+    }
+
+    /// From the review of PR 6: a valid name of 64 U+FDFA takes most of the model input with
+    /// its prefix. The name is cut so that its prefix takes at most half of `max`, and every
+    /// chunk, prefix and special tokens included, fits the model input: `Model::embed` would
+    /// cut off the tail of a longer one.
+    #[test]
+    fn chunk_expanding_name_fits_model_input() {
+        let name = "\u{FDFA}".repeat(64);
+        let lines = [line(130, 0), line(300, 0)];
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let p = ChunkParams::default();
+
+        let chunks = chunk_note(&name, &lines, &expanding, &p);
+
+        assert!(name.is_char_boundary(chunks.name_len));
+        let prefix = expanding(&format!("passage: {}\n", &name[..chunks.name_len])) + 2;
+        assert!(prefix <= p.max / 2, "prefix of {prefix} tokens");
+        assert!(chunks.name_len > 0, "the name is cut, not dropped");
+        for span in &chunks.spans {
+            let first = span.first as usize - 1;
+            let body = match span.window {
+                Some((start, end)) => lines[first][start..end].to_owned(),
+                None => lines[first..span.last as usize].join("\n"),
+            };
+            let input = prefix + expanding(&body);
+            assert!(input <= p.max, "{span:?}: {input} tokens");
+        }
+        let last = chunks.spans.last().expect("chunks");
+        assert_eq!(
+            last.window.map(|w| w.1),
+            Some(lines[1].len()),
+            "the tail is covered"
+        );
+    }
+
+    #[test]
+    fn chunk_short_name_is_whole() {
+        let lines = [line(10, 0)];
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+
+        let chunks = chunk_note("Name", &lines, &words, &ChunkParams::default());
+
+        assert_eq!(chunks.name_len, "Name".len());
     }
 
     #[test]

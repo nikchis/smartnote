@@ -350,8 +350,10 @@ fn embed_notes(
 /// Chunks and embeds a note as the worker's embed thread does.
 fn embed_note(model: &mut Model, note: &Note, params: &ChunkParams) -> Vec<ChunkVec> {
     let lines: Vec<&str> = note.info.split('\n').collect();
-    let spans = chunk_note(&note.name, &lines, &|t| model.count_tokens(t), params);
-    spans
+    let chunks = chunk_note(&note.name, &lines, &|t| model.count_tokens(t), params);
+    let name = &note.name[..chunks.name_len];
+    chunks
+        .spans
         .iter()
         .map(|span| {
             let first = span.first as usize - 1;
@@ -359,9 +361,7 @@ fn embed_note(model: &mut Model, note: &Note, params: &ChunkParams) -> Vec<Chunk
                 Some((start, end)) => lines[first][start..end].to_owned(),
                 None => lines[first..span.last as usize].join("\n"),
             };
-            let vec = model
-                .embed_passage(&note.name, &body)
-                .expect("chunk embeds");
+            let vec = model.embed_passage(name, &body).expect("chunk embeds");
             ChunkVec {
                 first: span.first,
                 last: span.last,
