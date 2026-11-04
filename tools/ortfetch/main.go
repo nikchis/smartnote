@@ -1,7 +1,9 @@
 // Command ortfetch downloads the ONNX Runtime archive of one target listed in ort.lock.json,
-// checks its SHA-256, extracts only the runtime library into a directory and checks the
-// library's SHA-256. A library already present with the expected digest is kept; a library
-// that does not match is replaced, and nothing that fails a check is left behind.
+// checks its SHA-256, extracts the runtime library and the notice files (the lock's "notices",
+// next to the library's directory in the archive, e.g. LICENSE) into a directory and checks the
+// library's SHA-256; the notices are covered by the archive digest. A library already present
+// with the expected digest is kept when every notice file is present too; otherwise the archive
+// is fetched again, and nothing that fails a check is left behind.
 //
 // Usage: go run ./tools/ortfetch [-lock ort.lock.json] [-out build/ort] [-target linux-amd64]
 //
@@ -35,7 +37,8 @@ import (
 const (
 	// downloadTimeout bounds the archive download; the Windows archive is about 80 MB.
 	downloadTimeout = 30 * time.Minute
-	// maxLibrary bounds the extracted library (about 45 MB on macOS) against archive bombs.
+	// maxLibrary bounds each extracted file (the library is about 45 MB on macOS) against
+	// archive bombs.
 	maxLibrary = 256 << 20
 
 	kindTgz = "tgz"
@@ -51,7 +54,10 @@ type target struct {
 }
 
 type lockFile struct {
-	Version string            `json:"version"`
+	Version string `json:"version"`
+	// Notices are file names in the top directory of every archive (the first element of the
+	// lib path) that are extracted beside the library: the licence texts shipped with it.
+	Notices []string          `json:"notices"`
 	Targets map[string]target `json:"targets"`
 }
 
@@ -95,7 +101,7 @@ func run(ctx context.Context, lockPath, outDir, name string) error {
 	}
 
 	libPath := filepath.Join(outDir, path.Base(entry.Lib))
-	if got, err := fileSHA256(libPath); err == nil && got == entry.LibSHA256 {
+	if got, err := fileSHA256(libPath); err == nil && got == entry.LibSHA256 && filesExist(outDir, lock.Notices) {
 		fmt.Println("ok", libPath)
 
 		return nil
@@ -105,7 +111,19 @@ func run(ctx context.Context, lockPath, outDir, name string) error {
 		return err
 	}
 
-	return fetchLibrary(ctx, entry, outDir, libPath)
+	return fetchLibrary(ctx, entry, lock.Notices, outDir, libPath)
+}
+
+// filesExist reports whether every one of names is a regular file in dir.
+func filesExist(dir string, names []string) bool {
+	for _, name := range names {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || !info.Mode().IsRegular() {
+			return false
+		}
+	}
+
+	return true
 }
 
 func readLock(lockPath string) (lockFile, error) {
@@ -132,7 +150,7 @@ func readLock(lockPath string) (lockFile, error) {
 	slices.Sort(names)
 
 	for _, name := range names {
-		if err := checkTarget(lock.Targets[name]); err != nil {
+		if err := checkTarget(lock.Targets[name], lock.Notices); err != nil {
 			return lock, fmt.Errorf("%s: %s: %w", lockPath, name, err)
 		}
 	}
@@ -140,7 +158,7 @@ func readLock(lockPath string) (lockFile, error) {
 	return lock, nil
 }
 
-func checkTarget(entry target) error {
+func checkTarget(entry target, notices []string) error {
 	if archiveKind(entry.URL) == "" {
 		return fmt.Errorf("unsupported archive %q (want .tgz, .tar.gz or .zip)", entry.URL)
 	}
@@ -155,6 +173,15 @@ func checkTarget(entry target) error {
 
 	if clean, ok := safeName(entry.Lib); !ok || clean != entry.Lib || path.Base(clean) == clean {
 		return fmt.Errorf("lib %q must be a clean relative path inside a directory", entry.Lib)
+	}
+
+	seen := map[string]bool{path.Base(entry.Lib): true}
+	for _, notice := range notices {
+		if !filepath.IsLocal(notice) || notice == "." || strings.ContainsAny(notice, `/\`) || seen[notice] {
+			return fmt.Errorf("notice %q must be a distinct plain file name", notice)
+		}
+
+		seen[notice] = true
 	}
 
 	return nil
@@ -195,9 +222,9 @@ func safeName(name string) (string, bool) {
 	return clean, true
 }
 
-// fetchLibrary downloads the archive of entry into outDir, checks it and extracts the
-// library to libPath. The archive is removed afterwards.
-func fetchLibrary(ctx context.Context, entry target, outDir, libPath string) error {
+// fetchLibrary downloads the archive of entry into outDir, checks it, extracts the library to
+// libPath and the notices into outDir. The archive is removed afterwards.
+func fetchLibrary(ctx context.Context, entry target, notices []string, outDir, libPath string) error {
 	archive, err := os.CreateTemp(outDir, "archive-*.part")
 	if err != nil {
 		return err
@@ -219,25 +246,37 @@ func fetchLibrary(ctx context.Context, entry target, outDir, libPath string) err
 		return fmt.Errorf("archive SHA-256 %s, expected %s", got, entry.SHA256)
 	}
 
-	partial := libPath + ".part"
+	// Every file is extracted to <dst>.part and renamed only after all checks passed.
+	wanted := map[string]string{entry.Lib: libPath}
 
-	err = extract(archive, archiveKind(entry.URL), entry.Lib, partial)
+	root := strings.SplitN(entry.Lib, "/", 2)[0]
+	for _, notice := range notices {
+		wanted[root+"/"+notice] = filepath.Join(outDir, notice)
+	}
+
+	err = extract(archive, archiveKind(entry.URL), wanted)
 	if err == nil {
-		got, err = fileSHA256(partial)
+		got, err = fileSHA256(libPath + ".part")
 		if err == nil && got != entry.LibSHA256 {
 			err = fmt.Errorf("library SHA-256 %s, expected %s", got, entry.LibSHA256)
 		}
 	}
 
-	if err != nil {
-		_ = os.Remove(partial)
+	for _, dst := range wanted {
+		if err == nil {
+			err = os.Rename(dst+".part", dst)
+		}
 
+		_ = os.Remove(dst + ".part")
+	}
+
+	if err != nil {
 		return err
 	}
 
 	fmt.Println("extracted", libPath)
 
-	return os.Rename(partial, libPath)
+	return nil
 }
 
 // download writes the content at the http(s) rawURL to file and returns its SHA-256.
@@ -277,28 +316,49 @@ func download(ctx context.Context, rawURL string, file *os.File) (string, error)
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-// extract copies the regular file lib of the archive to dst. Every entry name of the archive
-// must be safe (see safeName), including the entries that are not extracted.
-func extract(archive *os.File, kind, lib, dst string) error {
+// extract copies each regular file of the archive named by a key of wanted to the value of that
+// key plus ".part"; every wanted file must be in the archive once. Every entry name of the
+// archive must be safe (see safeName), including the entries that are not extracted.
+func extract(archive *os.File, kind string, wanted map[string]string) error {
 	if _, err := archive.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 
+	found := make(map[string]bool, len(wanted))
+
+	var err error
 	if kind == kindZip {
-		return extractZip(archive, lib, dst)
+		err = extractZip(archive, wanted, found)
+	} else {
+		err = extractTgz(archive, wanted, found)
 	}
 
-	return extractTgz(archive, lib, dst)
+	if err != nil {
+		return err
+	}
+
+	names := make([]string, 0, len(wanted))
+	for name := range wanted {
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	for _, name := range names {
+		if !found[name] {
+			return fmt.Errorf("%s is not in the archive", name)
+		}
+	}
+
+	return nil
 }
 
-func extractTgz(archive io.Reader, lib, dst string) error {
+func extractTgz(archive io.Reader, wanted map[string]string, found map[string]bool) error {
 	gz, err := gzip.NewReader(archive)
 	if err != nil {
 		return err
 	}
 	defer gz.Close()
-
-	found := false
 
 	tr := tar.NewReader(gz)
 	for {
@@ -316,29 +376,26 @@ func extractTgz(archive io.Reader, lib, dst string) error {
 			return fmt.Errorf("archive entry %q: unsafe path", header.Name)
 		}
 
-		if name != lib {
+		dst, ok := wanted[name]
+		if !ok {
 			continue
 		}
 
-		if header.Typeflag != tar.TypeReg || found {
+		if header.Typeflag != tar.TypeReg || found[name] {
 			return fmt.Errorf("archive entry %q: not a regular file", header.Name)
 		}
 
-		if err := copyLimited(dst, tr); err != nil {
+		if err := copyLimited(dst+".part", tr); err != nil {
 			return err
 		}
 
-		found = true
-	}
-
-	if !found {
-		return fmt.Errorf("%s is not in the archive", lib)
+		found[name] = true
 	}
 
 	return nil
 }
 
-func extractZip(archive *os.File, lib, dst string) error {
+func extractZip(archive *os.File, wanted map[string]string, found map[string]bool) error {
 	info, err := archive.Stat()
 	if err != nil {
 		return err
@@ -349,7 +406,7 @@ func extractZip(archive *os.File, lib, dst string) error {
 		return err
 	}
 
-	var match *zip.File
+	matches := make(map[string]*zip.File, len(wanted))
 
 	for _, file := range zr.File {
 		name, ok := safeName(file.Name)
@@ -357,22 +414,30 @@ func extractZip(archive *os.File, lib, dst string) error {
 			return fmt.Errorf("archive entry %q: unsafe path", file.Name)
 		}
 
-		if name != lib {
+		if _, ok := wanted[name]; !ok {
 			continue
 		}
 
-		if !file.Mode().IsRegular() || match != nil {
+		if !file.Mode().IsRegular() || matches[name] != nil {
 			return fmt.Errorf("archive entry %q: not a regular file", file.Name)
 		}
 
-		match = file
+		matches[name] = file
 	}
 
-	if match == nil {
-		return fmt.Errorf("%s is not in the archive", lib)
+	for name, file := range matches {
+		if err := copyZipFile(file, wanted[name]+".part"); err != nil {
+			return err
+		}
+
+		found[name] = true
 	}
 
-	src, err := match.Open()
+	return nil
+}
+
+func copyZipFile(file *zip.File, dst string) error {
+	src, err := file.Open()
 	if err != nil {
 		return err
 	}

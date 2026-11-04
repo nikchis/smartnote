@@ -394,3 +394,140 @@ func TestTargetName(t *testing.T) {
 		}
 	}
 }
+
+const (
+	testLicense = "license text"
+	testNotices = "third-party notices"
+)
+
+// noticeEntries are the library archive with the notice files beside its lib directory.
+func noticeEntries() []archiveEntry {
+	return append(libraryEntries(),
+		archiveEntry{name: "onnxruntime-test-1.0.0/LICENSE", content: testLicense},
+		archiveEntry{name: "onnxruntime-test-1.0.0/ThirdPartyNotices.txt", content: testNotices},
+	)
+}
+
+func lockWithNotices(url string, archive []byte) lockFile {
+	lock := lockFor(url, archive, testLibPath, testLibContent)
+	lock.Notices = []string{"LICENSE", "ThirdPartyNotices.txt"}
+
+	return lock
+}
+
+func assertLibraryAndNotices(t *testing.T, dir string) {
+	t.Helper()
+
+	for name, want := range map[string]string{
+		filepath.Base(testLibPath): testLibContent,
+		"LICENSE":                  testLicense,
+		"ThirdPartyNotices.txt":    testNotices,
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+
+	assertOnlyFiles(t, dir, "LICENSE", "ThirdPartyNotices.txt", filepath.Base(testLibPath))
+}
+
+func TestRunExtractsNoticesBesideLibrary(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		archive []byte
+	}{
+		{"ort.tgz", makeTgz(t, noticeEntries())},
+		{"ort.zip", makeZip(t, noticeEntries())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _ := serveArchive(t, tc.name, tc.archive)
+			out := t.TempDir()
+
+			if err := run(context.Background(), writeLock(t, lockWithNotices(server.URL+"/"+tc.name, tc.archive)), out, testTarget); err != nil {
+				t.Fatal(err)
+			}
+
+			assertLibraryAndNotices(t, out)
+		})
+	}
+}
+
+func TestRunRejectsArchiveWithoutNotice(t *testing.T) {
+	archive := makeTgz(t, noticeEntries()[:len(noticeEntries())-1])
+	server, _ := serveArchive(t, "ort.tgz", archive)
+	out := t.TempDir()
+
+	err := run(context.Background(), writeLock(t, lockWithNotices(server.URL+"/ort.tgz", archive)), out, testTarget)
+	if err == nil || !strings.Contains(err.Error(), "ThirdPartyNotices.txt is not in the archive") {
+		t.Fatalf("run() error = %v, want a missing notice", err)
+	}
+
+	assertOnlyFiles(t, out)
+}
+
+func TestRunDownloadsWhenNoticeIsMissing(t *testing.T) {
+	archive := makeTgz(t, noticeEntries())
+	server, requests := serveArchive(t, "ort.tgz", archive)
+	out := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(out, filepath.Base(testLibPath)), []byte(testLibContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(context.Background(), writeLock(t, lockWithNotices(server.URL+"/ort.tgz", archive)), out, testTarget); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := requests.Load(); got != 1 {
+		t.Errorf("requests = %d, want 1", got)
+	}
+
+	assertLibraryAndNotices(t, out)
+}
+
+func TestRunKeepsLibraryAndNoticesWithoutDownload(t *testing.T) {
+	archive := makeTgz(t, noticeEntries())
+	server, requests := serveArchive(t, "ort.tgz", archive)
+	out := t.TempDir()
+
+	for name, content := range map[string]string{filepath.Base(testLibPath): testLibContent, "LICENSE": testLicense, "ThirdPartyNotices.txt": testNotices} {
+		if err := os.WriteFile(filepath.Join(out, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := run(context.Background(), writeLock(t, lockWithNotices(server.URL+"/ort.tgz", archive)), out, testTarget); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := requests.Load(); got != 0 {
+		t.Errorf("requests = %d, want 0", got)
+	}
+
+	assertLibraryAndNotices(t, out)
+}
+
+func TestReadLockRejectsInvalidNotices(t *testing.T) {
+	entry := target{
+		URL:       "https://example.invalid/ort.tgz",
+		SHA256:    strings.Repeat("a", 64),
+		Lib:       testLibPath,
+		LibSHA256: strings.Repeat("b", 64),
+	}
+
+	for _, notice := range []string{"", ".", "..", "docs/LICENSE", `docs\LICENSE`, "libonnxruntime.so.1.0.0"} {
+		t.Run(notice, func(t *testing.T) {
+			path := writeLock(t, lockFile{Version: "1.0.0", Notices: []string{notice}, Targets: map[string]target{testTarget: entry}})
+
+			_, err := readLock(path)
+			if err == nil || !strings.Contains(err.Error(), "notice") {
+				t.Fatalf("readLock() error = %v, want one about the notice", err)
+			}
+		})
+	}
+}

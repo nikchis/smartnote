@@ -39,10 +39,11 @@ tasks:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
   package:linux:
-    summary: Builds the .deb package and the AppImage
+    summary: Builds the .deb package and the AppImage, then checks the contents of the .deb
     cmds:
       - task: linux:create:appimage
       - task: linux:create:deb
+      - task: check:deb
 
   package:windows:
     summary: Builds the NSIS installer (on Windows, with makensis on PATH)
@@ -55,13 +56,22 @@ tasks:
       - task: darwin:package:dmg
 
   smoke:appimage:
-    summary: Starts the AppImage in a clean ubuntu:26.04 container under Xvfb
+    summary: |
+      Starts the AppImage in a clean ubuntu:26.04 container under Xvfb, then runs the search worker
+      of the extracted AppImage with cmd/searchsmoke (a static build, copied into the container)
     preconditions:
       - sh: test -f {{.BIN_DIR}}/{{.APP_NAME}}-x86_64.AppImage
         msg: "Run `task package:linux` first."
     cmds:
+      - mkdir -p build/smoke
+      - CGO_ENABLED=0 go build -trimpath -o build/smoke/searchsmoke ./cmd/searchsmoke
       # bubblewrap inside Docker needs user namespaces and an unmasked /proc.
-      - docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined -v "{{.ROOT_DIR}}/{{.BIN_DIR}}:/app:ro" -v "{{.ROOT_DIR}}/build/linux/smoke-appimage.sh:/smoke.sh:ro" ubuntu:26.04 sh /smoke.sh /app/{{.APP_NAME}}-x86_64.AppImage
+      - docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined -v "{{.ROOT_DIR}}/{{.BIN_DIR}}:/app:ro" -v "{{.ROOT_DIR}}/build/smoke/searchsmoke:/searchsmoke:ro" -v "{{.ROOT_DIR}}/build/linux/smoke-appimage.sh:/smoke.sh:ro" ubuntu:26.04 sh /smoke.sh /app/{{.APP_NAME}}-x86_64.AppImage /searchsmoke
+
+  check:deb:
+    summary: Checks that the .deb holds the search worker, ONNX Runtime, the model and the notices
+    cmds:
+      - sh build/linux/check-deb.sh {{.BIN_DIR}}/{{.APP_NAME}}.deb
 
   install:msix:tools:
     summary: Installs tools required for Windows MSIX packaging
@@ -94,12 +104,60 @@ tasks:
     summary: |
       Downloads the search model files listed in model.lock.json into build/model and checks their SHA-256.
       MODEL_BASE_URL overrides the release URL (local work only, e.g. file:///path/to/dir/).
+    run: once
     cmds:
       - go run ./tools/modelfetch -lock model.lock.json -out build/model
 
   ort:fetch:
     summary: |
       Downloads the official ONNX Runtime archive of the current OS and architecture listed in ort.lock.json,
-      checks its SHA-256, extracts only the runtime library into build/ort and checks the library's SHA-256.
+      checks its SHA-256, extracts the runtime library and its licence notices into build/ort and checks
+      the library's SHA-256.
+    run: once
     cmds:
       - go run ./tools/ortfetch -lock ort.lock.json -out build/ort
+
+  search:build:
+    summary: |
+      Builds the search worker (cargo build --release -p worker) for GOOS and ARCH into bin/smartnote-search
+      (.exe on Windows). Cargo runs every time, so a stale worker is never packaged.
+    run: once
+    vars:
+      # Rust target of the worker for GOOS and ARCH (the host architecture by default), empty for a
+      # system without a worker. A task variable, so ARCH given to the task call counts too.
+      RUST_TARGET: &rust-target >-
+        {{- $arch := .ARCH | default ARCH -}}
+        {{- if and (eq .GOOS "linux") (eq $arch "amd64") -}}x86_64-unknown-linux-gnu
+        {{- else if and (eq .GOOS "darwin") (eq $arch "arm64") -}}aarch64-apple-darwin
+        {{- else if and (eq .GOOS "darwin") (eq $arch "amd64") -}}x86_64-apple-darwin
+        {{- else if and (eq .GOOS "windows") (eq $arch "amd64") -}}x86_64-pc-windows-msvc
+        {{- end -}}
+    preconditions:
+      - sh: '[ "{{.GOOS}}" = "{{OS}}" ]'
+        msg: "The search worker is built on the target system only: GOOS is {{.GOOS}}, this system is {{OS}}."
+      - &rust-target-known
+        sh: '[ -n "{{.RUST_TARGET}}" ]'
+        msg: "No search worker for {{.GOOS}}/{{.ARCH | default ARCH}}: it is built for linux/amd64, darwin/arm64, darwin/amd64 and windows/amd64."
+    cmds:
+      - go run ./tools/searchbuild -target {{.RUST_TARGET}} -out {{.BIN_DIR}}
+
+  notices:build:
+    summary: |
+      Writes the licence lists of the Rust crates of the worker and the Go modules of the application for
+      GOOS and ARCH into build/notices (tools/notices); the packages ship them with THIRD_PARTY_NOTICES.md.
+      The package tasks call it after the application is built: go list needs frontend/dist (go:embed).
+    run: once
+    vars:
+      RUST_TARGET: *rust-target
+    preconditions:
+      - *rust-target-known
+    cmds:
+      - go run ./tools/notices -rust-target {{.RUST_TARGET}} -goos {{.GOOS}} -goarch {{.ARCH | default ARCH}} -cgo {{if eq .GOOS "windows"}}0{{else}}1{{end}} -out build/notices
+
+  search:files:
+    summary: Prepares the search files the packages ship (worker, ONNX Runtime with its notices, model)
+    run: once
+    deps:
+      - search:build
+      - model:fetch
+      - ort:fetch

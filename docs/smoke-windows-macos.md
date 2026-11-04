@@ -8,6 +8,12 @@ is run by hand on each system; the **Result** and **Checked by** columns are fil
 The server is the one from `docs/manual-test.md` (OpenSSH and PostgreSQL containers), reachable from
 the test machine.
 
+The search steps check what CI cannot: on Windows and macOS the search worker `smartnote-search` runs
+without the Linux sandbox, so the tester confirms that it ends with the application, opens no network
+connections and that ONNX Runtime writes no telemetry files (`onnxruntime.db`, `deviceid`) into the
+user's profile (specification, sections 6.1 and 14). Note the time before the first start of
+Smartnote: files older than that are not from this test.
+
 ## Windows 10/11
 
 | # | Step | Expected | Result | Checked by |
@@ -21,6 +27,10 @@ the test machine.
 | 7 | Edit a note, close the window. | "Would you like to save your data changes to remote database?"; Yes shows "Data successfully synchronized." and the app quits. | | |
 | 8 | Start Smartnote twice. | The second start brings the open window forward. | | |
 | 9 | Edit a note, sign out of Windows with Smartnote open. | Windows signs out without waiting for Smartnote; after signing in, the note is there. | | |
+| 10 | Add a note "Pancakes" with the text "flour, milk, eggs". Press Ctrl+F, type `milk`, then `recipe for crepes`. | `smartnote-search.exe` and `onnxruntime.dll` are in the installation folder, with a `model` folder. Neither "Search unavailable" nor, a few seconds after the start, "Semantic search unavailable" appears; both queries list "Pancakes", and Enter on a hit jumps to its line. | | |
+| 11 | With Smartnote open, in PowerShell: `Get-NetTCPConnection -OwningProcess (Get-Process smartnote-search).Id; Get-NetUDPEndpoint -OwningProcess (Get-Process smartnote-search).Id`. | `smartnote-search` runs; both commands list nothing (an error "No matching MSFT_NetTCPConnection objects" is the expected empty result). | | |
+| 12 | Close Smartnote, then in PowerShell: `Get-Process smartnote-search`. | No such process. | | |
+| 13 | In PowerShell: `Get-ChildItem $env:USERPROFILE -Recurse -Force -ErrorAction SilentlyContinue -Include onnxruntime.db, deviceid* \| Select-Object FullName, LastWriteTime`. | Nothing written after the start of the test. | | |
 
 ## macOS
 
@@ -34,3 +44,8 @@ the test machine.
 | 6 | Edit a note, quit with Cmd+Q. | The save question appears before quitting; after Yes, "Data successfully synchronized." | | |
 | 7 | Start Smartnote again from Applications while it runs. | The open window comes to the front. | | |
 | 8 | Edit a note, **Apple menu → Log Out** with Smartnote open. | macOS logs out without the save question and without "Smartnote canceled logout"; after logging in, the note is there. | | |
+| 9 | `codesign --verify --deep --strict --verbose=2 /Applications/smartnote.app` | "valid on disk" and "satisfies its Designated Requirement". | | |
+| 10 | Add a note "Pancakes" with the text "flour, milk, eggs". Press Cmd+F, type `milk`, then `recipe for crepes`. | `smartnote-search` and `libonnxruntime.1.31.0.dylib` are in `smartnote.app/Contents/MacOS`, the model in `Contents/Resources/model`. Neither "Search unavailable" nor, a few seconds after the start, "Semantic search unavailable" appears; both queries list "Pancakes", and Enter on a hit jumps to its line. | | |
+| 11 | With Smartnote open, in Terminal: `lsof -nP -i -a -p "$(pgrep -x smartnote-search)"`. | `pgrep` finds the worker; `lsof` lists no connections. | | |
+| 12 | Quit Smartnote with Cmd+Q, then `pgrep -lx smartnote-search`. | No output. | | |
+| 13 | `find ~ \( -name onnxruntime.db -o -name 'deviceid*' \) -newermt "<start time>" 2>/dev/null` with the time noted before the test, e.g. `"2026-11-05 10:00"`. | No output. | | |

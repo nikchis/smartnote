@@ -158,7 +158,11 @@ tasks:
 
   create:app:bundle:
     summary: Creates an `.app` bundle
+    deps:
+      - task: :search:files
     cmds:
+      # After the application is built (package depends on build): go list needs frontend/dist.
+      - task: :notices:build
       # A reused bundle can acquire Finder metadata in synced folders. Build a
       # fresh bundle so codesign never has to replace a contaminated signature.
       - test -n "{{.BIN_DIR}}" && test -n "{{.APP_NAME}}" && rm -rf -- "{{.BIN_DIR}}/{{.APP_NAME}}.app"
@@ -171,15 +175,33 @@ tasks:
         fi
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
+      # Search (specification 8.2): the worker and ONNX Runtime beside the application, the model
+      # and the licence notices in Resources; all before signing, which seals them.
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/model" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/licenses/onnxruntime"
+      - cp "{{.BIN_DIR}}/smartnote-search" "build/ort/{{.ORT_LIB}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
+      - cp build/model/model.onnx build/model/tokenizer.kit build/model/manifest.json "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/model"
+      - cp THIRD_PARTY_NOTICES.md "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
+      - cp build/notices/rust-crates.txt build/notices/go-modules.txt "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/licenses"
+      - cp build/ort/LICENSE build/ort/ThirdPartyNotices.txt "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/licenses/onnxruntime"
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
+    vars:
+      ORT_LIB: libonnxruntime.1.31.0.dylib
 
   codesign:adhoc:
     summary: Ad-hoc signs the app bundle (macOS only)
     internal: true
     cmds:
       - xattr -cr "{{.BIN_DIR}}/{{.APP_NAME}}.app"
-      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+      # The ONNX Runtime library keeps the signature of Microsoft: the worker loads it only with
+      # the SHA-256 pinned in ort.lock.json, and signing it again (codesign --force --deep on the
+      # bundle) would rewrite the file. So the worker is signed on its own, the bundle without
+      # --deep, and the check below makes sure the library was not changed.
+      - codesign --force --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS/smartnote-search"
+      - codesign --force --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
       - codesign --verify --deep --strict "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+      - cmp "build/ort/{{.ORT_LIB}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS/{{.ORT_LIB}}"
+    vars:
+      ORT_LIB: libonnxruntime.1.31.0.dylib
 
   codesign:skip:
     summary: Skips codesigning when cross-compiling

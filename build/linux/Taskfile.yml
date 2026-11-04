@@ -115,22 +115,49 @@ tasks:
     deps:
       - task: build
       - task: generate:dotdesktop
+      - task: :search:files
     cmds:
+      - task: :notices:build
       - cp "{{.APP_BINARY}}" "{{.APP_NAME}}"
       - cp ../../appicon.png "{{.APP_NAME}}.png"
-      - wails3 generate appimage -binary "{{.APP_NAME}}" -icon {{.ICON}} -desktopfile {{.DESKTOP_FILE}} -outputdir {{.OUTPUT_DIR}} -builddir {{.ROOT_DIR}}/build/linux/appimage/build
+      - wails3 generate appimage -binary "{{.APP_NAME}}" -icon {{.ICON}} -desktopfile {{.DESKTOP_FILE}} -outputdir {{.OUTPUT_DIR}} -builddir {{.BUILD_DIR}}
+      # wails3 generate appimage puts only the application into the AppDir. The search files are
+      # added to the AppDir it leaves behind, at the paths of the .deb under usr/, and the AppDir is
+      # packed again by the AppImage plugin of the same linuxdeploy. Running linuxdeploy itself again
+      # would deploy the new files too: it sets the RPATH of every library in usr/lib, which changes
+      # the ONNX Runtime library and breaks its pinned SHA-256.
+      # Each new directory is named, since install -d gives the parents it creates the umask's mode.
+      - for dir in lib/smartnote share/smartnote share/smartnote/model share/doc share/doc/smartnote share/doc/smartnote/licenses share/doc/smartnote/licenses/onnxruntime; do install -d -m 0755 "{{.APPDIR}}/usr/$dir"; done
+      - install -m 0755 "{{.ROOT_DIR}}/{{.BIN_DIR}}/smartnote-search" "{{.APPDIR}}/usr/lib/smartnote/"
+      - install -m 0644 "{{.ROOT_DIR}}/build/ort/libonnxruntime.so.1.31.0" "{{.APPDIR}}/usr/lib/smartnote/"
+      - install -m 0644 "{{.ROOT_DIR}}/build/model/model.onnx" "{{.ROOT_DIR}}/build/model/tokenizer.kit" "{{.ROOT_DIR}}/build/model/manifest.json" "{{.APPDIR}}/usr/share/smartnote/model/"
+      - install -m 0644 "{{.ROOT_DIR}}/THIRD_PARTY_NOTICES.md" "{{.APPDIR}}/usr/share/doc/smartnote/"
+      - install -m 0644 "{{.ROOT_DIR}}/build/notices/rust-crates.txt" "{{.ROOT_DIR}}/build/notices/go-modules.txt" "{{.APPDIR}}/usr/share/doc/smartnote/licenses/"
+      - install -m 0644 "{{.ROOT_DIR}}/build/ort/LICENSE" "{{.ROOT_DIR}}/build/ort/ThirdPartyNotices.txt" "{{.APPDIR}}/usr/share/doc/smartnote/licenses/onnxruntime/"
+      - rm -rf "{{.BUILD_DIR}}/squashfs-root"
+      - cd "{{.BUILD_DIR}}" && "./linuxdeploy-{{.APPIMAGE_ARCH}}.AppImage" --appimage-extract >/dev/null
+      - cd "{{.BUILD_DIR}}" && OUTPUT="{{.APPIMAGE}}" ./squashfs-root/usr/bin/linuxdeploy-plugin-appimage --appdir "{{.APPDIR}}"
+      - rm -rf "{{.BUILD_DIR}}/squashfs-root"
+      - mv -f "{{.BUILD_DIR}}/{{.APPIMAGE}}" "{{.OUTPUT_DIR}}/{{.APPIMAGE}}"
     vars:
       APP_NAME: '{{.APP_NAME}}'
       APP_BINARY: '../../../bin/{{.APP_NAME}}'
       ICON: '{{.APP_NAME}}.png'
       DESKTOP_FILE: '../{{.APP_NAME}}.desktop'
       OUTPUT_DIR: '../../../bin'
+      BUILD_DIR: '{{.ROOT_DIR}}/build/linux/appimage/build'
+      # Names wails3 generate appimage gives the AppDir, the AppImage and linuxdeploy.
+      APPIMAGE_ARCH: '{{if eq ARCH "arm64"}}aarch64{{else}}x86_64{{end}}'
+      APPDIR: '{{.BUILD_DIR}}/{{.APP_NAME}}-{{.APPIMAGE_ARCH}}.AppDir'
+      APPIMAGE: '{{.APP_NAME}}-{{.APPIMAGE_ARCH}}.AppImage'
 
   create:deb:
     summary: Creates a deb package
     deps:
       - task: build
+      - task: :search:files
     cmds:
+      - task: :notices:build
       - task: generate:dotdesktop
       - task: generate:deb
 
@@ -138,7 +165,9 @@ tasks:
     summary: Creates a rpm package
     deps:
       - task: build
+      - task: :search:files
     cmds:
+      - task: :notices:build
       - task: generate:dotdesktop
       - task: generate:rpm
 
@@ -146,7 +175,9 @@ tasks:
     summary: Creates a arch linux packager package
     deps:
       - task: build
+      - task: :search:files
     cmds:
+      - task: :notices:build
       - task: generate:dotdesktop
       - task: generate:aur
 

@@ -20,5 +20,7 @@ build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 build/model/
 build/model-src/
 build/ort/
+build/notices/
+build/smoke/
 tools/model/.venv/
 __pycache__/

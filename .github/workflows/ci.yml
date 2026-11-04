@@ -167,8 +167,45 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value "${env:ProgramFiles(x86)}\NSIS"
       - run: go install github.com/go-task/task/v3/cmd/task@${{ env.TASK_VERSION }}
       - run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
+      # task package builds the search worker (task search:build) with the toolchain of
+      # search/rust-toolchain.toml for the runner's own target.
+      - run: rustup toolchain install
+        working-directory: search
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: search
+      # The model files and the ONNX Runtime library that task package fetches, cached by their
+      # lock files as in the search job; the fetch tasks check every SHA-256 after a restore.
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: build/model
+          key: search-model-${{ hashFiles('model.lock.json') }}
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: build/ort
+          key: search-ort-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ort.lock.json') }}
       - run: task package:${{ matrix.target }}
         shell: bash
+      # The packaged search worker must load its ONNX Runtime and model: on macOS from the signed
+      # bundle (the library keeps its pinned SHA-256), on Windows from the files the installer
+      # takes. The Linux packages are checked by task package:linux (.deb) and smoke-appimage.
+      - if: runner.os == 'macOS'
+        run: >-
+          go run ./cmd/searchsmoke -timeout 120s
+          -worker "$PWD/bin/smartnote.app/Contents/MacOS/smartnote-search"
+          -ort "$PWD/bin/smartnote.app/Contents/MacOS/libonnxruntime.1.31.0.dylib"
+          -model "$PWD/bin/smartnote.app/Contents/Resources/model"
+        env:
+          ORT_DISABLE_TELEMETRY: "1"
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          go run ./cmd/searchsmoke -timeout 120s
+          -worker "$PWD\bin\smartnote-search.exe"
+          -ort "$PWD\build\ort\onnxruntime.dll"
+          -model "$PWD\build\model"
+        env:
+          ORT_DISABLE_TELEMETRY: "1"
       # The package must be built from the committed dependency versions.
       - run: git diff --exit-code -- go.mod go.sum frontend/package-lock.json
         shell: bash
@@ -196,4 +233,5 @@ jobs:
       # WebKit starts bubblewrap, which needs unprivileged user namespaces; Ubuntu 24.04
       # runners restrict them through AppArmor, desktops with WebKitGTK allow them for bwrap.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Also runs the search worker of the AppImage with a static build of cmd/searchsmoke.
       - run: task smoke:appimage

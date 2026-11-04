@@ -137,3 +137,69 @@ A control run without `bubblewrap` fails the check (`application exited early`, 
 
 Consequence for README (task 15): the AppImage supports Ubuntu desktops; a minimal system
 needs the packages above.
+
+## Packages with search (plan task 16)
+
+Every package ships the search worker `smartnote-search`, the official ONNX Runtime 1.31.0
+library and the model files `model.onnx`, `tokenizer.kit` and `manifest.json` at the paths of the
+specification, section 8.2 (`tokenizer.json` is only for the tests and is not shipped), and the
+licence notices: `THIRD_PARTY_NOTICES.md` with `licenses/onnxruntime/{LICENSE,ThirdPartyNotices.txt}`,
+`licenses/rust-crates.txt` and `licenses/go-modules.txt`.
+
+- `task search:files` prepares them and is a dependency of `linux:create:appimage`,
+  `linux:create:deb` (and `create:rpm`, `create:aur`), `darwin:create:app:bundle` and
+  `windows:package`, so `task package:<os>` works from a clean checkout. It runs
+  `search:build`, `model:fetch` and `ort:fetch`; the package tasks run `notices:build` themselves
+  once the application is built, because `go list` needs `frontend/dist` (`go:embed`). Each of
+  them runs once per `task` call.
+- `task search:build` runs `tools/searchbuild`: `cargo build --locked --release -p worker` for
+  the Rust target of `GOOS`/`ARCH` (`linux/amd64` → `x86_64-unknown-linux-gnu`, `darwin/arm64` →
+  `aarch64-apple-darwin`, `darwin/amd64` → `x86_64-apple-darwin`, `windows/amd64` →
+  `x86_64-pc-windows-msvc`) and copies the executable named in cargo's JSON messages to
+  `bin/smartnote-search[.exe]`, so `CARGO_TARGET_DIR` and `RUSTUP_TOOLCHAIN` of the environment
+  are honoured. Cargo runs every time. A `GOOS` other than the host's, or a target without a
+  worker, stops with a message: the worker is not cross-compiled.
+- `task ort:fetch` also extracts `LICENSE` and `ThirdPartyNotices.txt` from the release archive
+  (the `notices` of `ort.lock.json`; the archive SHA-256 covers them) into `build/ort`.
+- `task notices:build` runs `tools/notices`: the crates the worker links for its target, from
+  `cargo metadata` (normal dependencies of package `worker`, without dev and build ones), and the
+  Go modules of `go list -deps -tags production ./cmd/smartnote` for the target system, each with
+  the licence files of its source package (`LICENSE*`, `COPYING*`, `NOTICE*` and the like;
+  identical texts are written once). Crates without licence files: the tantivy crates are covered
+  by the files of `tantivy` (same repository); `kitoken` by the BSD-2-Clause text of its repository
+  at v0.11.1, kept in `tools/notices/extra/kitoken/LICENSE`; `htmlescape` 0.3.1 (Apache-2.0 / MIT
+  / MPL-2.0) has none anywhere, the list names its licence and the tool warns about it.
+- `.deb`: `contents` of `nfpm.yaml`, worker 0755, other files 0644; the notices go to
+  `/usr/share/doc/smartnote/`. `task package:linux` ends with `task check:deb`
+  (`build/linux/check-deb.sh`, from `dpkg-deb -c`).
+- AppImage: `wails3 generate appimage` puts only the application into the AppDir and runs
+  linuxdeploy on it. Running linuxdeploy again after adding files would deploy them too and set
+  the RPATH of the ONNX Runtime library, which changes the file and breaks its pinned SHA-256. So
+  the files are added to the AppDir that Wails leaves in `build/linux/appimage/build`, and the AppDir
+  is packed again by `linuxdeploy-plugin-appimage` from the same linuxdeploy AppImage (extracted
+  with `--appimage-extract`), which only packs. The AppRun of Wails is kept.
+- macOS: the files are copied into the bundle before `codesign:adhoc`. The ONNX Runtime dylib of
+  Microsoft is signed (Developer ID, a CMS blob in its signature); `codesign --force --deep` on the
+  bundle would sign it again and change the file, and the worker would refuse it. So the worker is
+  signed on its own, the bundle without `--deep`, `codesign --verify --deep --strict` checks all of
+  it, and `cmp` checks that the library in the bundle is the fetched one.
+- Windows: `project.nsi` installs the files beside `smartnote.exe` (`model\`, `licenses\`) and the
+  uninstaller deletes them before removing the folder.
+
+`task smoke:appimage` builds `cmd/searchsmoke` statically (`CGO_ENABLED=0`) into `build/smoke`;
+after the GUI check `build/linux/smoke-appimage.sh` extracts the AppImage as the unprivileged user
+and runs it with the worker, the library and the model of the extracted image, from `usr/lib` and
+with the `LD_LIBRARY_PATH` that AppRun gives the application (the adapter passes it on to the
+worker). Result in `ubuntu:26.04`: `ready worker=0.1.0 lexical=ready semantic=ready sandbox=full`,
+`hits=1`. The AppImage bundles no `libstdc++`; ONNX Runtime loads the system's one under the
+worker's sandbox. A run with the AppImage of v2.0.1 fails the check (`no such file or directory`
+for the worker).
+
+Package sizes (2026-11-04): `.deb` 8.8 MB → 134.8 MB, AppImage 135.9 MB → 254.5 MB.
+
+CI job `package` installs the toolchain of `search/rust-toolchain.toml`, caches cargo
+(`Swatinem/rust-cache`), `build/model` and `build/ort` with the keys of job `search`, then runs
+`task package:<os>`. On macOS and Windows it runs `cmd/searchsmoke` against the packaged worker
+(the signed bundle on macOS) with `ORT_DISABLE_TELEMETRY=1`. The model release `model-e5s-1` must be
+published before `task model:fetch` can work in CI; locally `MODEL_BASE_URL=file:///…/` points it
+at a directory.
