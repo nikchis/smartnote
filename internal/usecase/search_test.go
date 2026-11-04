@@ -294,16 +294,17 @@ func TestSearchRebuildBatchesBySize(t *testing.T) {
 	info := strings.TrimSuffix(strings.Repeat(strings.Repeat("я", 64)+"\n", 126), "\n")
 	record := bytes.Repeat([]byte{1}, 194922)
 
-	notes := make([]domain.Note, 100)
+	notes := make([]domain.Note, 0, 101)
 	records := map[uuid.UUID][]byte{}
 
-	for i := range notes {
-		notes[i] = domain.Note{ID: uuid.New(), Name: name, Info: info}
-		if err := notes[i].Validate(); err != nil {
+	for range 100 {
+		n := domain.Note{ID: uuid.New(), Name: name, Info: info}
+		if err := n.Validate(); err != nil {
 			t.Fatal(err)
 		}
 
-		records[notes[i].ID] = record
+		notes = append(notes, n)
+		records[n.ID] = record
 	}
 
 	huge := domain.Note{ID: uuid.New(), Name: "huge", Info: "x"}

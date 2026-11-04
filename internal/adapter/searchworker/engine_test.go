@@ -1206,7 +1206,10 @@ func TestEngineRestartUnavailableUntilReset(t *testing.T) {
 	defer func() {
 		close(em.release)
 		cancel()
-		<-done
+
+		if err := <-done; err != nil {
+			t.Errorf("Run = %v, want nil after cancel", err)
+		}
 	}()
 
 	select {
