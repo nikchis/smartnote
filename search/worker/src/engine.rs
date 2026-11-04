@@ -9,7 +9,7 @@ use std::ops::Range;
 use crate::embed::{ChunkVec, DIM, Record, text_hash};
 use crate::index::{LexicalIndex, LineHit, NoteKey, find_substring};
 use crate::protocol::messages::{Hit, NoteIn, Source};
-use crate::rank::{self, BRANCH_K, Fused, PER_NOTE, TAU};
+use crate::rank::{self, BRANCH_K, Fused, PER_NOTE, TAU_ALONE, TAU_CONFIRM};
 use crate::text::{Query, SearchForm, search_form};
 
 /// Result of an accepted [`Engine::upsert`].
@@ -43,8 +43,10 @@ pub struct Engine {
     /// document of a removed note can never be taken for another note.
     next_key: NoteKey,
     lexical: Option<LexicalIndex>,
-    /// Lowest score the semantic list takes: [`TAU`] unless the calibration changes it.
-    tau: f32,
+    /// `τ_confirm` and `τ_alone` (spec §6.7): [`TAU_CONFIRM`] and [`TAU_ALONE`] unless the
+    /// calibration changes them.
+    tau_confirm: f32,
+    tau_alone: f32,
 }
 
 /// A note in memory. No `Debug`: it holds note text.
@@ -95,15 +97,18 @@ impl Engine {
             revs: HashMap::new(),
             next_key: 0,
             lexical: LexicalIndex::new().ok(),
-            tau: TAU,
+            tau_confirm: TAU_CONFIRM,
+            tau_alone: TAU_ALONE,
         }
     }
 
-    /// Sets the lowest dot product of a chunk with the query that the semantic list takes,
-    /// [`TAU`] by default. Used by the calibration of the threshold (`tests/bench.rs`); the
-    /// worker keeps the default.
-    pub fn set_semantic_threshold(&mut self, tau: f32) {
-        self.tau = tau;
+    /// Sets the semantic thresholds (spec §6.7): `confirm`, the lowest chunk score the semantic
+    /// list takes ([`TAU_CONFIRM`] by default), and `alone`, the lowest chunk score of a line
+    /// only the semantic list found ([`TAU_ALONE`] by default). Used by the calibration
+    /// (`tests/bench.rs`); the worker keeps the defaults.
+    pub fn set_semantic_thresholds(&mut self, confirm: f32, alone: f32) {
+        self.tau_confirm = confirm;
+        self.tau_alone = alone;
     }
 
     /// Whether word search is available (see the type documentation).
@@ -232,7 +237,9 @@ impl Engine {
     /// at most [`PER_NOTE`] lines of a note; at most `limit` hits.
     ///
     /// The semantic list runs when `q` has semantic text and `qvec` is given: chunks whose dot
-    /// product with the normalized `qvec` is at least the threshold ([`TAU`] by default).
+    /// product with the normalized `qvec` is at least `τ_confirm`. A line only the semantic list
+    /// found enters the results with a chunk score of at least `τ_alone`, at most
+    /// [`SEMANTIC_ONLY_MAX`](rank::SEMANTIC_ONLY_MAX) of them (see [`rank::fuse`]).
     #[must_use]
     pub fn search(&self, q: &Query, qvec: Option<&[f32; DIM]>, limit: usize) -> Vec<Hit> {
         if limit == 0 {
@@ -253,6 +260,7 @@ impl Engine {
                 (Source::Semantic, &semantic.hits),
             ],
             limit,
+            self.tau_alone,
         );
         fused
             .into_iter()
@@ -310,7 +318,7 @@ impl Engine {
         rank::cap(hits, |h| h.note, PER_NOTE, BRANCH_K)
     }
 
-    /// The semantic list (spec §6.7, §6.8): every chunk at or above the threshold, best first (ties
+    /// The semantic list (spec §6.7, §6.8): every chunk at or above `τ_confirm`, best first (ties
     /// by note and chunk order), placed on a line: the best line of the chunk found by the
     /// word or substring list, otherwise the first non-empty line with the chunk remembered
     /// for the highlight. A line is taken once, by its best chunk.
@@ -332,7 +340,7 @@ impl Engine {
                     .flatten()
                     .map(move |chunk| (rank::dot(&qvec, &chunk.vec), key, note, chunk))
             })
-            .filter(|&(score, ..)| score >= self.tau)
+            .filter(|&(score, ..)| score >= self.tau_confirm)
             .collect();
         // Chunks of a note are compared by position: `first`, then `last`.
         scored.sort_by(|a, b| {
@@ -759,15 +767,32 @@ mod tests {
     }
 
     #[test]
-    fn search_semantic_threshold_set() {
-        let mut e = engine(vec![note("a", 1, "first", "alpha line")]);
-        e.set_chunks("a", 1, vec![chunk(1, 1, &at_cos(0.85))]);
+    fn search_semantic_thresholds() {
+        let mut e = engine(vec![
+            note("a", 1, "first", "alpha line"),
+            note("b", 2, "second", "beta needle"),
+        ]);
+        e.set_chunks("a", 1, vec![chunk(1, 1, &at_cos(0.83))]);
+        e.set_chunks("b", 2, vec![chunk(1, 1, &at_cos(0.81))]);
+        // Only semantics, all below τ_alone: nothing (spec §6.7, `No matches`).
         let q = parse_query("unrelated query");
-        assert_eq!(e.search(&q, Some(&axis(0)), 10).len(), 1, "default");
-        e.set_semantic_threshold(0.9);
         assert_eq!(e.search(&q, Some(&axis(0)), 10), Vec::<Hit>::new());
-        e.set_semantic_threshold(0.84);
-        assert_eq!(e.search(&q, Some(&axis(0)), 10).len(), 1);
+        // At τ_confirm the chunk of b confirms its word match.
+        let hits = e.search(&parse_query("needle"), Some(&axis(0)), 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].note, "b");
+        assert_eq!(
+            hits[0].sources,
+            vec![Source::Words, Source::Substring, Source::Semantic]
+        );
+
+        e.set_semantic_thresholds(0.80, 0.83);
+        let hits = e.search(&q, Some(&axis(0)), 10);
+        assert_eq!(hits.len(), 1, "a passes the lower τ_alone");
+        assert_eq!(hits[0].note, "a");
+        e.set_semantic_thresholds(0.82, 0.82);
+        let hits = e.search(&parse_query("needle"), Some(&axis(0)), 10);
+        assert_eq!(hits[0].sources, vec![Source::Words, Source::Substring]);
     }
 
     #[test]

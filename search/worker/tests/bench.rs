@@ -12,8 +12,11 @@
 //!
 //! - `bench_set_shape` checks the generator: kinds, lengths, plants, determinism;
 //! - `bench_quality` (ignored: needs `SMARTNOTE_MODEL_DIR` and `SMARTNOTE_ORT_LIB`) measures the
-//!   worker's chunking and threshold. With `SMARTNOTE_BENCH=sweep` it measures the chunk sizes
-//!   192/256/320 and the thresholds 0.78–0.90; tables go to stdout with `--nocapture`.
+//!   worker's chunking and semantic thresholds (`τ_confirm`, `τ_alone`, spec §6.7) at the
+//!   current values. With `SMARTNOTE_BENCH=alone` it measures `τ_alone` 0.83/0.84/0.85 with
+//!   `τ_confirm` 0.80 at the current chunk size; with `SMARTNOTE_BENCH=sweep` the chunk sizes
+//!   192/256/320 with one threshold for both (0.78–0.90) and the `τ_alone` pairs. Tables go to
+//!   stdout with `--nocapture`.
 //!   `SMARTNOTE_BENCH_MODELS` sets the number of models embedding in parallel (default 8, each
 //!   with 4 threads). Use a release build: `cargo test --release -p worker --test bench --
 //!   --ignored --nocapture`.
@@ -47,7 +50,7 @@ use worker::embed::{
 };
 use worker::engine::{Engine, Upserted};
 use worker::protocol::messages::{Hit, NoteIn, Source};
-use worker::rank::TAU;
+use worker::rank::{TAU_ALONE, TAU_CONFIRM};
 use worker::text::{Query, parse_query};
 
 use corpus::{BenchQuery, Kind, MAX_UTF16, MIN_UTF16, NOTES, Note, Set, corpus, parse_set};
@@ -58,8 +61,11 @@ const LIMIT: usize = 10;
 const TOP: usize = 5;
 /// Chunk targets of the sweep.
 const TARGETS: [usize; 3] = [192, 256, 320];
-/// Thresholds of the sweep: the spec's 0.78–0.84 and above.
+/// One threshold for both `τ_confirm` and `τ_alone` in the sweep: the spec's 0.78–0.84 and
+/// above.
 const TAUS: [f32; 7] = [0.78, 0.80, 0.82, 0.84, 0.86, 0.88, 0.90];
+/// `(τ_confirm, τ_alone)` pairs around the chosen `τ_alone`.
+const ALONE: [(f32, f32); 3] = [(0.80, 0.83), (0.80, 0.84), (0.80, 0.85)];
 /// Intra-op threads of each model.
 const MODEL_THREADS: u16 = 4;
 
@@ -253,7 +259,7 @@ fn bench_quality() {
     assert!(has_avx2(), "the ONNX Runtime build needs AVX2 on x86_64");
     let lib = OrtLibrary::verify(&ort_lib).expect("library matches ort.lock.json");
     load_ort(&lib).expect("ONNX Runtime loads");
-    let sweep = env::var("SMARTNOTE_BENCH").is_ok_and(|v| v == "sweep");
+    let mode = env::var("SMARTNOTE_BENCH").unwrap_or_default();
     let models: usize = env::var("SMARTNOTE_BENCH_MODELS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -282,13 +288,16 @@ fn bench_quality() {
     drop(model);
 
     let defaults = ChunkParams::default();
-    let (targets, taus): (Vec<usize>, Vec<f32>) = if sweep {
-        (TARGETS.to_vec(), TAUS.to_vec())
-    } else {
-        (vec![defaults.target], vec![TAU])
+    let (targets, taus): (Vec<usize>, Vec<(f32, f32)>) = match mode.as_str() {
+        "sweep" => (
+            TARGETS.to_vec(),
+            TAUS.iter().map(|&t| (t, t)).chain(ALONE).collect(),
+        ),
+        "alone" => (vec![defaults.target], ALONE.to_vec()),
+        _ => (vec![defaults.target], vec![(TAU_CONFIRM, TAU_ALONE)]),
     };
     show!(
-        "\n# Benchmark set: {} notes, {} queries; current target {}, τ {TAU}",
+        "\n# Benchmark set: {} notes, {} queries; current target {}, τ_confirm {TAU_CONFIRM}, τ_alone {TAU_ALONE}",
         notes.len(),
         queries.len(),
         defaults.target
@@ -488,15 +497,15 @@ fn report_target(
     notes: &[Note],
     chunks: &[Vec<ChunkVec>],
     queries: &[Prepared],
-    taus: &[f32],
+    taus: &[(f32, f32)],
 ) {
     show!(
-        "\n| τ | mode | recall@5 | first | semantic-only hits | irrelevant among them | nonsense empty | absent empty | p50 ms | p95 ms |"
+        "\n| τ_confirm / τ_alone | mode | recall@5 | first | cross-lingual | semantic-only hits | irrelevant among them | nonsense empty | absent empty | p50 ms | p95 ms |"
     );
-    show!("|---|---|---|---|---|---|---|---|---|---|");
+    show!("|---|---|---|---|---|---|---|---|---|---|---|");
     let mut details = Vec::new();
-    for (i, &tau) in taus.iter().enumerate() {
-        engine.set_semantic_threshold(tau);
+    for (i, &(confirm, alone)) in taus.iter().enumerate() {
+        engine.set_semantic_thresholds(confirm, alone);
         for mode in MODES {
             // Words and substrings do not depend on τ: once.
             if matches!(mode, Mode::Words | Mode::Substring) && i > 0 {
@@ -505,29 +514,35 @@ fn report_target(
             let m = run(engine, queries, mode);
             let (p50, p95, _) = time_stats(&m.times);
             show!(
-                "| {} | {} | {} ({}/{}) | {} | {} | {} | {} | {} | {p50:.2} | {p95:.2} |",
+                "| {} | {} | {} ({}/{}) | {} | {} | {} | {} | {} | {} | {p50:.2} | {p95:.2} |",
                 if matches!(mode, Mode::Words | Mode::Substring) {
                     "—".to_owned()
                 } else {
-                    format!("{tau:.2}")
+                    format!("{confirm:.2} / {alone:.2}")
                 },
                 mode.name(),
                 pct(m.found_top, m.positives),
                 m.found_top,
                 m.positives,
                 pct(m.found_first, m.positives),
+                m.by_kind
+                    .get("cross")
+                    .map_or("—".to_owned(), |&(found, total)| format!(
+                        "{} ({found}/{total})",
+                        pct(found, total)
+                    )),
                 m.semantic_only,
                 pct(m.semantic_only_irrelevant, m.semantic_only),
                 pct(m.nonsense_empty, m.nonsense),
                 pct(m.absent_empty, m.absent),
             );
             if mode == Mode::Hybrid {
-                details.push((tau, m));
+                details.push((confirm, alone, m));
             }
         }
     }
-    for (tau, m) in &details {
-        show!("\nHybrid, τ {tau:.2}: recall@5 by kind of query");
+    for (confirm, alone, m) in &details {
+        show!("\nHybrid, τ_confirm {confirm:.2}, τ_alone {alone:.2}: recall@5 by kind of query");
         for (kind, (found, total)) in &m.by_kind {
             show!("- {kind}: {}", pct(*found, *total));
         }
@@ -535,7 +550,10 @@ fn report_target(
             show!("  missed: {}", m.missed.join("; "));
         }
     }
-    report_candidates(chunks, queries, taus);
+    let mut values: Vec<f32> = taus.iter().flat_map(|&(c, a)| [c, a]).collect();
+    values.sort_by(f32::total_cmp);
+    values.dedup();
+    report_candidates(chunks, queries, &values);
     report_scores(notes, chunks, queries);
     report_substring_time(engine, queries);
 }

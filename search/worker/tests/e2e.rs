@@ -395,7 +395,8 @@ fn embedded_roundtrip() {
     assert_eq!(status.code(), Some(0));
 }
 
-/// A Russian recipe is found first by an English query (spec §6.7).
+/// A Russian recipe is found first by an English query; a nonsense query finds nothing: no
+/// semantic candidate reaches `τ_alone` (spec §6.7).
 #[test]
 #[ignore = "needs SMARTNOTE_MODEL_DIR and SMARTNOTE_ORT_LIB: task model:fetch, task ort:fetch"]
 fn semantic_cross_lingual() {
@@ -430,6 +431,11 @@ fn semantic_cross_lingual() {
     assert!(!hits.is_empty(), "the recipe is found");
     assert_eq!(hits[0].note, note(1, 0, "", "").id);
     assert!(hits[0].sources.contains(&Source::Semantic));
+    assert_eq!(
+        search(&mut w, 3, "qwertyzxcv"),
+        Vec::<Hit>::new(),
+        "No matches"
+    );
     let (status, _) = w.finish();
     assert_eq!(status.code(), Some(0));
 }

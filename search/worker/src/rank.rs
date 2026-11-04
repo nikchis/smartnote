@@ -1,4 +1,4 @@
-//! Ranking of the search results (spec §6.7, §6.8): caps per note, the semantic threshold,
+//! Ranking of the search results (spec §6.7, §6.8): caps per note, the semantic thresholds,
 //! Reciprocal Rank Fusion of the branch lists and snippets with highlight marks.
 //!
 //! Every ordering here is total: equal scores fall back to the note order (internal numbers
@@ -18,8 +18,14 @@ pub const PER_NOTE: usize = 3;
 pub const BRANCH_K: usize = 50;
 /// Constant of Reciprocal Rank Fusion.
 pub const RRF_K: f32 = 60.0;
-/// Lowest dot product of a chunk with the query that the semantic list takes.
-pub const TAU: f32 = 0.80;
+/// Lowest dot product of a chunk with the query that the semantic list takes (`τ_confirm`,
+/// spec §6.7): a semantic line on a line of the word or substring list adds its RRF term.
+pub const TAU_CONFIRM: f32 = 0.80;
+/// Lowest chunk score of a line that only the semantic list found for it to enter the results
+/// (`τ_alone`, spec §6.7).
+pub const TAU_ALONE: f32 = 0.84;
+/// Most lines that only the semantic list found in the results (spec §6.7).
+pub const SEMANTIC_ONLY_MAX: usize = 3;
 /// Longest snippet, in characters (Unicode scalar values).
 pub const SNIPPET_CHARS: usize = 160;
 
@@ -32,6 +38,8 @@ pub struct Fused {
     pub score: f32,
     /// Branches that found the line, in the order of the lists given to [`fuse`].
     pub sources: Vec<Source>,
+    /// Chunk score of the line in the semantic list, if it is there.
+    pub semantic: Option<f32>,
 }
 
 /// Orders `hits` by score (larger first), then by note and line.
@@ -75,10 +83,12 @@ fn rrf(rank: usize) -> f32 {
 
 /// Fuses the branch lists by Reciprocal Rank Fusion over lines: a line scores
 /// `Σ 1 / (RRF_K + rank)` over the lists that contain it, `rank` counted from 1. The fused
-/// lines are ordered by score, then note and line, and capped at [`PER_NOTE`] lines of a note
-/// and `limit` lines in all.
+/// lines are ordered by score, then note and line, and taken in that order: a line that only
+/// the semantic list found is taken only with a chunk score of at least `alone` and while
+/// fewer than [`SEMANTIC_ONLY_MAX`] such lines are taken; then at most [`PER_NOTE`] lines of a
+/// note and `limit` lines in all. A line left out takes no place of its note or of the limit.
 #[must_use]
-pub fn fuse(lists: &[(Source, &[LineHit])], limit: usize) -> Vec<Fused> {
+pub fn fuse(lists: &[(Source, &[LineHit])], limit: usize, alone: f32) -> Vec<Fused> {
     let mut fused: Vec<Fused> = Vec::new();
     let mut at: HashMap<(NoteKey, u32), usize> = HashMap::new();
     for &(source, list) in lists {
@@ -89,6 +99,7 @@ pub fn fuse(lists: &[(Source, &[LineHit])], limit: usize) -> Vec<Fused> {
                     line: hit.line,
                     score: 0.0,
                     sources: Vec::new(),
+                    semantic: None,
                 });
                 fused.len() - 1
             });
@@ -96,6 +107,9 @@ pub fn fuse(lists: &[(Source, &[LineHit])], limit: usize) -> Vec<Fused> {
             entry.score += rrf(i + 1);
             if !entry.sources.contains(&source) {
                 entry.sources.push(source);
+            }
+            if source == Source::Semantic {
+                entry.semantic = Some(entry.semantic.map_or(hit.score, |s| s.max(hit.score)));
             }
         }
     }
@@ -105,7 +119,29 @@ pub fn fuse(lists: &[(Source, &[LineHit])], limit: usize) -> Vec<Fused> {
             .then(a.note.cmp(&b.note))
             .then(a.line.cmp(&b.line))
     });
-    cap(fused, |f| f.note, PER_NOTE, limit)
+
+    let mut taken: HashMap<NoteKey, usize> = HashMap::new();
+    let mut semantic_only = 0;
+    let mut out = Vec::new();
+    for f in fused {
+        if out.len() >= limit {
+            break;
+        }
+        let alone_line = f.sources == [Source::Semantic];
+        if alone_line
+            && (semantic_only >= SEMANTIC_ONLY_MAX || !f.semantic.is_some_and(|s| s >= alone))
+        {
+            continue;
+        }
+        let count = taken.entry(f.note).or_default();
+        if *count >= PER_NOTE {
+            continue;
+        }
+        *count += 1;
+        semantic_only += usize::from(alone_line);
+        out.push(f);
+    }
+    out
 }
 
 /// RRF score of each line over the lexical lists alone: the measure of the best lexical line
@@ -203,6 +239,7 @@ mod tests {
         let fused = fuse(
             &[(Source::Words, &words), (Source::Substring, &substring)],
             10,
+            TAU_ALONE,
         );
         let order: Vec<_> = fused.iter().map(|f| (f.note, f.line)).collect();
         assert_eq!(order, [(2, 1), (1, 0)]);
@@ -215,9 +252,82 @@ mod tests {
     fn fuse_ties_follow_note_and_line() {
         let a = [hit(5, 2, 1.0)];
         let b = [hit(3, 7, 1.0)];
-        let fused = fuse(&[(Source::Words, &a), (Source::Semantic, &b)], 10);
+        let fused = fuse(
+            &[(Source::Words, &a), (Source::Semantic, &b)],
+            10,
+            TAU_ALONE,
+        );
         let order: Vec<_> = fused.iter().map(|f| (f.note, f.line)).collect();
         assert_eq!(order, [(3, 7), (5, 2)]);
+    }
+
+    fn lines(fused: &[Fused]) -> Vec<(NoteKey, u32)> {
+        fused.iter().map(|f| (f.note, f.line)).collect()
+    }
+
+    #[test]
+    fn fuse_confirming_semantic_boosts_lexical() {
+        let words = [hit(1, 0, 9.0), hit(2, 4, 5.0)];
+        // Below τ_alone, but on a line of the word list: it confirms that line.
+        let semantic = [hit(2, 4, 0.81)];
+        let fused = fuse(
+            &[(Source::Words, &words), (Source::Semantic, &semantic)],
+            10,
+            TAU_ALONE,
+        );
+        assert_eq!(lines(&fused), [(2, 4), (1, 0)]);
+        assert_eq!(fused[0].sources, [Source::Words, Source::Semantic]);
+        assert!((fused[0].score - (1.0 / 62.0 + 1.0 / 61.0)).abs() < 1e-7);
+    }
+
+    #[test]
+    fn fuse_semantic_only_needs_tau_alone() {
+        let words = [hit(1, 0, 9.0)];
+        let semantic = [hit(2, 1, 0.84), hit(3, 1, 0.83)];
+        let fused = fuse(
+            &[(Source::Words, &words), (Source::Semantic, &semantic)],
+            10,
+            TAU_ALONE,
+        );
+        assert_eq!(lines(&fused), [(1, 0), (2, 1)], "0.83 dropped, 0.84 kept");
+        assert_eq!(fused[1].sources, [Source::Semantic]);
+    }
+
+    #[test]
+    fn fuse_semantic_only_at_most_three() {
+        let words = [hit(9, 1, 9.0)];
+        let semantic: Vec<LineHit> = (1..=5).map(|n| hit(n, 1, 0.9)).collect();
+        let fused = fuse(
+            &[(Source::Words, &words), (Source::Semantic, &semantic)],
+            10,
+            TAU_ALONE,
+        );
+        let only = fused
+            .iter()
+            .filter(|f| f.sources == [Source::Semantic])
+            .count();
+        assert_eq!(only, SEMANTIC_ONLY_MAX);
+        assert_eq!(lines(&fused), [(1, 1), (9, 1), (2, 1), (3, 1)]);
+    }
+
+    #[test]
+    fn fuse_dropped_semantic_takes_no_place() {
+        // Note 1: a semantic-only line below τ_alone between its lexical lines.
+        let words = [hit(1, 1, 9.0), hit(1, 2, 8.0), hit(1, 3, 7.0)];
+        let semantic = [hit(1, 5, 0.82)];
+        let fused = fuse(
+            &[(Source::Words, &words), (Source::Semantic, &semantic)],
+            3,
+            TAU_ALONE,
+        );
+        assert_eq!(lines(&fused), [(1, 1), (1, 2), (1, 3)]);
+    }
+
+    #[test]
+    fn fuse_nonsense_without_lexical_is_empty() {
+        let semantic = [hit(1, 1, 0.83), hit(2, 3, 0.81), hit(3, 2, 0.80)];
+        let fused = fuse(&[(Source::Semantic, &semantic)], 10, TAU_ALONE);
+        assert_eq!(fused, Vec::<Fused>::new());
     }
 
     #[test]
