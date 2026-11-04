@@ -51,6 +51,12 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
+	// First, before the process holds any secret (spec §10.1). Without it the
+	// app still works, so a failure is only logged.
+	if err := platform.Harden(); err != nil {
+		logger.Error("harden process", applog.Err(err))
+	}
+
 	dataDir, err := platform.DataDir()
 	if err != nil {
 		return fmt.Errorf("data directory: %w", err)
@@ -89,17 +95,27 @@ func run(logger *slog.Logger) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	engine, searchStatus := newSearchEngine(logger, findSearch)
+	searchRun := newSearchRunner(ctx, logger)
+
 	// finish is the one shutdown function of every quit path (spec §7.3): it
-	// cancels running operations and closes the storage, which wipes its key.
+	// cancels running operations, which ends the search; once the search has
+	// stopped using the engine and the storage, it stops the worker (closing
+	// its stdin, killing it after 2 s, spec §3.3 rule 9) and closes the
+	// storage, which wipes its key.
 	finish := sync.OnceFunc(func() {
 		cancel()
+		searchRun.wait()
+		logClose(logger, "close search worker", engine.Close())
 		logClose(logger, "close local storage", store.Close())
 	})
 	defer finish()
 
 	app.OnShutdown(finish)
 
-	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger}, store, lifecycle)
+	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger}, store, lifecycle, searchParts{
+		engine: engine, status: searchStatus, run: searchRun,
+	})
 	if err != nil {
 		return err
 	}
@@ -180,8 +196,17 @@ func newApp(lifecycle *wailsui.Lifecycle, assets fs.FS, logger *slog.Logger) *ap
 	return app
 }
 
+// searchParts are what newServices needs for the search: the engine, the
+// status until the engine reports one, and the runner that starts the search
+// once the storage is open.
+type searchParts struct {
+	engine usecase.SearchEngine
+	status usecase.SearchStatus
+	run    *searchRunner
+}
+
 // newServices wires the use cases over store into the Wails services.
-func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecycle) ([]application.Service, error) {
+func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecycle, sp searchParts) ([]application.Service, error) {
 	// The local storage keeps milliseconds; a finer clock would make a saved
 	// note differ from the one returned to the interface.
 	clock := func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
@@ -194,11 +219,12 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		return nil, err
 	}
 
-	// The engine stays unavailable and Run is not started until the search
-	// worker is connected; the index hooks already run.
+	searchStatus := wailsui.NewSearchStatusFeed(sp.status, emit)
+
 	search, err := usecase.NewSearch(usecase.SearchDeps{
-		Engine: newUnavailableEngine(), Notes: store, Embeddings: store, Changes: changes,
-		Warn: func(err error) { wailsui.LogError(env.Log, "search", err) },
+		Engine: sp.engine, Notes: store, Embeddings: store, Changes: changes,
+		OnStatus: searchStatus.Publish,
+		Warn:     func(err error) { wailsui.LogSearchWarning(env.Log, "search", err) },
 	})
 	if err != nil {
 		return nil, err
@@ -235,11 +261,13 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 	}
 
 	return []application.Service{
-		application.NewService(wailsui.NewVaultService(env, vault)),
+		// The search runs from the first opening of the storage until the quit.
+		application.NewService(wailsui.NewVaultService(env, vault, func() { sp.run.start(search) })),
 		application.NewService(wailsui.NewNotesService(env, notes)),
 		application.NewService(wailsui.NewSyncService(env, syncer)),
 		application.NewService(wailsui.NewConnectionService(env, connection)),
 		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{})),
+		application.NewService(wailsui.NewSearchService(env, search, searchStatus)),
 		application.NewService(wailsui.NewAppService(lifecycle)),
 	}, nil
 }

@@ -4,6 +4,7 @@ export {
   ConnectionService,
   KeyService,
   NotesService,
+  SearchService,
   SyncService,
   VaultService,
 } from "../../bindings/github.com/nikchis/smartnote/internal/adapter/wailsui";
@@ -12,6 +13,8 @@ export type {
   ConnectDTO,
   CountsDTO,
   NoteDTO,
+  SearchHitDTO,
+  SearchStatusDTO,
   SettingsDTO,
   StateDTO,
   VersionDTO,

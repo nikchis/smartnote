@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -686,5 +687,78 @@ func TestEngineStartHonoursContext(t *testing.T) {
 		}
 	case <-time.After(hangGuard):
 		t.Fatal("Start ignored its context")
+	}
+}
+
+// levels returns the levels of the records that contain all of parts.
+func (r *logRecorder) levels(parts ...string) []slog.Level {
+	r.mu.Lock()
+	records := slices.Clone(r.records)
+	r.mu.Unlock()
+
+	lines := r.lines()
+
+	var out []slog.Level
+
+	for i, line := range lines {
+		all := true
+		for _, p := range parts {
+			all = all && strings.Contains(line, p)
+		}
+
+		if all {
+			out = append(out, records[i].Level)
+		}
+	}
+
+	return out
+}
+
+func TestEngineStderrLevel(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "ok", func(c *Config) {
+		c.StderrLevel = func(line string) slog.Level {
+			if strings.HasPrefix(line, "fake: started") {
+				return slog.LevelInfo
+			}
+
+			return slog.LevelError
+		}
+	})
+	e.start(t)
+
+	e.log.waitLine(t, "source=search-worker", "fake: started")
+
+	if got := e.log.levels("source=search-worker", "fake: started"); !slices.Equal(got, []slog.Level{slog.LevelInfo}) {
+		t.Fatalf("levels of the start line = %v, want [INFO]", got)
+	}
+}
+
+func TestDefaultStderrLevel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		line string
+		want slog.Level
+	}{
+		{"model loaded in 641 ms", slog.LevelInfo},
+		{"sandbox partial: landlock-ioctl-dev", slog.LevelError},
+		{"sandbox none: landlock seccomp", slog.LevelError},
+		{"sandbox: 2 descriptors besides 0, 1, 2 are open", slog.LevelError},
+		{"sandbox: open descriptors cannot be listed", slog.LevelError},
+		{"panic at src/worker.rs:10:5", slog.LevelError},
+		{"semantic search unavailable: the CPU has no AVX2", slog.LevelError},
+		{"onnxruntime error at session.cc:12", slog.LevelError},
+		{"query vector timed out after 1s", slog.LevelError},
+		{"harden failed: EPERM", slog.LevelError},
+		{"model loaded", slog.LevelError}, // not the line of the worker
+		{"", slog.LevelError},
+	}
+
+	for _, tc := range tests {
+		if got := defaultStderrLevel(tc.line); got != tc.want {
+			t.Errorf("defaultStderrLevel(%q) = %v, want %v", tc.line, got, tc.want)
+		}
 	}
 }

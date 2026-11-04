@@ -91,9 +91,10 @@ func workerEnv(environ []string) []string {
 //   - write is the only writer of stdin;
 //   - logStderr logs stderr line by line.
 type generation struct {
-	n     uint64
-	log   *slog.Logger
-	queue *eventQueue
+	n           uint64
+	log         *slog.Logger
+	stderrLevel func(line string) slog.Level
+	queue       *eventQueue
 
 	cmd    *exec.Cmd
 	writes chan writeReq
@@ -126,17 +127,18 @@ type writeReq struct {
 // startGeneration starts the worker at path with env as generation n. Only
 // the three pipes are passed to the child; Go creates them close-on-exec, so
 // no other child inherits them.
-func startGeneration(n uint64, path string, env []string, log *slog.Logger, queue *eventQueue) (*generation, error) {
+func startGeneration(n uint64, path string, env []string, cfg *Config, queue *eventQueue) (*generation, error) {
 	g := &generation{
-		n:        n,
-		log:      log,
-		queue:    queue,
-		writes:   make(chan writeReq),
-		ready:    make(chan *readyMsg, 1),
-		pending:  map[uint64]chan any{},
-		dead:     make(chan struct{}),
-		exited:   make(chan struct{}),
-		stopping: make(chan struct{}),
+		n:           n,
+		log:         cfg.Log,
+		stderrLevel: cfg.StderrLevel,
+		queue:       queue,
+		writes:      make(chan writeReq),
+		ready:       make(chan *readyMsg, 1),
+		pending:     map[uint64]chan any{},
+		dead:        make(chan struct{}),
+		exited:      make(chan struct{}),
+		stopping:    make(chan struct{}),
 	}
 
 	pipes, err := newPipes()
@@ -543,12 +545,14 @@ func (g *generation) logStderr(stderr *os.File) {
 func (g *generation) logLine(index int, line []byte, cut bool) {
 	switch {
 	case index < maxStderrLines:
-		attrs := []any{slog.String("source", stderrSource), slog.Uint64("gen", g.n), slog.String("line", strings.TrimRight(string(line), "\r\n"))}
+		text := strings.TrimRight(string(line), "\r\n")
+		attrs := []slog.Attr{slog.String("source", stderrSource), slog.Uint64("gen", g.n), slog.String("line", text)}
+
 		if cut {
 			attrs = append(attrs, slog.Bool("cut", true))
 		}
 
-		g.log.Error("search worker stderr", attrs...)
+		g.log.LogAttrs(context.Background(), g.stderrLevel(text), "search worker stderr", attrs...)
 	case index == maxStderrLines:
 		g.log.Error("search worker stderr: further lines dropped", slog.String("source", stderrSource), slog.Uint64("gen", g.n))
 	}
@@ -566,4 +570,20 @@ func (g *generation) exitStatus() string {
 // logFailure logs why generation g stopped.
 func (g *generation) logFailure() {
 	g.log.Error("search worker failed", slog.Uint64("gen", g.n), applog.Err(g.failure()), slog.String("exit", g.exitStatus()))
+}
+
+// modelLoadedPrefix starts the one informational stderr line of the worker:
+// "model loaded in N ms" (search/worker/src/worker.rs).
+const modelLoadedPrefix = "model loaded in "
+
+// defaultStderrLevel is the level of a stderr line when Config.StderrLevel is
+// nil: the worker writes there what the error log must keep (panics, sandbox
+// below full, open descriptors, model and ONNX Runtime failures), except the
+// timing of the model load, which is Info.
+func defaultStderrLevel(line string) slog.Level {
+	if strings.HasPrefix(line, modelLoadedPrefix) {
+		return slog.LevelInfo
+	}
+
+	return slog.LevelError
 }

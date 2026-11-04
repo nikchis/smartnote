@@ -60,10 +60,16 @@ type Config struct {
 	// default.
 	Path, OrtLib, ModelDir string
 	Threads                int
-	// Log receives the failures of the worker and its stderr lines (with
-	// source=search-worker), at level Error, so the error log keeps them.
-	Log      *slog.Logger
-	Timeouts Timeouts
+	// Log receives the failures of the worker at level Error, so the error log
+	// keeps them, and its stderr lines (with source=search-worker) at the
+	// level StderrLevel gives.
+	Log *slog.Logger
+	// StderrLevel gives the log level of a stderr line of the worker; nil
+	// takes the default: Info for the timing of the model load, which the
+	// error log drops, and Error for everything else the worker writes there
+	// (panics, sandbox and model problems).
+	StderrLevel func(line string) slog.Level
+	Timeouts    Timeouts
 	// Backoff are the pauses before restarts; nil takes 1, 2, 4, 8, 16 s.
 	Backoff []time.Duration
 	// Now and After are the clock of the restart policy, for the tests; nil
@@ -140,6 +146,10 @@ func New(cfg Config) (*Engine, error) {
 
 	if cfg.After == nil {
 		cfg.After = time.After
+	}
+
+	if cfg.StderrLevel == nil {
+		cfg.StderrLevel = defaultStderrLevel
 	}
 
 	life, cancel := context.WithCancel(context.Background())
@@ -448,7 +458,7 @@ func (e *Engine) launch() (*generation, error) {
 
 	env := workerEnv(append(os.Environ(), e.extraEnv...))
 
-	g, err := startGeneration(n, e.cfg.Path, env, e.cfg.Log, e.queue)
+	g, err := startGeneration(n, e.cfg.Path, env, &e.cfg, e.queue)
 	if err != nil {
 		return nil, err
 	}
