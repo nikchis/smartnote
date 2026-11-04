@@ -202,7 +202,7 @@ func newTestEngine(t *testing.T, mode string, edit func(*Config), env ...string)
 	}
 
 	e.extraEnv = append([]string{"FAKE_MODE=" + mode}, env...)
-	e.stderrForms = append(slices.Clone(workerStderrForms), fakeStderrForm)
+	e.out = newWorkerOutput(cfg.Log, append(slices.Clone(workerStderrForms), fakeStderrForm))
 
 	t.Cleanup(func() { _ = e.Close() })
 

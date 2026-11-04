@@ -33,5 +33,5 @@ Encoding rules the Go side mirrors:
   in Rust only: Go decodes it as its zero value, which fails the checks of the enumerations
   (`lexical`, `semantic`, `sandbox`, `code`, `sources`) but not of other fields;
 - `error.msg` is a fixed text of the worker; Go shows it only when it is one of the texts it
-  knows (`knownErrorTexts` in `internal/adapter/searchworker/protocol.go`), otherwise the code
-  alone.
+  knows (`knownErrorTexts` in `internal/adapter/searchworker/protocol.go`) and within a budget per
+  run of the application (`stderr.go`), otherwise the code alone.

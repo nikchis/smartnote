@@ -79,8 +79,8 @@ pub fn load_ort(lib: &OrtLibrary) -> Result<(), ModelError> {
 
 /// Logger of ONNX Runtime: an error or a fatal message becomes `onnxruntime <level> at
 /// <source location>`; lower levels are dropped. The message text is dropped too: it may
-/// quote values of the run. Smartnote logs the file and line of the location only (a form in
-/// `internal/adapter/searchworker/stderr.go`; keep the two in step).
+/// quote values of the run. Smartnote logs only `onnxruntime <level>`, without the location (a
+/// form in `internal/adapter/searchworker/stderr.go`; keep the two in step).
 fn log_to_stderr(level: LogLevel, _category: &str, _id: &str, location: &str, _message: &str) {
     if let Some(line) = log_line(level, location) {
         eprintln!("{line}");

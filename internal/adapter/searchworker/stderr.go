@@ -1,24 +1,57 @@
 package searchworker
 
 import (
+	"context"
 	"log/slog"
-	"path"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 )
 
-// The worker's stderr goes to the log as a closed vocabulary (spec §10.2):
-// a line is logged only when it fully matches one of the forms below, which
-// are the lines the worker itself writes; any other line is logged as
-// "unrecognized" with its length only. So code in the worker process, a
-// compromised dependency included, cannot get note text into smartnote.log
-// through stderr. A form with free text in it (an OS error message, a
-// function name) logs a rendering without that text.
+// What the worker processes write, their stderr lines and the msg of their
+// error replies, reaches smartnote.log as a closed vocabulary within a budget
+// per Engine, that is per run of the application (spec §10.2):
+//
+//   - a stderr line is logged only when it fully matches one of the forms
+//     below, the lines the worker itself writes; the logged text is fixed
+//     but for numbers (OS error numbers, descriptor counts, protocol
+//     versions, sizes, timings, the line and column of a panic) and choices
+//     among fixed words (sandbox gaps, model errors, the source file of a
+//     panic from workerSourceFiles). Free text in a line (an OS error
+//     message, an ONNX Runtime location, a file outside the worker) is never
+//     logged. Any other line is logged as "unrecognized" with its length;
+//   - the msg of an error reply is shown only when it is one of
+//     knownErrorTexts (protocol.go), else the code alone;
+//   - all of it uses one budget per run: stderrBudget stderr records and
+//     errorTextBudget error texts, plus per-form limits; restarts do not
+//     renew it. Past the budget one line says so and the rest is counted;
+//     Close logs the counts.
+//
+// What is guaranteed: no text the worker chooses reaches the log, and what it
+// chooses (numbers, choices among fixed texts, line lengths) is at most about
+// 0.6 KB per run: at most 71 bits per stderr record (the densest forms carry
+// two 10-digit numbers, about 66 bits, plus the choice of the form) times 64,
+// about 570 bytes; 3 bits per error text times 64, 24 bytes; the two counts at
+// Close, under 16 bytes. Not covered: the code of an error reply (one of four,
+// shown with every failed command), the exit status and the timing of a
+// failed process, which the restart policy bounds per 10 minutes, not per run.
 //
 // Contract with search/worker/src: every eprintln! of the worker has its
-// format listed in the sources of a form here; TestStderrFormsCoverWorker
-// fails until a new one is added. Lines written otherwise (the panic hook,
+// format listed in the sources of a form here, and workerSourceFiles lists
+// its source files; TestStderrFormsCoverWorker fails until a new one is
+// added. Lines written otherwise (the panic hook, the logger of ONNX Runtime,
 // the allocation failure of std) have forms without sources.
+
+// Budgets of the worker's output per run of the application.
+const (
+	stderrBudget    = 64 // stderr records
+	errorTextBudget = 64 // texts of error replies
+	// panicsPerRun is how many panic lines a run logs; a process writes one.
+	panicsPerRun = 8
+	// ortLinesPerRun is how many lines of the ONNX Runtime logger a run logs.
+	ortLinesPerRun = 8
+)
 
 // stderrForm is one kind of line the worker writes to stderr.
 type stderrForm struct {
@@ -26,13 +59,14 @@ type stderrForm struct {
 	sources []string
 	// re matches the whole line.
 	re *regexp.Regexp
-	// render gives the logged text from the submatches; nil logs the line.
+	// render gives the logged text from the submatches; nil logs the line,
+	// which then must hold no free text.
 	render func(m []string) string
 	// info logs the form at level Info, which the error log drops; the
 	// others are Error.
 	info bool
-	// most is how many lines of the form one process may write; 0 is no
-	// limit besides maxStderrLines.
+	// most is how many lines of the form a run logs; 0 is no limit besides
+	// stderrBudget.
 	most int
 }
 
@@ -47,9 +81,8 @@ const (
 		`|ONNX Runtime failed|unexpected model inputs or outputs)`
 	// ioErrRe is an io::Error: an OS error, whose message the log drops,
 	// or one of the worker's own texts.
-	ioErrRe  = `(?:.* \(os error (-?\d{1,11})\)|(parent process has changed|out of range integral type conversion attempted))`
-	gapRe    = `(?:no_new_privs|landlock_fs|landlock_net|seccomp_arch|seccomp|threads|unsupported_os)`
-	sourceRe = `[A-Za-z0-9_.+/\\-]{1,200}`
+	ioErrRe = `(?:.* \(os error (-?\d{1,11})\)|(parent process has changed|out of range integral type conversion attempted))`
+	gapRe   = `(?:no_new_privs|landlock_fs|landlock_net|seccomp_arch|seccomp|threads|unsupported_os)`
 )
 
 // renderIOErr logs prefix with the number of an OS error or the worker's own
@@ -131,64 +164,174 @@ var workerStderrForms = []stderrForm{
 	},
 	{
 		// The logger of ONNX Runtime (embed/model.rs): "onnxruntime <level>
-		// at <file>:<line> <function>"; the log keeps the file name and line.
+		// at <location>"; the location is left out.
 		sources: []string{"{line}"},
-		re:      full(`onnxruntime (error|fatal) at (` + sourceRe + `):(\d{1,9})(?: .*)?`),
-		render: func(m []string) string {
-			return "onnxruntime " + m[1] + " at " + path.Base(strings.ReplaceAll(m[2], `\`, "/")) + ":" + m[3]
-		},
-		most: 20,
+		re:      full(`onnxruntime (error|fatal) at .+`),
+		render:  func(m []string) string { return "onnxruntime " + m[1] },
+		most:    ortLinesPerRun,
 	},
 	{
 		// The panic hook (panic.rs) writes one line, and the process aborts.
-		re:   full(`panic at (?:<unknown>|` + sourceRe + `\.rs:\d{1,9}:\d{1,9})`),
-		most: 1,
+		re:     full(`panic at (?:(<unknown>)|(.+):(\d{1,9}):(\d{1,9}))`),
+		render: renderPanic,
+		most:   panicsPerRun,
 	},
 	{
 		// The allocation failure of std, before it aborts the process.
 		re:   full(`memory allocation of \d{1,20} bytes failed`),
-		most: 1,
+		most: panicsPerRun,
 	},
+}
+
+// workerSourceFiles are the source files of the worker, relative to
+// search/worker/src: the files a panic place may name.
+var workerSourceFiles = []string{
+	"embed.rs", "embed/chunk.rs", "embed/files.rs", "embed/model.rs", "embed/record.rs",
+	"engine.rs", "harden.rs", "index.rs", "index/lexical.rs", "index/substring.rs",
+	"lib.rs", "main.rs", "panic.rs", "protocol.rs", "protocol/frame.rs", "protocol/messages.rs",
+	"rank.rs", "sandbox.rs", "text.rs", "text/form.rs", "text/query.rs", "worker.rs",
+}
+
+// renderPanic logs the place of a panic: the source file when it is one of
+// the worker's, as Rust writes it from the workspace (worker/src/…), or from
+// src/, with / or \ separators and any directory before; else <other>.
+func renderPanic(m []string) string {
+	if m[1] != "" {
+		return "panic at <unknown>"
+	}
+
+	file := "<other>"
+
+	p := strings.ReplaceAll(m[2], `\`, "/")
+	if i := strings.LastIndex(p, "worker/src/"); i >= 0 && (i == 0 || p[i-1] == '/') {
+		p = p[i+len("worker/src/"):]
+	} else {
+		p = strings.TrimPrefix(p, "src/")
+	}
+
+	if slices.Contains(workerSourceFiles, p) {
+		file = "worker/src/" + p
+	}
+
+	return "panic at " + file + ":" + m[3] + ":" + m[4]
 }
 
 func full(re string) *regexp.Regexp { return regexp.MustCompile(`^` + re + `$`) }
 
-// stderrFilter applies the forms to the lines of one process.
-type stderrFilter struct {
-	forms []stderrForm
-	seen  []int // lines logged per form
-}
-
-func newStderrFilter(forms []stderrForm) *stderrFilter {
-	return &stderrFilter{forms: forms, seen: make([]int, len(forms))}
-}
-
-// filter returns the text to log for line and its level; false when the line
-// matches no form, or a form already used up for this process.
-func (f *stderrFilter) filter(line string) (string, slog.Level, bool) {
-	for i, form := range f.forms {
-		m := form.re.FindStringSubmatch(line)
+// renderStderr returns the form of line, the text to log and its level;
+// false when the line matches no form.
+func renderStderr(forms []stderrForm, line string) (form int, text string, level slog.Level, ok bool) {
+	for i, f := range forms {
+		m := f.re.FindStringSubmatch(line)
 		if m == nil {
 			continue
 		}
 
-		if form.most > 0 && f.seen[i] >= form.most {
-			return "", slog.LevelError, false
-		}
-
-		f.seen[i]++
-
-		level := slog.LevelError
-		if form.info {
+		level = slog.LevelError
+		if f.info {
 			level = slog.LevelInfo
 		}
 
-		if form.render == nil {
-			return line, level, true
+		if f.render == nil {
+			return i, line, level, true
 		}
 
-		return form.render(m), level, true
+		return i, f.render(m), level, true
 	}
 
-	return "", slog.LevelError, false
+	return 0, "", slog.LevelError, false
+}
+
+// workerOutput logs the output of the worker processes of one Engine within
+// the budgets of a run (see the top of the file). It is safe for concurrent
+// use.
+type workerOutput struct {
+	log   *slog.Logger
+	forms []stderrForm
+
+	mu           sync.Mutex
+	seen         []int // stderr records per form
+	lines, texts int   // stderr records and error texts logged
+	droppedLines int
+	droppedTexts int
+	noticed      bool // the line about dropped output is logged
+}
+
+func newWorkerOutput(log *slog.Logger, forms []stderrForm) *workerOutput {
+	return &workerOutput{log: log, forms: forms, seen: make([]int, len(forms))}
+}
+
+// line logs a stderr line of generation gen, cut when it was longer than the
+// longest line read, or counts it once the budget is spent.
+func (o *workerOutput) line(gen uint64, raw string, cut bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	attrs := []slog.Attr{slog.String("source", stderrSource), slog.Uint64("gen", gen)}
+
+	form, text, level, ok := renderStderr(o.forms, raw)
+	ok = ok && !cut
+
+	switch {
+	case o.lines >= stderrBudget, ok && o.forms[form].most > 0 && o.seen[form] >= o.forms[form].most:
+		o.droppedLines++
+		o.noticeLocked()
+
+		return
+	case !ok:
+		attrs = append(attrs, slog.Int("len", len(raw)))
+		if cut {
+			attrs = append(attrs, slog.Bool("cut", true))
+		}
+
+		o.log.LogAttrs(context.Background(), slog.LevelError, "search worker stderr: unrecognized line", attrs...)
+	default:
+		o.seen[form]++
+		o.log.LogAttrs(context.Background(), level, "search worker stderr", append(attrs, slog.String("line", text))...)
+	}
+
+	o.lines++
+}
+
+// errorText is the error reply m as errors and the log show it: the code with
+// the text while the text is one of the worker's and the budget lasts, else
+// the code alone.
+func (o *workerOutput) errorText(m *errorMsg) string {
+	if !knownErrorTexts[m.Msg] {
+		return m.Code
+	}
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if o.texts >= errorTextBudget {
+		o.droppedTexts++
+		o.noticeLocked()
+
+		return m.Code
+	}
+
+	o.texts++
+
+	return m.Code + ": " + m.Msg
+}
+
+// noticeLocked logs once that the worker's output is dropped from now on.
+func (o *workerOutput) noticeLocked() {
+	if o.noticed {
+		return
+	}
+
+	o.noticed = true
+	o.log.Error("search worker: further worker output dropped")
+}
+
+// close logs how much output was dropped, if any.
+func (o *workerOutput) close() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	if o.droppedLines > 0 || o.droppedTexts > 0 {
+		o.log.Error("search worker: worker output dropped", slog.Int("lines", o.droppedLines), slog.Int("texts", o.droppedTexts))
+	}
 }

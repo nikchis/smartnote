@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -279,12 +280,10 @@ func TestErrorTextOnlyKnown(t *testing.T) {
 		}
 
 		e, ok := reply.(*errorMsg)
-		if !ok || e.String() != want {
-			t.Errorf("error with msg %q decoded as %#v, want %q", msg, reply, want)
-		}
+		out := newWorkerOutput(slog.New(slog.DiscardHandler), workerStderrForms)
 
-		if got := (&workerError{msg: e}).Error(); got != "worker error "+want {
-			t.Errorf("worker error with msg %q = %q", msg, got)
+		if got := out.errorText(e); !ok || got != want {
+			t.Errorf("error with msg %q decoded as %#v, shown as %q, want %q", msg, reply, got, want)
 		}
 	}
 }

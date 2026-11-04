@@ -25,10 +25,9 @@ import (
 const stderrSource = "search-worker"
 
 const (
-	// maxStderrLine is the longest stderr line logged; the rest is cut off.
+	// maxStderrLine is the longest stderr line read at once; the rest is
+	// cut off.
 	maxStderrLine = 4 << 10
-	// maxStderrLines is how many stderr lines of one process are logged.
-	maxStderrLines = 1000
 )
 
 var (
@@ -39,18 +38,19 @@ var (
 )
 
 // workerError is an error message of the worker without a request: the worker
-// failed as a whole and exits.
+// failed as a whole and exits. text is its code, with the msg as
+// workerOutput.errorText allows.
 type workerError struct {
-	msg *errorMsg
+	code, text string
 }
 
-func (e *workerError) Error() string { return "worker error " + e.msg.String() }
+func (e *workerError) Error() string { return "worker error " + e.text }
 
 // permanent reports whether a restart cannot help: the worker file cannot be
 // run, or it speaks another protocol version.
 func permanent(err error) bool {
 	if we, ok := errors.AsType[*workerError](err); ok {
-		return we.msg.Code == codeUnsupportedProto
+		return we.code == codeUnsupportedProto
 	}
 
 	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission)
@@ -92,10 +92,10 @@ func workerEnv(environ []string) []string {
 //   - write is the only writer of stdin;
 //   - logStderr logs stderr line by line.
 type generation struct {
-	n      uint64
-	log    *slog.Logger
-	stderr *stderrFilter // owned by logStderr
-	queue  *eventQueue
+	n     uint64
+	log   *slog.Logger
+	out   *workerOutput // the output budget of the engine
+	queue *eventQueue
 
 	cmd    *exec.Cmd
 	writes chan writeReq
@@ -134,11 +134,11 @@ type writeReq struct {
 // leave some), which os/exec cannot prevent: the worker closes all above 2
 // itself first thing (spec §10.2 p. 1). On Windows Go passes only the listed
 // handles.
-func startGeneration(n uint64, path string, env []string, cfg *Config, queue *eventQueue, forms []stderrForm) (*generation, error) {
+func startGeneration(n uint64, path string, env []string, cfg *Config, queue *eventQueue, out *workerOutput) (*generation, error) {
 	g := &generation{
 		n:        n,
 		log:      cfg.Log,
-		stderr:   newStderrFilter(forms),
+		out:      out,
 		queue:    queue,
 		writes:   make(chan writeReq),
 		ready:    make(chan *readyMsg, 1),
@@ -330,7 +330,7 @@ func (g *generation) route(msg any) error {
 		g.deliver(m.Req, m)
 	case *errorMsg:
 		if m.Req == nil {
-			return &workerError{msg: m}
+			return &workerError{code: m.Code, text: g.out.errorText(m)}
 		}
 
 		g.deliver(*m.Req, m)
@@ -526,18 +526,18 @@ func (g *generation) call(ctx context.Context, req uint64, msg any, timeout time
 	}
 }
 
-// logStderr logs the lines of stderr until EOF. The worker writes codes,
-// counts and timings there, never note text (spec §6.2); the lines that match
-// none of its forms are logged with their length only (stderr.go).
+// logStderr logs the lines of stderr until EOF within the output budget of
+// the engine (stderr.go). The worker writes codes, counts and timings there,
+// never note text (spec §6.2).
 func (g *generation) logStderr(stderr *os.File) {
 	defer func() { _ = stderr.Close() }()
 
 	r := bufio.NewReaderSize(stderr, maxStderrLine)
 
-	for lines := 0; ; lines++ {
+	for {
 		line, err := r.ReadSlice('\n')
 		if len(line) > 0 {
-			g.logLine(lines, line, errors.Is(err, bufio.ErrBufferFull))
+			g.out.line(g.n, strings.TrimRight(string(line), "\r\n"), errors.Is(err, bufio.ErrBufferFull))
 		}
 
 		for errors.Is(err, bufio.ErrBufferFull) { // the rest of a long line
@@ -547,30 +547,6 @@ func (g *generation) logStderr(stderr *os.File) {
 		if err != nil {
 			return
 		}
-	}
-}
-
-func (g *generation) logLine(index int, line []byte, cut bool) {
-	switch {
-	case index < maxStderrLines:
-		raw := strings.TrimRight(string(line), "\r\n")
-		attrs := []slog.Attr{slog.String("source", stderrSource), slog.Uint64("gen", g.n)}
-
-		text, level, ok := g.stderr.filter(raw)
-		if cut || !ok {
-			attrs = append(attrs, slog.Int("len", len(raw)))
-			if cut {
-				attrs = append(attrs, slog.Bool("cut", true))
-			}
-
-			g.log.LogAttrs(context.Background(), slog.LevelError, "search worker stderr: unrecognized line", attrs...)
-
-			return
-		}
-
-		g.log.LogAttrs(context.Background(), level, "search worker stderr", append(attrs, slog.String("line", text))...)
-	case index == maxStderrLines:
-		g.log.Error("search worker stderr: further lines dropped", slog.String("source", stderrSource), slog.Uint64("gen", g.n))
 	}
 }
 

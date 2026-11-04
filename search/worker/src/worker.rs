@@ -20,9 +20,10 @@
 //!
 //! Smartnote logs a stderr line only when it matches one of the worker's forms, listed in
 //! `internal/adapter/searchworker/stderr.go`; any other line it logs with its length only. A
-//! new `eprintln!` needs its form there (the Go test `TestStderrFormsCoverWorker` checks every
-//! format of this crate's sources), and a new `msg` of an error reply needs its text in
-//! `knownErrorTexts` of `internal/adapter/searchworker/protocol.go`.
+//! new `eprintln!` needs its form there and a new source file its entry in `workerSourceFiles`
+//! (the Go test `TestStderrFormsCoverWorker` checks this crate's sources), and a new `msg` of an
+//! error reply needs its text in `knownErrorTexts` of `internal/adapter/searchworker/protocol.go`.
+//! Smartnote logs all of it within a small budget per run of the application.
 
 use std::collections::{HashSet, VecDeque};
 use std::hint::black_box;

@@ -244,11 +244,20 @@ at a directory.
   current query again when the word search becomes ready; `usecase.Search` holds the statuses
   while a rebuild is queued (until its marker command `rebuilt` is reached), so that query never
   meets the empty index of a new worker.
-- What the worker writes reaches `smartnote.log` only as a closed vocabulary: a stderr line is
-  logged when it matches a form of `internal/adapter/searchworker/stderr.go`, otherwise as
+- What the worker writes reaches `smartnote.log` only as a closed vocabulary within a budget per
+  run of the application (`internal/adapter/searchworker/stderr.go`, `workerOutput` of the
+  `Engine`; restarts do not renew it): a stderr line is logged when it matches a form there, with
+  no free text (OS error messages, ONNX Runtime locations and files outside the worker are left
+  out; a panic names its file only from `workerSourceFiles`), otherwise as
   `search worker stderr: unrecognized line` with its length; the `msg` of an error reply only when
-  it is in `knownErrorTexts` (`protocol.go`). A new `eprintln!` in `search/worker/src` needs its
-  form there: `TestStderrFormsCoverWorker` reads the worker sources and fails until it is added.
+  it is in `knownErrorTexts` (`protocol.go`). At most 64 stderr records, 64 error texts, 8 panic and
+  8 ONNX Runtime lines per run; then one line "search worker: further worker output dropped", and
+  `Close` logs the counts. What the worker chooses (numbers, choices among fixed texts, lengths) is
+  at most about 0.6 KB per run (71 bits per record × 64, 3 bits per text × 64, two counts). Not
+  covered: the code of an error reply, and the exit status and timing of a failed process (bounded
+  by the restart policy per 10 minutes, not per run). A new `eprintln!` or source file in
+  `search/worker/src` needs its form or its entry in `workerSourceFiles`:
+  `TestStderrFormsCoverWorker` reads the worker sources and fails until it is added.
 - `make search-asan` runs the unsafe code (the zeroing allocator `search/zalloc`, the hardening and
   the sandbox of the worker, `-p worker --lib`) under AddressSanitizer
   (`RUSTFLAGS=-Zsanitizer=address`, `--target x86_64-unknown-linux-gnu`). It needs a nightly

@@ -153,24 +153,14 @@ type statusMsg struct {
 }
 
 // errorMsg is the failure of request Req, or of the worker when Req is nil.
-// The worker never puts note or query text in Msg; String, the only way Msg
-// reaches an error or the log, keeps it only when it is one of the worker's
-// texts (knownErrorTexts), so nothing else the worker process writes there
-// reaches the log.
+// The worker never puts note or query text in Msg; workerOutput.errorText,
+// the only way Msg reaches an error or the log, keeps it only when it is one
+// of the worker's texts (knownErrorTexts) and within the budget of the run.
 type errorMsg struct {
 	T    string  `cbor:"t"`
 	Req  *uint64 `cbor:"req,omitempty"`
 	Code string  `cbor:"code"`
 	Msg  string  `cbor:"msg"`
-}
-
-// String is the code with the text when the text is one of the worker's.
-func (m *errorMsg) String() string {
-	if !knownErrorTexts[m.Msg] {
-		return m.Code
-	}
-
-	return m.Code + ": " + m.Msg
 }
 
 // knownErrorTexts are the msg values of the worker's error replies

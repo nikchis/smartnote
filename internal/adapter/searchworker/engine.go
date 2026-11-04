@@ -104,9 +104,9 @@ type ReadyInfo struct {
 type Engine struct {
 	cfg      Config
 	extraEnv []string // added to the parent's environment: a seam for the tests
-	// stderrForms are the stderr lines logged as they are: the worker's,
-	// and the fake worker's in the tests.
-	stderrForms []stderrForm
+	// out logs what the worker processes write, within the budget of a run
+	// (stderr.go); the tests replace it to add the fake worker's lines.
+	out *workerOutput
 
 	events chan usecase.SearchEvent
 	queue  *eventQueue
@@ -160,13 +160,13 @@ func New(cfg Config) (*Engine, error) {
 	life, cancel := context.WithCancel(context.Background())
 
 	return &Engine{
-		cfg:         cfg,
-		stderrForms: workerStderrForms,
-		events:      make(chan usecase.SearchEvent),
-		queue:       newEventQueue(),
-		life:        life,
-		cancel:      cancel,
-		settled:     make(chan struct{}),
+		cfg:     cfg,
+		out:     newWorkerOutput(cfg.Log, workerStderrForms),
+		events:  make(chan usecase.SearchEvent),
+		queue:   newEventQueue(),
+		life:    life,
+		cancel:  cancel,
+		settled: make(chan struct{}),
 	}, nil
 }
 
@@ -280,7 +280,7 @@ func (e *Engine) command(ctx context.Context, msg func(req uint64) any) error {
 	case *okMsg:
 		return nil
 	case *errorMsg:
-		return fmt.Errorf("search worker: %s", r)
+		return fmt.Errorf("search worker: %s", e.out.errorText(r))
 	default:
 		err := fmt.Errorf("%w: %T answers a command", errProtocol, reply)
 		g.kill(err)
@@ -332,7 +332,7 @@ func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase
 
 		return hits, nil
 	case *errorMsg:
-		return nil, fmt.Errorf("search worker: %s", r)
+		return nil, fmt.Errorf("search worker: %s", e.out.errorText(r))
 	default:
 		err := fmt.Errorf("%w: %T answers a search", errProtocol, reply)
 		g.kill(err)
@@ -429,6 +429,7 @@ func (e *Engine) Close() error {
 
 		e.cancel()
 		e.wg.Wait()
+		e.out.close()
 		close(e.events)
 	})
 
@@ -489,7 +490,7 @@ func (e *Engine) launch() (*generation, error) {
 
 	env := workerEnv(append(os.Environ(), e.extraEnv...))
 
-	g, err := startGeneration(n, e.cfg.Path, env, &e.cfg, e.queue, e.stderrForms)
+	g, err := startGeneration(n, e.cfg.Path, env, &e.cfg, e.queue, e.out)
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,8 @@
 //   - ok: a working worker with a substring index; ready reports semantic
 //     "loading", then a status reports it "ready";
 //   - crash-on-hello: exits with code 1 after reading hello;
+//   - chatty-crash: writes 30 lines of the worker's own to stderr, then
+//     exits like crash-on-hello;
 //   - hang-on-hello: reads hello and never answers or exits on its own;
 //   - hang-on-upsert: stops reading and answering at the first upsert and
 //     never exits on its own, not even at the end of stdin;
@@ -134,6 +136,12 @@ func main() {
 	mode := os.Getenv("FAKE_MODE")
 	fmt.Fprintf(os.Stderr, "fake: started mode=%s\n", mode)
 
+	if mode == "chatty-crash" {
+		for range 30 {
+			fmt.Fprintln(os.Stderr, "sandbox: open descriptors cannot be listed")
+		}
+	}
+
 	if mode == "leak" {
 		fmt.Fprintf(os.Stderr, "leaked: %s\nsandbox partial: landlock_net\n", os.Getenv("FAKE_MARKER"))
 	}
@@ -159,7 +167,7 @@ func (f *fake) run() {
 		fail(fmt.Errorf("expected hello: %w", err))
 	}
 
-	if f.mode == "crash-on-hello" {
+	if f.mode == "crash-on-hello" || f.mode == "chatty-crash" {
 		fail(errors.New("crash"))
 	}
 
