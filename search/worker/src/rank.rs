@@ -5,6 +5,7 @@
 //! in the order notes were first indexed) and the line, so a result never depends on hash map
 //! iteration or on the history of the word index.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::Range;
 
@@ -44,12 +45,13 @@ pub struct Fused {
 
 /// Orders `hits` by score (larger first), then by note and line.
 pub fn sort_by_score(hits: &mut [LineHit]) {
-    hits.sort_by(|a, b| {
-        b.score
-            .total_cmp(&a.score)
-            .then(a.note.cmp(&b.note))
-            .then(a.line.cmp(&b.line))
-    });
+    hits.sort_by(|a, b| by_score((a.score, a.note, a.line), (b.score, b.note, b.line)));
+}
+
+/// The order of ranked lines given as `(score, note, line)`: score (larger first), then note
+/// and line.
+fn by_score(a: (f32, NoteKey, u32), b: (f32, NoteKey, u32)) -> Ordering {
+    b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2))
 }
 
 /// Takes `items` in order, at most `per_note` of one note and `k` in all.
@@ -113,12 +115,7 @@ pub fn fuse(lists: &[(Source, &[LineHit])], limit: usize, alone: f32) -> Vec<Fus
             }
         }
     }
-    fused.sort_by(|a, b| {
-        b.score
-            .total_cmp(&a.score)
-            .then(a.note.cmp(&b.note))
-            .then(a.line.cmp(&b.line))
-    });
+    fused.sort_by(|a, b| by_score((a.score, a.note, a.line), (b.score, b.note, b.line)));
 
     let mut taken: HashMap<NoteKey, usize> = HashMap::new();
     let mut semantic_only = 0;
