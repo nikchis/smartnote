@@ -263,6 +263,25 @@ describe("Editor", () => {
     expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "unsaved" });
   });
 
+  it("openHit replaced by a newer jump while it searches again changes nothing", async () => {
+    let answer!: (hits: SearchHitDTO[]) => void;
+    search.Search = (q: string) => {
+      search.calls.push(q);
+      return new Promise((r) => (answer = r));
+    };
+    box.input("first");
+    const old = ed.openHit(hit("a", 1, 1, "first")); // outdated: "first" is at 0
+    await Promise.resolve();
+    search.Search = async () => [];
+
+    await expect(ed.openHit(hit("b", 1, 0, "second"))).resolves.toBe("selected");
+    answer([hit("a", 1, 0, "first")]);
+
+    await expect(old).resolves.toBe("cancelled");
+    expect(ed.state).toMatchObject({ mode: "edit", name: "beta" });
+    expect(ed.place).toEqual({ field: "info", start: 0, end: 6 });
+  });
+
   it("useVersion puts the text into the editor without saving", async () => {
     await ed.select("a");
     ed.useVersion("old text");

@@ -78,11 +78,16 @@
 
   const nameOf = (id: string) => editor.notes.find((n) => n.id === id)?.name ?? "";
 
+  /** jumps counts the calls of openHit: a jump that a newer one replaced does not touch the fields. */
+  let jumps = 0;
+
   /** openHit jumps to a hit and selects its place (search spec §9.2). */
   async function openHit(hit: SearchHitDTO): Promise<void> {
+    const mine = ++jumps;
     const jump = await editor.openHit(hit);
     // The fields show the note and the Discard question is gone after the tick.
     await tick();
+    if (mine !== jumps) return;
     switch (jump) {
       case "selected":
         if (editor.place) selectPlace(editor.place);

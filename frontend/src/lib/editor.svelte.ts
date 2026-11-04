@@ -23,7 +23,11 @@ export type Research = { again(): Promise<SearchHitDTO[]> };
 /** Place is the range openHit found, for the screen to select: in the name or in the text. */
 export type Place = { field: "name" | "info"; start: number; end: number };
 
-/** Jump is how openHit ended: the place is selected, the note is open without a selection, the draft was kept, or the note is gone. */
+/**
+ * Jump is how openHit ended: the place is selected, the note is open without
+ * a selection, the jump was cancelled (the draft was kept or a newer jump
+ * replaced this one) or the note is gone.
+ */
 export type Jump = "selected" | "unselected" | "cancelled" | "gone";
 
 // Cancel has the focus: the question comes up on Enter in the search field,
@@ -62,6 +66,9 @@ export class Editor {
 
   /** place is the range the last openHit selected, undefined when it selected none. */
   place: Place | undefined;
+
+  /** jumps counts the calls of openHit: one that is not the latest after an await does nothing more. */
+  private jumps = 0;
 
   /**
    * load reads the notes, for the first time or after a Restore: an unsaved
@@ -107,21 +114,27 @@ export class Editor {
    * place, the search runs once more and the hit of the note with the nearest
    * line is taken; if that does not match either, the note stays open without
    * a selection. A note that is gone is not opened and the hits are renewed.
+   * A jump that a newer one replaces while it waits is cancelled and changes
+   * nothing from then on.
    */
   async openHit(hit: SearchHitDTO): Promise<Jump> {
+    const jump = ++this.jumps;
+    const replaced = () => jump !== this.jumps;
     this.place = undefined;
     if (this.busy) return "cancelled";
     const note = this.notes.find((n) => n.id === hit.noteId);
     if (!note) {
       await this.search.again();
-      return "gone";
+      return replaced() ? "cancelled" : "gone";
     }
     // The open note without a draft stays as it is; anything else shows the saved fields.
     const shown = this.mode === "edit" && this.selected?.id === note.id && !hasDraft(this.state);
-    if (!(await this.discardDraft())) return "cancelled";
+    if (!(await this.discardDraft()) || replaced()) return "cancelled";
     if (!shown) await this.show(note);
+    if (replaced()) return "cancelled";
 
     const found = textMatches(hit, this.name, this.info) ? hit : await this.findAgain(hit);
+    if (replaced()) return "cancelled";
     if (!found) return "unselected";
     this.place = { field: found.line === 0 ? "name" : "info", start: found.start, end: found.end };
     return "selected";
