@@ -73,6 +73,12 @@ type SearchStatus struct {
 	Lexical, Semantic SearchState
 }
 
+// UnavailableStatus is the status while no search can run: no worker is
+// ready or there is none at all.
+func UnavailableStatus() SearchStatus {
+	return SearchStatus{Lexical: SearchUnavailable, Semantic: SearchUnavailable}
+}
+
 // SearchEvent is one event of the engine; exactly one field is set.
 type SearchEvent struct {
 	Embedded *EmbeddedEvent

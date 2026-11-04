@@ -550,7 +550,7 @@ func (e *Engine) supervise() {
 		// No worker is ready until the next one is: generation 0, as every
 		// goroutine of the lost one has stopped and cannot overwrite it; the
 		// ready status of the next worker replaces it.
-		e.queue.setStatus(0, unavailableStatus)
+		e.queue.setStatus(0, usecase.UnavailableStatus())
 
 		select {
 		case <-e.cfg.After(pause):
@@ -639,12 +639,9 @@ func (e *Engine) giveUp() {
 
 	e.cfg.Log.Error("search worker: given up, search is unavailable until the next start of the application")
 	// Generation 0: the status of the engine itself, never dropped.
-	e.queue.setStatus(0, unavailableStatus)
+	e.queue.setStatus(0, usecase.UnavailableStatus())
 	e.settle()
 }
-
-// unavailableStatus is the status of the engine while no worker is ready.
-var unavailableStatus = usecase.SearchStatus{Lexical: usecase.SearchUnavailable, Semantic: usecase.SearchUnavailable}
 
 func (e *Engine) settle() { e.settleOnce.Do(func() { close(e.settled) }) }
 

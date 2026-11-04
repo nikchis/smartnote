@@ -19,7 +19,7 @@ func newUnavailableEngine() *unavailableEngine {
 
 // Start reports the unavailable status; it never waits for a reader.
 func (e *unavailableEngine) Start(context.Context) error {
-	status := usecase.SearchStatus{Lexical: usecase.SearchUnavailable, Semantic: usecase.SearchUnavailable}
+	status := usecase.UnavailableStatus()
 
 	select {
 	case e.events <- usecase.SearchEvent{Status: &status}:

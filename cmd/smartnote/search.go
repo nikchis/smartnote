@@ -36,7 +36,7 @@ func findSearch() (platform.SearchLocation, error) {
 // a usable worker it returns the engine that reports search unavailable and
 // that status, and logs why once.
 func newSearchEngine(log *slog.Logger, find func() (platform.SearchLocation, error)) (usecase.SearchEngine, usecase.SearchStatus) {
-	unavailable := usecase.SearchStatus{Lexical: usecase.SearchUnavailable, Semantic: usecase.SearchUnavailable}
+	unavailable := usecase.UnavailableStatus()
 
 	loc, err := find()
 	if err != nil {

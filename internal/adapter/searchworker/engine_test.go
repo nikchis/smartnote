@@ -1144,7 +1144,7 @@ func TestEventQueueHoldsStatusOfUnannouncedGeneration(t *testing.T) {
 	}
 
 	// The engine's own status is never held.
-	q.setStatus(0, unavailableStatus)
+	q.setStatus(0, usecase.UnavailableStatus())
 
 	if item, ok := q.pop(); !ok || item.gen != 0 {
 		t.Fatalf("%+v, %v; want the status of generation 0", item, ok)
