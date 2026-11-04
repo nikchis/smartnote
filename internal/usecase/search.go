@@ -16,7 +16,8 @@ import (
 // (spec §3.2). Index commands come from one goroutine in order; Search may
 // run beside them.
 type SearchEngine interface {
-	// Start starts (or restarts) the worker and greets it.
+	// Start starts the worker once and waits until it is ready (or given
+	// up); restarts after failures are the engine's own job.
 	Start(ctx context.Context) error
 	Reset(ctx context.Context) error
 	// Upsert takes up to 100 notes.
@@ -124,7 +125,9 @@ type RestoreIndex interface {
 }
 
 // SearchDeps are the dependencies of Search. OnStatus may be nil; it is called
-// from one goroutine. Warn receives the errors of the index, which never fail
+// from two goroutines of Run, the event handler and the sender (which passes
+// on the status held during a rebuild), but never concurrently: the calls are
+// serialized by a mutex, so they keep the order of the statuses. Warn receives the errors of the index, which never fail
 // a note operation; it must not log note text, and errors here carry none.
 type SearchDeps struct {
 	Engine     SearchEngine

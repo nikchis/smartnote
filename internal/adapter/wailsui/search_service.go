@@ -52,8 +52,8 @@ func NewSearchStatusFeed(initial usecase.SearchStatus, emit func(name string, da
 }
 
 // Publish keeps st as the last status and emits it. It is usecase.SearchDeps
-// OnStatus, which is called from one goroutine, so the events keep the order
-// of the statuses.
+// OnStatus, whose calls usecase.Search serializes, so the events keep the
+// order of the statuses.
 func (f *SearchStatusFeed) Publish(st usecase.SearchStatus) {
 	dto := toSearchStatusDTO(st)
 
