@@ -163,8 +163,8 @@ mod os {
         Ok(())
     }
 
-    /// `close_range(first, ~0, 0)`; before Linux 5.9 (`ENOSYS`, or `EINVAL` under some
-    /// seccomp profiles of containers) a loop over `/proc/self/fd`.
+    /// `close_range(first, ~0, 0)`; where it is refused (see [`close_range_refused`]) a loop
+    /// over `/proc/self/fd`.
     ///
     /// # Safety
     ///
@@ -179,13 +179,19 @@ mod os {
             return Ok(());
         }
         let err = io::Error::last_os_error();
-        match err.raw_os_error() {
+        if close_range_refused(err.raw_os_error()) {
             // SAFETY: the same guarantee of the caller.
-            Some(libc::ENOSYS | libc::EINVAL) => unsafe {
-                unix::close_listed(Path::new("/proc/self/fd"), first.cast_signed())
-            },
-            _ => Err(err),
+            return unsafe { unix::close_listed(Path::new("/proc/self/fd"), first.cast_signed()) };
         }
+        Err(err)
+    }
+
+    /// Whether `close_range` failed with `errno` because the kernel or a seccomp filter does not
+    /// allow it rather than because of its arguments: `ENOSYS` before Linux 5.9, `EINVAL` or
+    /// `EPERM` under seccomp profiles of containers that predate it (older Docker profiles
+    /// answer unknown system calls with `EPERM`).
+    pub(super) fn close_range_refused(errno: Option<i32>) -> bool {
+        matches!(errno, Some(libc::ENOSYS | libc::EINVAL | libc::EPERM))
     }
 
     /// `prctl(option, arg, 0, 0, 0)` for options whose argument is a plain integer.
@@ -387,6 +393,17 @@ mod tests {
         unsafe { super::os::close_fds_from(900) }.expect("close_range");
         assert!(!is_open(900) && !is_open(901) && !is_open(1000));
         assert!(is_open(writer.as_raw_fd()), "below `first` stays open");
+    }
+
+    #[test]
+    fn close_range_falls_back_where_it_is_refused() {
+        use super::os::close_range_refused;
+        // Before Linux 5.9, and under seccomp profiles of containers that do not know it.
+        for errno in [libc::ENOSYS, libc::EINVAL, libc::EPERM] {
+            assert!(close_range_refused(Some(errno)), "errno {errno}");
+        }
+        assert!(!close_range_refused(Some(libc::EBADF)));
+        assert!(!close_range_refused(None));
     }
 
     #[test]
