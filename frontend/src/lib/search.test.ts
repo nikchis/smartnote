@@ -227,6 +227,28 @@ describe("SearchBox", () => {
     });
   });
 
+  // A query typed while the model loads has no semantic hits; once the model
+  // is ready it is searched once more, not on every later status.
+  it("searches again once when the semantic search turns ready", async () => {
+    const loading: SearchStatusDTO = { ...ready, semantic: "loading" };
+    box.follow(loading);
+    box.input("word");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(api.calls).toEqual(["word"]);
+
+    api.results.word = [hit("a", 1)];
+    box.follow(ready);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.calls).toEqual(["word", "word"]);
+    expect(box.hits.map((h) => h.noteId)).toEqual(["a"]);
+
+    box.follow({ ...ready, queued: 3 });
+    box.follow(ready);
+    box.follow({ ...ready, semantic: "unavailable" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.calls).toEqual(["word", "word"]);
+  });
+
   it("status from Status() does not replace a newer event", () => {
     const event = { ...ready, queued: 10 };
     box.follow(event);

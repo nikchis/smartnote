@@ -77,12 +77,14 @@ export class SearchBox {
    * search the worker could not run, code search_unavailable), it searches
    * the current query again: the last answer came from no worker or from an
    * index still being rebuilt (search spec §9.1, §11). Other failures are not
-   * repeated.
+   * repeated. It also searches again once when the semantic search turns
+   * ready after loading: the last answer had no semantic hits.
    */
   follow(s: SearchStatusDTO): void {
     const back = s.lexical === "ready" && (this.status?.lexical !== "ready" || this.unavailable);
+    const model = s.semantic === "ready" && this.status?.semantic === "loading";
     this.status = s;
-    if (back && this.query.trim() !== "") void this.again();
+    if ((back || model) && this.query.trim() !== "") void this.again();
   }
 
   /**
