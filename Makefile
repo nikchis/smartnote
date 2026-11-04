@@ -93,6 +93,18 @@ search-bench: ## Measure search quality and criterion 4 on the benchmark set (ne
 	SMARTNOTE_MODEL_DIR=$(CURDIR)/build/model SMARTNOTE_ORT_LIB=$(firstword $(wildcard $(CURDIR)/build/ort/libonnxruntime.*)) \
 		$(GO) test -tags integration -run '^$$' -bench BenchmarkSearchService -benchtime 2000x -timeout 60m -v ./internal/adapter/wailsui
 
+# The unsafe code (the zeroing allocator, the hardening and the sandbox of the worker) under the
+# address sanitizer (spec §12.1). Needs a nightly toolchain (rustup toolchain install nightly);
+# --target keeps build scripts and proc macros out of the sanitizer. Not part of CI.
+SEARCH_ASAN_TARGET ?= x86_64-unknown-linux-gnu
+
+search-asan: ## Run the unsafe code of the Rust search worker under AddressSanitizer (needs nightly)
+	@echo "+ $@"
+	cd search && RUSTUP_TOOLCHAIN=nightly RUSTFLAGS=-Zsanitizer=address RUSTDOCFLAGS=-Zsanitizer=address \
+		$(CARGO) test --locked --target $(SEARCH_ASAN_TARGET) -p zalloc
+	cd search && RUSTUP_TOOLCHAIN=nightly RUSTFLAGS=-Zsanitizer=address ORT_DISABLE_TELEMETRY=1 \
+		$(CARGO) test --locked --target $(SEARCH_ASAN_TARGET) -p worker --lib
+
 search-lint: ## Check format, clippy and cargo-deny policy of the Rust search worker
 	@echo "+ $@"
 	cd search && $(CARGO) fmt --check
@@ -111,4 +123,4 @@ smoke: ## Start the AppImage in a clean ubuntu:26.04 container (task smoke:appim
 	@echo "+ $@"
 	$(TASK) smoke:appimage
 
-.PHONY: help all dep frontend test integration lint lint-fix fmt install-lint search-test search-bench search-lint build package smoke
+.PHONY: help all dep frontend test integration lint lint-fix fmt install-lint search-test search-asan search-bench search-lint build package smoke
