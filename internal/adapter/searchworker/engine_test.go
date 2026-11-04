@@ -2,6 +2,7 @@ package searchworker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -406,6 +407,53 @@ func TestEngineUpsertOverFrameDropsEmbeddings(t *testing.T) {
 	hits, err := e.Search(ctx, "я", 100)
 	if err != nil || len(hits) != len(notes) {
 		t.Fatalf("Search: %d hits, %v; want %d", len(hits), err, len(notes))
+	}
+}
+
+// A note with invalid UTF-8 (from a Restore of another client's data) is
+// indexed with U+FFFD in place of the bad bytes: the worker rejects a
+// message with invalid UTF-8 and exits, and the rebuild after its restart
+// would send the note again.
+func TestEngineUpsertInvalidUTF8(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "ok", nil)
+	e.start(t)
+
+	ctx := t.Context()
+	note := usecase.IndexedNote{ID: uuid.New(), Rev: 1, Name: "n\xff", Info: "a\xffb \xe2\x82x"}
+
+	if err := e.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if err := e.Upsert(ctx, []usecase.IndexedNote{note}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	hits, err := e.Search(ctx, "a\uFFFDb", 10)
+	if err != nil || len(hits) != 1 || hits[0].NoteID != note.ID {
+		t.Fatalf("Search: %+v, %v; want the note", hits, err)
+	}
+
+	// The worker indexes the text as the interface gets it through JSON, one
+	// U+FFFD for each bad byte, so the offsets of its hits fit the editor.
+	shown, err := json.Marshal(note.Info)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var want string
+	if err := json.Unmarshal(shown, &want); err != nil {
+		t.Fatal(err)
+	}
+
+	if hits[0].Snippet != want {
+		t.Fatalf("indexed text %q, want %q as the interface shows it", hits[0].Snippet, want)
+	}
+
+	if gen := e.liveGen.Load(); gen != 1 {
+		t.Fatalf("generation %d, want 1: the worker restarted", gen)
 	}
 }
 

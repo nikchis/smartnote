@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -235,6 +236,10 @@ func (e *Engine) Reset(ctx context.Context) error {
 // takes at most 100 per message (spec §7.2) and usecase.Search sends batches
 // of 100. Notes whose cached embeddings make the message larger than a frame
 // are sent again without them: the worker computes them anew.
+//
+// Invalid UTF-8 in a name or text (a Restore takes the server's notes as they
+// are) goes as U+FFFD (asShown): the worker rejects a message with invalid
+// UTF-8 and exits, and every rebuild would send the note again.
 func (e *Engine) Upsert(ctx context.Context, notes []usecase.IndexedNote) error {
 	if len(notes) > maxUpsert {
 		return fmt.Errorf("search worker: upsert of %d notes, at most %d", len(notes), maxUpsert)
@@ -244,7 +249,11 @@ func (e *Engine) Upsert(ctx context.Context, notes []usecase.IndexedNote) error 
 	cached := false
 
 	for i, n := range notes {
-		in[i] = noteIn{ID: n.ID.String(), Rev: n.Rev, Name: n.Name, Info: n.Info, Emb: n.Embedding}
+		in[i] = noteIn{
+			ID: n.ID.String(), Rev: n.Rev,
+			Name: asShown(n.Name), Info: asShown(n.Info),
+			Emb: n.Embedding,
+		}
 		cached = cached || n.Embedding != nil
 	}
 
@@ -262,6 +271,20 @@ func (e *Engine) Upsert(ctx context.Context, notes []usecase.IndexedNote) error 
 	}
 
 	return e.command(ctx, upsert)
+}
+
+// asShown is s with every byte of invalid UTF-8 replaced by U+FFFD, as
+// encoding/json replaces them when the note goes to the interface, so the
+// UTF-16 offsets of the worker's hits fit the text in the editor. The
+// interface still checks the Text of a hit against the note before it
+// selects the place (spec §9.2). strings.ToValidUTF8 would replace a run of
+// bad bytes with one U+FFFD and shift the offsets after it.
+func asShown(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+
+	return string([]rune(s)) // a bad byte decodes as utf8.RuneError of width 1
 }
 
 // Remove removes notes.
