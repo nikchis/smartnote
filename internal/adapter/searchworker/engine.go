@@ -267,8 +267,8 @@ func (e *Engine) Upsert(ctx context.Context, notes []usecase.IndexedNote) error 
 	upsert := func(req uint64) any { return &upsertMsg{T: tUpsert, Req: req, Notes: in} }
 
 	_, err := e.command(ctx, upsert)
-	if !cached || !errors.Is(err, errFrameTooLarge) {
-		return err
+	if !cached || !errors.Is(err, errFrameTooLarge) || workerLost(err) {
+		return err // a frame too large from the worker is its failure
 	}
 
 	e.cfg.Log.Warn("search worker: upsert over the frame limit, sent without cached embeddings", slog.Int("notes", len(in)))
@@ -342,10 +342,11 @@ func (e *Engine) command(ctx context.Context, msg func(req uint64) any) (*genera
 }
 
 // Search searches the index for at most limit hits. Without a ready worker,
-// before the worker's first reset, or when the worker does not answer within
-// the search timeout, it fails with usecase.ErrSearchUnavailable: the search
-// could not run, which is not an empty result. The third timeout in a row
-// restarts the worker.
+// before the worker's first reset, when the worker does not answer within the
+// search timeout or is lost meanwhile (workerLost), it fails with
+// usecase.ErrSearchUnavailable: the search could not run, which is not an
+// empty result. The third timeout in a row restarts the worker. After Close
+// it fails with errClosed.
 func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase.SearchHit, error) {
 	g, err := e.current()
 	if g == nil {
@@ -376,7 +377,7 @@ func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase
 	}
 
 	if err != nil {
-		return nil, e.callErr(err)
+		return nil, e.searchErr(err)
 	}
 
 	g.searchTimeouts.Store(0)
@@ -386,7 +387,7 @@ func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase
 		hits, err := searchHits(r.Hits)
 		if err != nil {
 			g.kill(err)
-			return nil, fmt.Errorf("search worker: %w", err)
+			return nil, e.searchErr(err)
 		}
 
 		return hits, nil
@@ -396,8 +397,18 @@ func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase
 		err := fmt.Errorf("%w: %T answers a search", errProtocol, reply)
 		g.kill(err)
 
-		return nil, fmt.Errorf("search worker: %w", err)
+		return nil, e.searchErr(err)
 	}
+}
+
+// searchErr wraps the error of a search: a lost worker makes the search
+// unavailable; the supervisor logs why, once.
+func (e *Engine) searchErr(err error) error {
+	if workerLost(err) && e.life.Err() == nil {
+		return fmt.Errorf("search worker: %w: %w", usecase.ErrSearchUnavailable, err)
+	}
+
+	return e.callErr(err)
 }
 
 // searchTimedOut counts a search of g that timed out; the third in a row

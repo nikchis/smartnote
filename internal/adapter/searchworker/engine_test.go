@@ -797,6 +797,61 @@ func TestEngineProtocolFailuresRestart(t *testing.T) {
 	}
 }
 
+// A search on a worker that exits or breaks the protocol meanwhile could not
+// run: it is unavailable, not an internal error, so the interface searches
+// again once the next worker is ready (spec §8, §9.1). The supervisor logs
+// the failure once.
+func TestEngineSearchOnLostWorkerUnavailable(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"bad-frame", "exit-after-n"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			e := newTestEngine(t, mode, nil)
+			e.start(t)
+
+			// bad-frame answers no reset: let the worker take searches at once.
+			g, _ := e.current()
+			g.wasReset.Store(true)
+
+			if _, err := e.Search(t.Context(), "x", 10); !errors.Is(err, usecase.ErrSearchUnavailable) {
+				t.Fatalf("Search: %v, want ErrSearchUnavailable", err)
+			}
+
+			e.waitEvent(t, "Restarted", isRestarted)
+
+			if n := e.log.countLines("search worker failed", "gen=1"); n != 1 {
+				t.Fatalf("%d failure records, want 1; log:\n%s", n, strings.Join(e.log.lines(), "\n"))
+			}
+		})
+	}
+}
+
+func TestWorkerLost(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "exited", err: errExited, want: true},
+		{name: "protocol", err: fmt.Errorf("%w: bad frame", errProtocol), want: true},
+		{name: "write", err: fmt.Errorf("%w: %w", errWrite, os.ErrClosed), want: true},
+		{name: "worker error", err: &workerError{code: "internal", text: "internal"}, want: true},
+		{name: "timeout", err: errTimeout},
+		{name: "canceled", err: context.Canceled},
+		{name: "frame too large", err: fmt.Errorf("encode: %w", errFrameTooLarge)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := workerLost(tt.err); got != tt.want {
+				t.Errorf("workerLost(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEngineOldGenerationDropped(t *testing.T) {
 	t.Parallel()
 

@@ -35,7 +35,20 @@ var (
 	errExited = errors.New("worker exited")
 	// errProtocol means the worker broke the protocol.
 	errProtocol = errors.New("protocol violation")
+	// errWrite means writing to the worker's stdin failed.
+	errWrite = errors.New("write stdin")
 )
+
+// workerLost reports whether err of a request means its worker cannot serve
+// any more: it exited, broke the protocol, failed as a whole or its stdin
+// failed. The supervisor logs that and starts the next worker.
+func workerLost(err error) bool {
+	if _, ok := errors.AsType[*workerError](err); ok {
+		return true
+	}
+
+	return errors.Is(err, errExited) || errors.Is(err, errProtocol) || errors.Is(err, errWrite)
+}
 
 // workerError is an error message of the worker without a request: the worker
 // failed as a whole and exits. text is its code, with the msg as
@@ -420,7 +433,7 @@ func (g *generation) write(stdin *os.File) {
 			w.done <- err // capacity 1
 
 			if err != nil {
-				g.kill(fmt.Errorf("write stdin: %w", err))
+				g.kill(fmt.Errorf("%w: %w", errWrite, err))
 				return
 			}
 		case <-g.stopping:
@@ -449,7 +462,7 @@ func (g *generation) send(ctx context.Context, expired <-chan time.Time, frame [
 	select {
 	case err := <-w.done:
 		if err != nil {
-			return fmt.Errorf("write stdin: %w", err)
+			return fmt.Errorf("%w: %w", errWrite, err)
 		}
 
 		return nil
