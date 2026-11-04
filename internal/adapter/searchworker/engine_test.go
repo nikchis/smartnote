@@ -811,6 +811,48 @@ func TestEngineCallsHonourContext(t *testing.T) {
 	}
 }
 
+// A worker that does not answer hello within its timeout is killed and
+// started again after a pause (spec §8.1, §12.5).
+func TestEngineHelloTimeoutRestarts(t *testing.T) {
+	t.Parallel()
+
+	const timeout = 200 * time.Millisecond
+
+	after := newManualAfter()
+	e := newTestEngine(t, "hang-on-hello", func(c *Config) {
+		c.Timeouts.Hello = timeout
+		c.After = after.After
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	began := time.Now()
+
+	go func() { _ = e.Start(ctx) }()
+
+	select {
+	case call := <-after.calls:
+		if call.d != time.Second {
+			t.Fatalf("pause %v, want 1s", call.d)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("no pause after the hello timed out")
+	}
+
+	if took := time.Since(began); took < timeout {
+		t.Fatalf("gave up on hello after %v, want at least %v", took, timeout)
+	}
+
+	if _, ok := e.Ready(); ok {
+		t.Fatal("ready without an answer to hello")
+	}
+
+	if n := e.log.countLines("search worker failed", "gen=1", "no answer in time"); n != 1 {
+		t.Fatalf("%d failure records of the hello timeout, want 1; log:\n%s", n, strings.Join(e.log.lines(), "\n"))
+	}
+}
+
 func TestEngineStartHonoursContext(t *testing.T) {
 	t.Parallel()
 

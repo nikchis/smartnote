@@ -29,7 +29,9 @@ Encoding rules the Go side mirrors:
   writes nil slices as empty, `NilContainerAsEmpty`);
 - an absent optional field (`notes[].emb`, `error.req`) is omitted, not null (`omitempty`);
   a null is accepted on decoding;
-- unknown `t`, unknown fields and missing required fields are errors;
+- unknown `t` and unknown fields are errors on both sides; a missing required field is an error
+  in Rust only: Go decodes it as its zero value, which fails the checks of the enumerations
+  (`lexical`, `semantic`, `sandbox`, `code`, `sources`) but not of other fields;
 - `error.msg` is a fixed text of the worker; Go shows it only when it is one of the texts it
   knows (`knownErrorTexts` in `internal/adapter/searchworker/protocol.go`), otherwise the code
   alone.

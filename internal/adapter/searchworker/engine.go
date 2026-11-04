@@ -62,8 +62,8 @@ type Timeouts struct {
 // Config configures an Engine.
 type Config struct {
 	// Path is the absolute path of the worker; OrtLib and ModelDir go to it in
-	// hello. Threads is the number of model threads, 0 for the worker's
-	// default.
+	// hello. Threads is the number of model threads; the worker takes 0 as 1.
+	// The caller chooses it (cmd/smartnote: half the CPUs, 1 to 4).
 	Path, OrtLib, ModelDir string
 	Threads                int
 	// Log receives the failures of the worker at level Error, so the error log

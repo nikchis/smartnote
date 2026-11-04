@@ -5,6 +5,7 @@
 //   - ok: a working worker with a substring index; ready reports semantic
 //     "loading", then a status reports it "ready";
 //   - crash-on-hello: exits with code 1 after reading hello;
+//   - hang-on-hello: reads hello and never answers or exits on its own;
 //   - hang-on-upsert: stops reading and answering at the first upsert and
 //     never exits on its own, not even at the end of stdin;
 //   - flood-events: sends 10 000 status and 10 000 embedded messages before
@@ -160,6 +161,14 @@ func (f *fake) run() {
 
 	if f.mode == "crash-on-hello" {
 		fail(errors.New("crash"))
+	}
+
+	if f.mode == "hang-on-hello" {
+		fmt.Fprintln(os.Stderr, "fake: hanging")
+
+		for {
+			time.Sleep(time.Hour)
+		}
 	}
 
 	worker := fmt.Sprintf("fake proto=%d threads=%d model=%s ort=%s parent=%t env=%s",
