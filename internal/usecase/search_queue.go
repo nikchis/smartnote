@@ -5,15 +5,17 @@ import "sync"
 // commandKind names an index command.
 type commandKind string
 
-// Index commands, as the protocol names them.
+// Index commands, as the protocol names them, and cmdRebuilt, which ends a
+// rebuild in the queue and goes to no engine.
 const (
-	cmdReset  commandKind = "reset"
-	cmdUpsert commandKind = "upsert"
-	cmdRemove commandKind = "remove"
+	cmdReset   commandKind = "reset"
+	cmdUpsert  commandKind = "upsert"
+	cmdRemove  commandKind = "remove"
+	cmdRebuilt commandKind = "rebuilt"
 )
 
 // indexCommand is one command for the engine: notes for cmdUpsert, removals
-// for cmdRemove, nothing for cmdReset.
+// for cmdRemove, nothing for cmdReset and cmdRebuilt.
 type indexCommand struct {
 	kind     commandKind
 	notes    []IndexedNote

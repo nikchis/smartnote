@@ -162,6 +162,14 @@ type Search struct {
 	active bool                 // Run has started its first rebuild and not returned
 	rev    uint64               // the last change number given out; never reset
 	revs   map[uuid.UUID]uint64 // the last change number of each indexed note
+
+	// statusMu orders the calls of OnStatus. While a rebuild is queued and
+	// not yet applied, statuses are held (the latest one in held) and passed
+	// on when its cmdRebuilt is reached: the interface searches again when
+	// the search turns ready, and the index must be filled by then.
+	statusMu   sync.Mutex
+	rebuilding bool
+	held       *SearchStatus
 }
 
 // NewSearch returns a Search over d.
@@ -226,6 +234,10 @@ func (s *Search) stop() {
 
 		return false, nil
 	})
+
+	s.statusMu.Lock()
+	s.rebuilding, s.held = false, nil
+	s.statusMu.Unlock()
 }
 
 // Query searches the index, bypassing the queue of index commands (spec
@@ -346,8 +358,13 @@ func (s *Search) readableEmbeddings(ctx context.Context) map[uuid.UUID][]byte {
 }
 
 // enqueueRebuild enqueues a reset and upserts of notes in batches, each note
-// with a new change number.
+// with a new change number, and cmdRebuilt after them; statuses are held until
+// the sender reaches it.
 func (s *Search) enqueueRebuild(notes []domain.Note, embeddings map[uuid.UUID][]byte) {
+	s.statusMu.Lock()
+	s.rebuilding = true
+	s.statusMu.Unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -367,7 +384,7 @@ func (s *Search) enqueueRebuild(notes []domain.Note, embeddings map[uuid.UUID][]
 		cmds = append(cmds, indexCommand{kind: cmdUpsert, notes: indexed})
 	}
 
-	s.queue.push(cmds...)
+	s.queue.push(append(cmds, indexCommand{kind: cmdRebuilt})...)
 }
 
 func (s *Search) nextRevLocked() uint64 {
@@ -405,6 +422,9 @@ func (s *Search) apply(ctx context.Context, cmd indexCommand) error {
 		return s.d.Engine.Upsert(ctx, cmd.notes)
 	case cmdRemove:
 		return s.d.Engine.Remove(ctx, cmd.removals)
+	case cmdRebuilt:
+		s.rebuilt()
+		return nil
 	default:
 		return fmt.Errorf("unknown command %q", cmd.kind)
 	}
@@ -436,14 +456,42 @@ func (s *Search) handleEvent(ctx context.Context, ev SearchEvent) {
 			s.warn(ctx, err)
 		}
 	case ev.Status != nil:
-		if s.d.OnStatus != nil {
-			s.d.OnStatus(*ev.Status)
-		}
+		s.publish(*ev.Status)
 	case ev.Restarted:
 		// The new worker's index is empty and the old one's commands are gone.
 		if err := s.rebuild(ctx, false); err != nil {
 			s.warn(ctx, err)
 		}
+	}
+}
+
+// publish passes st to OnStatus, or holds it while a rebuild is queued.
+func (s *Search) publish(st SearchStatus) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+
+	if s.rebuilding {
+		s.held = &st
+		return
+	}
+
+	if s.d.OnStatus != nil {
+		s.d.OnStatus(st)
+	}
+}
+
+// rebuilt ends the hold of the statuses once the rebuild's commands are
+// applied, and passes on the latest status held. A newer rebuild in the queue
+// replaced this one's cmdRebuilt, so the hold ends with the last rebuild.
+func (s *Search) rebuilt() {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+
+	held := s.held
+	s.rebuilding, s.held = false, nil
+
+	if held != nil && s.d.OnStatus != nil {
+		s.d.OnStatus(*held)
 	}
 }
 

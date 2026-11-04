@@ -497,6 +497,70 @@ func TestSearchStatus(t *testing.T) {
 	}
 }
 
+func (f *searchFixture) statusCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return len(f.statuses)
+}
+
+// A status that follows a rebuild reaches OnStatus only after the rebuild's
+// commands were applied: the interface searches again when the search turns
+// ready, and must not get the answer of an index that is still empty.
+func TestSearchStatusWaitsForRebuild(t *testing.T) {
+	f := newSearchFixture(t, note(1, "a", "x"))
+	gate, entered := make(chan struct{}), make(chan struct{})
+	f.engine.gate, f.engine.entered = gate, entered
+	f.run(t)
+
+	receive(t, entered, "the first rebuild's Upsert")
+
+	loading := SearchStatus{Lexical: SearchReady, Semantic: SearchLoading}
+	ready := SearchStatus{Notes: 1, Lexical: SearchReady, Semantic: SearchReady}
+	f.send(t, SearchEvent{Status: &loading})
+	f.send(t, SearchEvent{Status: &ready}) // returns once the first status is handled
+
+	if n := f.statusCount(); n != 0 {
+		t.Fatalf("%d statuses published before the rebuild was applied", n)
+	}
+
+	close(gate)
+	waitUntil(t, &f.reported, "the held status", func() bool { return f.statusCount() > 0 })
+
+	if index, _ := f.engine.snapshot(); len(index) != 1 {
+		t.Fatalf("index of %d notes when the status was published, want 1", len(index))
+	}
+
+	// After the rebuild statuses pass at once.
+	f.send(t, SearchEvent{Status: &loading})
+	waitUntil(t, &f.reported, "the next status", func() bool { return f.statusCount() == 2 })
+
+	// A restart holds them again until its rebuild is applied.
+	gate, entered = make(chan struct{}), make(chan struct{})
+	f.engine.mu.Lock()
+	f.engine.gate, f.engine.entered = gate, entered
+	f.engine.mu.Unlock()
+
+	f.send(t, SearchEvent{Restarted: true})
+	receive(t, entered, "the restart's Upsert")
+	f.send(t, SearchEvent{Status: &ready})
+	f.send(t, SearchEvent{Status: &ready})
+
+	if n := f.statusCount(); n != 2 {
+		t.Fatalf("%d statuses, want 2: the restart's are held until its rebuild is applied", n)
+	}
+
+	close(gate)
+	waitUntil(t, &f.reported, "the status after the restart", func() bool { return f.statusCount() == 3 })
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if want := []SearchStatus{ready, loading, ready}; !slices.Equal(f.statuses, want) {
+		t.Errorf("statuses %+v, want %+v (the latest held one each time)", f.statuses, want)
+	}
+}
+
 func TestSearchQuery(t *testing.T) {
 	f := newSearchFixture(t)
 	f.engine.hits = []SearchHit{{NoteID: testID(1), Line: 2, Text: "x"}}
