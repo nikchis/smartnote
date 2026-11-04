@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	msqlite "modernc.org/sqlite"
@@ -21,7 +22,7 @@ const (
 )
 
 // formatVersion is the storage format this version reads and writes.
-const formatVersion = 1
+const formatVersion = 2
 
 // Keys of the meta table.
 const (
@@ -61,19 +62,31 @@ CREATE TABLE ssh_key (
 	ssh_key_id  INTEGER PRIMARY KEY CHECK (ssh_key_id = 1),
 	private_key BLOB NOT NULL,
 	public_key  TEXT NOT NULL
+);
+` + embeddingDDL
+
+// embeddingDDL is the table added by format 2 (search spec §4.1); Unlock runs
+// it to migrate a format 1 database.
+const embeddingDDL = `CREATE TABLE note_embedding (
+	note_uuid TEXT PRIMARY KEY REFERENCES note (note_uuid) ON DELETE CASCADE,
+	data      BLOB NOT NULL
 );`
 
-// requiredTables are checked on Unlock, so a damaged schema reads as a
-// corrupt storage rather than as a later "no such table".
-var requiredTables = []string{tableMeta, tableNote, tableNoteVersion, tableConnection, tableSSHKey}
+// requiredTablesV1 and requiredTablesV2 are checked on Unlock, so a damaged
+// schema reads as a corrupt storage rather than as a later "no such table".
+var (
+	requiredTablesV1 = []string{tableMeta, tableNote, tableNoteVersion, tableConnection, tableSSHKey}
+	requiredTablesV2 = append(slices.Clone(requiredTablesV1), tableNoteEmbedding)
+)
 
 // Table names, also the Table part of the AADs.
 const (
-	tableMeta        = "meta"
-	tableNote        = "note"
-	tableNoteVersion = "note_version"
-	tableConnection  = "connection"
-	tableSSHKey      = "ssh_key"
+	tableMeta          = "meta"
+	tableNote          = "note"
+	tableNoteVersion   = "note_version"
+	tableConnection    = "connection"
+	tableSSHKey        = "ssh_key"
+	tableNoteEmbedding = "note_embedding"
 )
 
 // AADs of the sealed fields (spec §4).
@@ -85,6 +98,10 @@ func aadSettings() sealbox.AAD {
 }
 func aadPrivateKey() sealbox.AAD {
 	return sealbox.AAD{Table: tableSSHKey, Column: "private_key", RowID: "1"}
+}
+
+func aadEmbedding(id string) sealbox.AAD {
+	return sealbox.AAD{Table: tableNoteEmbedding, Column: "data", RowID: id}
 }
 
 func aadNote(column, id string) sealbox.AAD {

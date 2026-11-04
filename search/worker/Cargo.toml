@@ -1,0 +1,76 @@
+[package]
+name = "worker"
+version = "0.1.0"
+description = "smartnote-search: the local search worker process of Smartnote"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "smartnote-search"
+path = "src/main.rs"
+
+# Test helper: the worker's allocator and hardening without the worker loop (tests/*.rs).
+[[bin]]
+name = "probe_zalloc"
+path = "src/bin/probe_zalloc.rs"
+required-features = ["test-probes"]
+
+# Test helper: the worker's sandbox and the operations it must deny (tests/sandbox.rs).
+[[bin]]
+name = "probe_sandbox"
+path = "src/bin/probe_sandbox.rs"
+required-features = ["test-probes"]
+
+# Loads ONNX Runtime in the test process: its `main` sets ORT_DISABLE_TELEMETRY before any
+# thread starts (see tests/embed.rs).
+[[test]]
+name = "embed"
+harness = false
+
+# Quality of the search on the benchmark set (spec §12.4); loads ONNX Runtime like `embed`.
+[[test]]
+name = "bench"
+harness = false
+
+[features]
+test-probes = []
+
+[dependencies]
+zalloc = { path = "../zalloc" }
+tantivy = { version = "0.27.0", default-features = false, features = ["stemmer"] }
+memchr = "2.8.0"
+serde = { version = "1.0.229", features = ["derive"] }
+ciborium = "0.2.2"
+serde_bytes = "0.11.19"
+thiserror = "2.0.21"
+unicode-normalization = "0.1.26"
+# ONNX Runtime is the official Microsoft build pinned in ort.lock.json, loaded at run time after
+# its SHA-256 check (spec §6.1, §6.9); nothing is downloaded or linked at build time.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
+kitoken = { version = "0.11.1", default-features = false, features = ["std", "serialization", "normalization"] }
+sha2 = "0.11.1"
+serde_json = "1.0.154"
+
+[build-dependencies]
+serde_json = "1.0.154"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.7"
+seccompiler = "0.5.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_ErrorReporting",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true

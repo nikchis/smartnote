@@ -185,6 +185,12 @@ func settingsFor(db, phrase, sshPassword string) domain.ConnectionSettings {
 }
 
 // machine is one device: its own local storage and the scenarios over it.
+// nopIndex is a usecase.NoteIndex without a search index.
+type nopIndex struct{}
+
+func (nopIndex) NoteSaved(domain.Note) {}
+func (nopIndex) NoteDeleted(uuid.UUID) {}
+
 type machine struct {
 	store *sqlite.Store
 	sync  *usecase.Sync
@@ -233,7 +239,8 @@ func newMachine(t *testing.T, s domain.ConnectionSettings, key *domain.KeyPair) 
 		t.Fatal(err)
 	}
 
-	notes, err := usecase.NewNotes(store, func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }, uuid.New, changes)
+	notes, err := usecase.NewNotes(store, func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }, uuid.New, changes,
+		nopIndex{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -373,8 +373,8 @@ func TestKeyNaming(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(tables) != len(requiredTables) {
-		t.Errorf("tables = %v, want %v", tables, requiredTables)
+	if len(tables) != len(requiredTablesV2) {
+		t.Errorf("tables = %v, want %v", tables, requiredTablesV2)
 	}
 
 	for table := range tables {
@@ -387,6 +387,10 @@ func TestKeyNaming(t *testing.T) {
 		want := table + "_uuid"
 		if keys[0].typ == "INTEGER" {
 			want = table + "_id"
+		}
+
+		if table == tableNoteEmbedding {
+			want = "note_uuid" // one row per note: the key is the note's own
 		}
 
 		if keys[0].name != want {
@@ -431,7 +435,7 @@ func primaryKey(t *testing.T, db *sql.DB, table string) []column {
 
 func TestUnknownFormatVersion(t *testing.T) {
 	_, dir := createTest(t)
-	rawExec(t, dir, "UPDATE meta SET value = ? WHERE key = 'format_version'", []byte("2"))
+	rawExec(t, dir, "UPDATE meta SET value = ? WHERE key = 'format_version'", []byte("3"))
 
 	s := openTest(t, dir)
 	if err := s.Unlock(context.Background(), "secret1"); !errors.Is(err, domain.ErrUnsupportedFormat) {

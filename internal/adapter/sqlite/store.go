@@ -354,18 +354,16 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 		return nil, corrupt("no %s", metaWrappedDEK)
 	}
 
-	for _, t := range requiredTables {
-		if !tables[t] {
-			return nil, corrupt("table %s is missing", t)
-		}
-	}
-
 	version, err := strconv.Atoi(string(meta[metaFormatVersion]))
 	switch {
 	case err != nil || version < 1:
 		return nil, corrupt("format version %q", meta[metaFormatVersion])
 	case version > formatVersion:
 		return nil, fmt.Errorf("%w: format version %d", domain.ErrUnsupportedFormat, version)
+	}
+
+	if err := checkTables(tables, version); err != nil {
+		return nil, err
 	}
 
 	var p sealbox.KDFParams
@@ -398,7 +396,59 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 		return nil, corrupt("data key of %d bytes", len(dek))
 	}
 
+	if version == 1 {
+		if err := migrateV1(ctx, s.db); err != nil {
+			sealbox.Wipe(dek)
+			return nil, err
+		}
+
+		// Check what the migration left, not what it was meant to leave.
+		tables, err := tableNames(ctx, s.db)
+		if err == nil {
+			err = checkTables(tables, formatVersion)
+		}
+
+		if err != nil {
+			sealbox.Wipe(dek)
+			return nil, err
+		}
+	}
+
 	return dek, nil
+}
+
+// checkTables reports a missing table of format version.
+func checkTables(tables map[string]bool, version int) error {
+	required := requiredTablesV1
+	if version >= 2 {
+		required = requiredTablesV2
+	}
+
+	for _, t := range required {
+		if !tables[t] {
+			return corrupt("table %s is missing", t)
+		}
+	}
+
+	return nil
+}
+
+// migrateV1 adds the embedding table and raises the version in one
+// transaction, so a failure leaves a format 1 database.
+func migrateV1(ctx context.Context, db *sql.DB) error {
+	err := inTx(ctx, db, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, embeddingDDL); err != nil {
+			return err
+		}
+
+		return execOne(ctx, tx, "UPDATE meta SET value = ? WHERE key = ?",
+			[]byte(strconv.Itoa(formatVersion)), metaFormatVersion)
+	})
+	if err != nil {
+		return fmt.Errorf("migrate local storage to format %d: %w", formatVersion, err)
+	}
+
+	return nil
 }
 
 // ChangePassword seals the data key with a key from newPassword, new salt and

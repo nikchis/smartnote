@@ -22,7 +22,7 @@ Unicode true
 ## !define INFO_PROJECTNAME    "my-project" # Default "smartnote"
 ## !define INFO_COMPANYNAME    "My Company" # Default "My Company"
 ## !define INFO_PRODUCTNAME    "My Product Name" # Default "Smartnote"
-## !define INFO_PRODUCTVERSION "1.0.0"     # Default "2.0.1"
+## !define INFO_PRODUCTVERSION "1.0.0"     # Default "2.1.0"
 ## !define INFO_COPYRIGHT      "(c) Now, My Company" # Default "© 2026, My Company"
 ###
 ## !define PRODUCT_EXECUTABLE  "Application.exe"      # Default "${INFO_PROJECTNAME}.exe"
@@ -93,6 +93,23 @@ Section
     
     !insertmacro wails.files
 
+    # Search (specification 8.2): the worker, ONNX Runtime and the model beside the application,
+    # and the licence notices of the third-party components. task search:files prepares them.
+    File "..\..\..\bin\smartnote-search.exe"
+    File "..\..\ort\onnxruntime.dll"
+    File "..\..\..\THIRD_PARTY_NOTICES.md"
+    SetOutPath "$INSTDIR\model"
+    File "..\..\model\model.onnx"
+    File "..\..\model\tokenizer.kit"
+    File "..\..\model\manifest.json"
+    SetOutPath "$INSTDIR\licenses"
+    File "..\..\notices\rust-crates.txt"
+    File "..\..\notices\go-modules.txt"
+    SetOutPath "$INSTDIR\licenses\onnxruntime"
+    File "..\..\ort\LICENSE"
+    File "..\..\ort\ThirdPartyNotices.txt"
+    SetOutPath $INSTDIR
+
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 
@@ -106,6 +123,13 @@ Section "uninstall"
     !insertmacro wails.setShellContext
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+
+    # The search files, named as the installer put them (RMDir /r $INSTDIR below removes the rest).
+    Delete "$INSTDIR\smartnote-search.exe"
+    Delete "$INSTDIR\onnxruntime.dll"
+    Delete "$INSTDIR\THIRD_PARTY_NOTICES.md"
+    RMDir /r "$INSTDIR\model"
+    RMDir /r "$INSTDIR\licenses"
 
     RMDir /r $INSTDIR
 

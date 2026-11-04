@@ -118,10 +118,13 @@ tasks:
     dir: build/windows/nsis
     deps:
       - task: build
+      - task: :search:files
     preconditions:
       - sh: '[ "{{.INSTALL_SCOPE}}" = "user" ] || [ "{{.INSTALL_SCOPE}}" = "machine" ]'
         msg: "INSTALL_SCOPE must be 'user' or 'machine', got '{{.INSTALL_SCOPE}}'"
     cmds:
+      # After the application is built (deps above): go list needs frontend/dist.
+      - task: :notices:build
       # Create the Microsoft WebView2 bootstrapper if it doesn't exist
       - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/nsis"
       - |
@@ -137,9 +140,12 @@ tasks:
 
   create:msix:package:
     summary: Creates an MSIX package
-    deps:
-      - task: build
+    preconditions:
+      - sh: "false"
+        msg: "No MSIX package: it would not contain the search worker, ONNX Runtime and the model. Use the NSIS installer (FORMAT=nsis, the default)."
+    # build is a command rather than a dependency, so the precondition fails first.
     cmds:
+      - task: build
       - |-
         wails3 tool msix \
           --config "{{.ROOT_DIR}}/build/config.yml" \

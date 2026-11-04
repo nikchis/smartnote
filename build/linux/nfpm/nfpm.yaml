@@ -6,7 +6,7 @@
 name: "smartnote"
 arch: ${GOARCH}
 platform: "linux"
-version: "2.0.1"
+version: "2.1.0"
 section: "default"
 priority: "extra"
 maintainer: "Nikita Chisnikov <chisnikov@gmail.com>"
@@ -24,6 +24,49 @@ contents:
   # Named after the GTK application id (linuxAppID in cmd/smartnote), so Wayland desktops match the window with it.
   - src: "./build/linux/smartnote.desktop"
     dst: "/usr/share/applications/com.nikchis.smartnote.desktop"
+  # Search (specification 8.2): the worker and ONNX Runtime beside the application's lib directory,
+  # the model in its share directory. task search:files prepares them.
+  - src: "./bin/smartnote-search"
+    dst: "/usr/local/lib/smartnote/smartnote-search"
+    file_info:
+      mode: 0755
+  - src: "./build/ort/libonnxruntime.so.1.31.0"
+    dst: "/usr/local/lib/smartnote/libonnxruntime.so.1.31.0"
+    file_info:
+      mode: 0644
+  - src: "./build/model/model.onnx"
+    dst: "/usr/local/share/smartnote/model/model.onnx"
+    file_info:
+      mode: 0644
+  - src: "./build/model/tokenizer.kit"
+    dst: "/usr/local/share/smartnote/model/tokenizer.kit"
+    file_info:
+      mode: 0644
+  - src: "./build/model/manifest.json"
+    dst: "/usr/local/share/smartnote/model/manifest.json"
+    file_info:
+      mode: 0644
+  # Licence notices of the third-party components (THIRD_PARTY_NOTICES.md).
+  - src: "./THIRD_PARTY_NOTICES.md"
+    dst: "/usr/share/doc/smartnote/THIRD_PARTY_NOTICES.md"
+    file_info:
+      mode: 0644
+  - src: "./build/ort/LICENSE"
+    dst: "/usr/share/doc/smartnote/licenses/onnxruntime/LICENSE"
+    file_info:
+      mode: 0644
+  - src: "./build/ort/ThirdPartyNotices.txt"
+    dst: "/usr/share/doc/smartnote/licenses/onnxruntime/ThirdPartyNotices.txt"
+    file_info:
+      mode: 0644
+  - src: "./build/notices/rust-crates.txt"
+    dst: "/usr/share/doc/smartnote/licenses/rust-crates.txt"
+    file_info:
+      mode: 0644
+  - src: "./build/notices/go-modules.txt"
+    dst: "/usr/share/doc/smartnote/licenses/go-modules.txt"
+    file_info:
+      mode: 0644
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
 # fonts-liberation: the interface font, Liberation Sans; fonts-dejavu-core: DejaVu Sans Mono, the font of the notes.

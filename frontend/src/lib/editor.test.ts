@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { NoteDTO, VersionDTO } from "./api";
-import type { Dialogs } from "./dialogs.svelte";
+import type { NoteDTO, SearchHitDTO, VersionDTO } from "./api";
+import type { Dialogs, Labels } from "./dialogs.svelte";
 import { Editor, type NotesApi } from "./editor.svelte";
+import { SearchBox, type SearchApi } from "./search.svelte";
 
 class FakeNotes implements NotesApi {
   notes: NoteDTO[] = [];
@@ -40,6 +41,7 @@ class FakeNotes implements NotesApi {
 
 class FakeDialogs implements Dialogs {
   shown: string[] = [];
+  labels: (Labels | undefined)[] = [];
   answer = true;
   async info(msg: string) {
     this.shown.push(`info: ${msg}`);
@@ -47,8 +49,9 @@ class FakeDialogs implements Dialogs {
   async error(msg: string) {
     this.shown.push(`error: ${msg}`);
   }
-  async ask(msg: string) {
-    this.shown.push(`ask: ${msg}`);
+  async ask(msg: string, labels?: Labels) {
+    this.labels.push(labels);
+    this.shown.push(labels ? `ask: ${msg} [${labels.yes}/${labels.no}]` : `ask: ${msg}`);
     return this.answer;
   }
   async choose(msg: string) {
@@ -57,8 +60,25 @@ class FakeDialogs implements Dialogs {
   }
 }
 
+class FakeSearch implements SearchApi {
+  calls: string[] = [];
+  results: SearchHitDTO[] = [];
+  async Search(q: string) {
+    this.calls.push(q);
+    return this.results;
+  }
+}
+
+function hit(noteId: string, line: number, start: number, text: string): SearchHitDTO {
+  return { noteId, line, start, end: start + text.length, text, snippet: text, marks: [], sources: ["words"] };
+}
+
+const DISCARD = "ask: Discard unsaved changes? [Discard/Cancel]";
+
 let api: FakeNotes;
 let d: FakeDialogs;
+let search: FakeSearch;
+let box: SearchBox;
 let ed: Editor;
 
 beforeEach(async () => {
@@ -68,7 +88,9 @@ beforeEach(async () => {
     { id: "b", name: "beta", info: "second", updated: 2 },
   ];
   d = new FakeDialogs();
-  ed = new Editor(api, d);
+  search = new FakeSearch();
+  box = new SearchBox(search);
+  ed = new Editor(api, d, box);
   await ed.load();
 });
 
@@ -121,14 +143,143 @@ describe("Editor", () => {
     expect(ed.notes.map((n) => n.id)).toEqual(["b"]);
   });
 
-  it("selecting another note drops an unsaved edit without asking", async () => {
+  it("select from list asks with draft", async () => {
     await ed.select("a");
     ed.info = "unsaved";
-    await ed.select("b");
+    d.answer = false;
 
-    expect(d.shown).toEqual([]);
+    await expect(ed.select("b")).resolves.toBe(false);
+    expect(d.shown).toEqual([DISCARD]);
+    expect(ed.selected?.id).toBe("a");
+    expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "unsaved" });
+
+    d.answer = true;
+    await expect(ed.select("b")).resolves.toBe(true);
     expect(ed.state).toMatchObject({ mode: "edit", name: "beta", info: "second" });
     expect(api.notes.find((n) => n.id === "a")?.info).toBe("first");
+  });
+
+  it("select without a draft does not ask", async () => {
+    await expect(ed.select("b")).resolves.toBe(true);
+    expect(d.shown).toEqual([]);
+    expect(ed.selected?.id).toBe("b");
+  });
+
+  it("select of the selected note keeps its draft without asking", async () => {
+    ed.info = "unsaved";
+    await expect(ed.select("a")).resolves.toBe(true);
+    expect(d.shown).toEqual([]);
+    expect(ed.info).toBe("unsaved");
+  });
+
+  it("step keeps the selection when the draft is kept", async () => {
+    ed.name = "renamed";
+    d.answer = false;
+    await ed.step(1);
+
+    expect(ed.selected?.id).toBe("a");
+    expect(ed.name).toBe("renamed");
+  });
+
+  it("openHit asks before replacing draft of another note", async () => {
+    ed.info = "unsaved";
+    d.answer = false;
+    await expect(ed.openHit(hit("b", 1, 0, "second"))).resolves.toBe("cancelled");
+    expect(d.shown).toEqual([DISCARD]);
+    expect(d.labels).toEqual([{ yes: "Discard", no: "Cancel", primary: "no" }]);
+    expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "unsaved" });
+
+    d.answer = true;
+    await expect(ed.openHit(hit("b", 1, 0, "second"))).resolves.toBe("selected");
+    expect(ed.state).toMatchObject({ mode: "edit", name: "beta", info: "second" });
+    expect(ed.place).toEqual({ field: "info", start: 0, end: 6 });
+  });
+
+  it("openHit asks before replacing the draft of a new note", async () => {
+    ed.startNew();
+    ed.info = "draft";
+    d.answer = false;
+    await expect(ed.openHit(hit("b", 1, 0, "second"))).resolves.toBe("cancelled");
+    expect(ed.state).toMatchObject({ mode: "new", info: "draft" });
+
+    d.answer = true;
+    await expect(ed.openHit(hit("b", 1, 0, "second"))).resolves.toBe("selected");
+    expect(ed.state).toMatchObject({ mode: "edit", name: "beta" });
+  });
+
+  it("openHit from an empty new note does not ask", async () => {
+    ed.startNew();
+    await expect(ed.openHit(hit("b", 0, 0, "beta"))).resolves.toBe("selected");
+    expect(d.shown).toEqual([]);
+    expect(ed.place).toEqual({ field: "name", start: 0, end: 4 });
+  });
+
+  it("openHit asks for the same note with draft", async () => {
+    ed.info = "first, edited";
+    d.answer = false;
+    await expect(ed.openHit(hit("a", 1, 0, "first"))).resolves.toBe("cancelled");
+    expect(d.shown).toEqual([DISCARD]);
+    expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "first, edited" });
+
+    d.answer = true;
+    await expect(ed.openHit(hit("a", 1, 0, "first"))).resolves.toBe("selected");
+    expect(ed.state).toMatchObject({ mode: "edit", info: "first", savedInfo: "first" });
+  });
+
+  it("openHit in the open note without a draft selects without asking", async () => {
+    await expect(ed.openHit(hit("a", 0, 1, "lph"))).resolves.toBe("selected");
+    expect(d.shown).toEqual([]);
+    expect(ed.place).toEqual({ field: "name", start: 1, end: 4 });
+  });
+
+  it("openHit retries when text changed", async () => {
+    api.notes[1] = { ...api.notes[1], info: "zero\nsecond line\nthird" };
+    await ed.load();
+    box.input("second");
+    search.results = [hit("a", 1, 0, "first"), hit("b", 3, 12, "second"), hit("b", 2, 5, "second")];
+
+    await expect(ed.openHit(hit("b", 1, 0, "second"))).resolves.toBe("selected");
+    expect(search.calls).toEqual(["second"]);
+    expect(ed.state).toMatchObject({ mode: "edit", name: "beta" });
+    expect(ed.place).toEqual({ field: "info", start: 5, end: 11 });
+  });
+
+  it("openHit leaves the note unselected when the retry finds no match", async () => {
+    box.input("second");
+    search.results = [hit("b", 1, 2, "second")];
+
+    await expect(ed.openHit(hit("b", 1, 1, "second"))).resolves.toBe("unselected");
+    expect(search.calls).toEqual(["second"]);
+    expect(ed.state).toMatchObject({ mode: "edit", name: "beta" });
+    expect(ed.place).toBeUndefined();
+  });
+
+  it("openHit gone", async () => {
+    ed.info = "unsaved";
+    box.input("word");
+    await expect(ed.openHit(hit("x", 1, 0, "word"))).resolves.toBe("gone");
+    expect(d.shown).toEqual([]);
+    expect(search.calls).toEqual(["word"]);
+    expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "unsaved" });
+  });
+
+  it("openHit replaced by a newer jump while it searches again changes nothing", async () => {
+    let answer!: (hits: SearchHitDTO[]) => void;
+    search.Search = (q: string) => {
+      search.calls.push(q);
+      return new Promise((r) => (answer = r));
+    };
+    box.input("first");
+    const old = ed.openHit(hit("a", 1, 1, "first")); // outdated: "first" is at 0
+    await Promise.resolve();
+    search.Search = async () => [];
+
+    await expect(ed.openHit(hit("b", 1, 0, "second"))).resolves.toBe("selected");
+    answer([hit("a", 1, 0, "first")]);
+
+    await expect(old).resolves.toBe("cancelled");
+    expect(ed.state).toMatchObject({ mode: "edit", name: "beta" });
+    expect(ed.place).toEqual({ field: "info", start: 0, end: 6 });
   });
 
   it("useVersion puts the text into the editor without saving", async () => {

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/google/uuid"
@@ -524,4 +526,308 @@ func (f *fakeKeyTool) Generate() (domain.KeyPair, error) { return f.key, f.err }
 func (f *fakeKeyTool) Import(data []byte, passphrase string) (domain.KeyPair, error) {
 	f.imported, f.passphrase = data, passphrase
 	return f.key, f.err
+}
+
+// nopIndex is a NoteIndex that ignores every call.
+type nopIndex struct{}
+
+func (nopIndex) NoteSaved(domain.Note) {}
+func (nopIndex) NoteDeleted(uuid.UUID) {}
+
+// recordingIndex records the NoteIndex calls and counts those made while the
+// edit lock of changes was free.
+type recordingIndex struct {
+	changes *ChangeTracker
+
+	mu       sync.Mutex
+	saved    []domain.Note
+	deleted  []uuid.UUID
+	unlocked int
+}
+
+// checkLock counts a call made outside the edit lock.
+func (r *recordingIndex) checkLock() {
+	if r.changes.edit.TryLock() {
+		r.changes.edit.Unlock()
+		r.unlocked++
+	}
+}
+
+func (r *recordingIndex) NoteSaved(n domain.Note) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.checkLock()
+	r.saved = append(r.saved, n)
+}
+
+func (r *recordingIndex) NoteDeleted(id uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.checkLock()
+	r.deleted = append(r.deleted, id)
+}
+
+// broadcast wakes every waiter on each notify. The zero value is ready.
+type broadcast struct {
+	mu sync.Mutex
+	ch chan struct{}
+}
+
+// wait returns a channel that is closed by the next notify.
+func (b *broadcast) wait() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.ch == nil {
+		b.ch = make(chan struct{})
+	}
+
+	return b.ch
+}
+
+func (b *broadcast) notify() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.ch != nil {
+		close(b.ch)
+		b.ch = nil
+	}
+}
+
+// hangGuard bounds every wait of a test that would otherwise hang; it never
+// paces a passing test.
+const hangGuard = time.Second
+
+// waitUntil returns once cond holds, rechecking it after every notify of b.
+func waitUntil(t *testing.T, b *broadcast, what string, cond func() bool) {
+	t.Helper()
+
+	deadline := time.After(hangGuard)
+
+	for {
+		woken := b.wait() // before cond, so no notify between them is lost
+
+		if cond() {
+			return
+		}
+
+		select {
+		case <-woken:
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+// engineCall is one index command a fakeEngine received.
+type engineCall struct {
+	Kind     string // reset, upsert or remove
+	Notes    []IndexedNote
+	Removals []IndexedRemoval
+}
+
+// fakeEngine applies the index commands to a map in the order they come, with
+// no Rev check of its own, so the order is all that keeps it right. hang makes
+// every command wait for its context; gate, when set, holds the next Upsert
+// until it is closed, after closing entered.
+type fakeEngine struct {
+	mu       sync.Mutex
+	index    map[uuid.UUID]IndexedNote
+	calls    []engineCall
+	starts   int
+	hang     bool
+	gate     chan struct{}
+	entered  chan struct{}
+	hits     []SearchHit
+	queries  []string
+	startErr error
+
+	events  chan SearchEvent
+	changed broadcast // notified after every command
+}
+
+func newFakeEngine() *fakeEngine {
+	return &fakeEngine{index: map[uuid.UUID]IndexedNote{}, events: make(chan SearchEvent)}
+}
+
+func (f *fakeEngine) Start(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.starts++
+
+	return f.startErr
+}
+
+// hold waits as hang and gate tell the command kind to.
+func (f *fakeEngine) hold(ctx context.Context, kind string) error {
+	f.mu.Lock()
+	hang := f.hang
+
+	var gate, entered chan struct{}
+	if kind == "upsert" {
+		gate, entered = f.gate, f.entered
+		f.gate, f.entered = nil, nil
+	}
+	f.mu.Unlock()
+
+	if gate == nil && !hang {
+		return nil
+	}
+
+	if entered != nil {
+		close(entered)
+	}
+
+	select {
+	case <-gate: // a nil gate with hang set waits for ctx only
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (f *fakeEngine) record(c engineCall, apply func()) {
+	f.mu.Lock()
+	f.calls = append(f.calls, c)
+
+	apply()
+	f.mu.Unlock()
+
+	f.changed.notify()
+}
+
+func (f *fakeEngine) Reset(ctx context.Context) error {
+	if err := f.hold(ctx, "reset"); err != nil {
+		return err
+	}
+
+	f.record(engineCall{Kind: "reset"}, func() { clear(f.index) })
+
+	return nil
+}
+
+func (f *fakeEngine) Upsert(ctx context.Context, notes []IndexedNote) error {
+	if err := f.hold(ctx, "upsert"); err != nil {
+		return err
+	}
+
+	f.record(engineCall{Kind: "upsert", Notes: slices.Clone(notes)}, func() {
+		for _, n := range notes {
+			f.index[n.ID] = n
+		}
+	})
+
+	return nil
+}
+
+func (f *fakeEngine) Remove(ctx context.Context, ids []IndexedRemoval) error {
+	if err := f.hold(ctx, "remove"); err != nil {
+		return err
+	}
+
+	f.record(engineCall{Kind: "remove", Removals: slices.Clone(ids)}, func() {
+		for _, r := range ids {
+			delete(f.index, r.ID)
+		}
+	})
+
+	return nil
+}
+
+func (f *fakeEngine) Search(_ context.Context, query string, _ int) ([]SearchHit, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.queries = append(f.queries, query)
+
+	return slices.Clone(f.hits), nil
+}
+
+func (f *fakeEngine) Events() <-chan SearchEvent { return f.events }
+
+func (f *fakeEngine) Close() error { return nil }
+
+// snapshot returns a copy of the index and of the calls so far.
+func (f *fakeEngine) snapshot() (map[uuid.UUID]IndexedNote, []engineCall) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return maps.Clone(f.index), slices.Clone(f.calls)
+}
+
+// embeddingPut is one PutEmbedding call.
+type embeddingPut struct {
+	ID   uuid.UUID
+	Data []byte
+}
+
+// fakeEmbeddingStore keeps embedding records in a map and records every
+// PutEmbedding call.
+type fakeEmbeddingStore struct {
+	mu         sync.Mutex
+	records    map[uuid.UUID][]byte
+	unreadable []uuid.UUID
+	listErr    error
+	lists      int
+	puts       []embeddingPut
+	deleted    [][]uuid.UUID
+
+	changed broadcast // notified after every call
+}
+
+func (f *fakeEmbeddingStore) ListEmbeddings(context.Context) (map[uuid.UUID][]byte, []uuid.UUID, error) {
+	defer f.changed.notify()
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.lists++
+	if f.listErr != nil {
+		return nil, nil, f.listErr
+	}
+
+	return maps.Clone(f.records), slices.Clone(f.unreadable), nil
+}
+
+func (f *fakeEmbeddingStore) PutEmbedding(_ context.Context, id uuid.UUID, data []byte) error {
+	defer f.changed.notify()
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.records == nil {
+		f.records = map[uuid.UUID][]byte{}
+	}
+
+	f.records[id] = data
+	f.puts = append(f.puts, embeddingPut{id, data})
+
+	return nil
+}
+
+func (f *fakeEmbeddingStore) DeleteEmbeddings(_ context.Context, ids []uuid.UUID) error {
+	defer f.changed.notify()
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for _, id := range ids {
+		delete(f.records, id)
+	}
+
+	f.unreadable = slices.DeleteFunc(f.unreadable, func(id uuid.UUID) bool { return slices.Contains(ids, id) })
+	f.deleted = append(f.deleted, slices.Clone(ids))
+
+	return nil
+}
+
+func (f *fakeEmbeddingStore) putCalls() []embeddingPut {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.puts)
 }

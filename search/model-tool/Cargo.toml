@@ -1,0 +1,19 @@
+[package]
+name = "model-tool"
+version = "0.1.0"
+description = "Converts the pruned search tokenizer to the kitoken format and records its SHA-256"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+kitoken = { version = "0.11.1", default-features = false, features = ["std", "serialization", "normalization", "convert-tokenizers"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+
+[dev-dependencies]
+tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
+
+[lints]
+workspace = true

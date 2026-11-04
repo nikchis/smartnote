@@ -3,8 +3,11 @@ package usecase
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/nikchis/smartnote/internal/domain"
 )
@@ -15,7 +18,7 @@ func newTestNotes(t *testing.T, store NoteStore, now Clock) (*Notes, *ChangeTrac
 
 	changes := &ChangeTracker{}
 
-	n, err := NewNotes(store, now, seqIDs(), changes)
+	n, err := NewNotes(store, now, seqIDs(), changes, nopIndex{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,16 +27,17 @@ func newTestNotes(t *testing.T, store NoteStore, now Clock) (*Notes, *ChangeTrac
 }
 
 func TestNewNotesNil(t *testing.T) {
-	store, clock, ids, changes := newFakeNoteStore(), fixedClock(t0), seqIDs(), &ChangeTracker{}
+	store, clock, ids, changes, index := newFakeNoteStore(), fixedClock(t0), seqIDs(), &ChangeTracker{}, nopIndex{}
 
 	tests := []struct {
 		name string
 		call func() (*Notes, error)
 	}{
-		{name: "store", call: func() (*Notes, error) { return NewNotes(nil, clock, ids, changes) }},
-		{name: "clock", call: func() (*Notes, error) { return NewNotes(store, nil, ids, changes) }},
-		{name: "ids", call: func() (*Notes, error) { return NewNotes(store, clock, nil, changes) }},
-		{name: "changes", call: func() (*Notes, error) { return NewNotes(store, clock, ids, nil) }},
+		{name: "store", call: func() (*Notes, error) { return NewNotes(nil, clock, ids, changes, index) }},
+		{name: "clock", call: func() (*Notes, error) { return NewNotes(store, nil, ids, changes, index) }},
+		{name: "ids", call: func() (*Notes, error) { return NewNotes(store, clock, nil, changes, index) }},
+		{name: "changes", call: func() (*Notes, error) { return NewNotes(store, clock, ids, nil, index) }},
+		{name: "index", call: func() (*Notes, error) { return NewNotes(store, clock, ids, changes, nil) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -300,5 +304,81 @@ func TestNotesVersionsNewestFirst(t *testing.T) {
 
 	if len(got) != 2 || got[0].Info != "b" || got[1].Info != "a" {
 		t.Errorf("Versions = %+v, want b then a", got)
+	}
+}
+
+// newIndexedNotes returns Notes over store whose writes go to a recordingIndex.
+func newIndexedNotes(t *testing.T, store NoteStore) (*Notes, *recordingIndex) {
+	t.Helper()
+
+	index := &recordingIndex{changes: &ChangeTracker{}}
+
+	n, err := NewNotes(store, fixedClock(t1), seqIDs(), index.changes, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return n, index
+}
+
+func TestNotesHooks(t *testing.T) {
+	store := newFakeNoteStore()
+	notes, index := newIndexedNotes(t, store)
+	ctx := context.Background()
+
+	created, err := notes.Create(ctx, "n", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	saved, err := notes.Save(ctx, created.ID, "n2", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := notes.Delete(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := []domain.Note{created, saved}; !slices.Equal(index.saved, want) {
+		t.Errorf("NoteSaved calls = %+v, want %+v", index.saved, want)
+	}
+
+	if want := []uuid.UUID{created.ID}; !slices.Equal(index.deleted, want) {
+		t.Errorf("NoteDeleted calls = %v, want %v", index.deleted, want)
+	}
+
+	if index.unlocked != 0 {
+		t.Errorf("%d index calls ran outside the edit lock", index.unlocked)
+	}
+}
+
+func TestNotesHookOnlyOnChange(t *testing.T) {
+	id := testID(1)
+	store := newFakeNoteStore(domain.Note{ID: id, Name: "n", Info: "a", Updated: t0})
+	notes, index := newIndexedNotes(t, store)
+
+	if _, err := notes.Save(context.Background(), id, "n", "a"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(index.saved) != 0 {
+		t.Errorf("an unchanged Save called NoteSaved: %+v", index.saved)
+	}
+}
+
+func TestNotesHookNotOnStoreError(t *testing.T) {
+	id := testID(1)
+	store := newFakeNoteStore(domain.Note{ID: id, Name: "n", Info: "a", Updated: t0})
+	store.fail = errStore
+	notes, index := newIndexedNotes(t, store)
+	ctx := context.Background()
+
+	_, _ = notes.Create(ctx, "n", "a")   // the store error is checked in TestNotesStoreErrorMarksNoChange
+	_, _ = notes.Save(ctx, id, "n", "b") // as above
+	_ = notes.Delete(ctx, id)            // as above
+
+	if len(index.saved) != 0 || len(index.deleted) != 0 {
+		t.Errorf("failed writes reached the index: saved %+v, deleted %v", index.saved, index.deleted)
 	}
 }

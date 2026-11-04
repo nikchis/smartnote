@@ -17,7 +17,7 @@
         PackageDisplayName="Smartnote"
         PublisherName="CN=Nikita Chisnikov"
         PublisherDisplayName="Nikita Chisnikov"
-        Version="2.0.1.0"
+        Version="2.1.0.0"
         PackageDescription="A notepad for private records">
         <Capabilities>
             <Capability Name="runFullTrust" />

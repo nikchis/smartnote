@@ -92,7 +92,8 @@ type State struct {
 // SyncDeps are the dependencies of Sync. OnState may be nil; calls to it are
 // serialized, and it must not call Sync methods other than State. Warn
 // receives errors that do not fail an operation, such as closing a session
-// after it succeeded, so that they reach the log.
+// after it succeeded, so that they reach the log. Index may be nil; otherwise
+// it learns about every applied Restore.
 type SyncDeps struct {
 	Local    SyncStateStore
 	Settings SettingsStore
@@ -103,6 +104,7 @@ type SyncDeps struct {
 	Offer    *HostKeyOffer
 	OnState  func(State)
 	Warn     func(error)
+	Index    RestoreIndex
 }
 
 // localWriteTimeout bounds the local revision write after a server commit,
@@ -556,7 +558,17 @@ func (s *Sync) CommitRestore(ctx context.Context) error {
 	}
 
 	err = s.d.Changes.ApplyIfUnchanged(plan.Generation, func() error {
-		return s.d.Local.ApplyRestore(ctx, *plan, plan.Revision, plan.ServerID)
+		if err := s.d.Local.ApplyRestore(ctx, *plan, plan.Revision, plan.ServerID); err != nil {
+			return err
+		}
+
+		// Still under the edit lock, so the index rebuilds from exactly the
+		// restored notes, ahead of any later edit.
+		if s.d.Index != nil {
+			s.d.Index.NotesReplaced(ctx)
+		}
+
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("commit restore: %w", err)

@@ -74,12 +74,58 @@ type StateDTO struct {
 	Busy             bool `json:"busy"`
 }
 
+// SearchHitDTO is one place a search found: Line 0 is the name of the note,
+// 1…n the lines of its text; Start and End are UTF-16 offsets within the name
+// or the whole text, and Text is the text between them. Marks are UTF-16
+// ranges within Snippet; Sources name the searches that found it. Marks and
+// Sources are never null.
+type SearchHitDTO struct {
+	NoteID  string   `json:"noteId"`
+	Line    int      `json:"line"`
+	Start   int      `json:"start"`
+	End     int      `json:"end"`
+	Text    string   `json:"text"`
+	Snippet string   `json:"snippet"`
+	Marks   [][2]int `json:"marks"`
+	Sources []string `json:"sources"`
+}
+
+// SearchStatusDTO is the state of the search index: Notes indexed, Queued
+// waiting, and the state of each search, one of loading, ready, unavailable.
+type SearchStatusDTO struct {
+	Notes    int    `json:"notes"`
+	Queued   int    `json:"queued"`
+	Lexical  string `json:"lexical"`
+	Semantic string `json:"semantic"`
+}
+
 func toNoteDTO(n domain.Note) NoteDTO {
 	return NoteDTO{ID: n.ID.String(), Name: n.Name, Info: n.Info, Updated: n.Updated.UnixMilli()}
 }
 
 func toVersionDTO(v domain.NoteVersion) VersionDTO {
 	return VersionDTO{ID: v.ID.String(), Created: v.Created.UnixMilli(), Info: v.Info}
+}
+
+func toSearchHitDTO(h usecase.SearchHit) SearchHitDTO {
+	marks := h.Marks
+	if marks == nil {
+		marks = [][2]int{}
+	}
+
+	sources := h.Sources
+	if sources == nil {
+		sources = []string{}
+	}
+
+	return SearchHitDTO{
+		NoteID: h.NoteID.String(), Line: h.Line, Start: h.Start, End: h.End,
+		Text: h.Text, Snippet: h.Snippet, Marks: marks, Sources: sources,
+	}
+}
+
+func toSearchStatusDTO(s usecase.SearchStatus) SearchStatusDTO {
+	return SearchStatusDTO{Notes: s.Notes, Queued: s.Queued, Lexical: string(s.Lexical), Semantic: string(s.Semantic)}
 }
 
 func toCountsDTO(c usecase.Counts) CountsDTO {

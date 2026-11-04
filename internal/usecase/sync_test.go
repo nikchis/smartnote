@@ -929,7 +929,7 @@ func restoreWithNotes(t *testing.T) (*syncFixture, *fakeNoteStore, *Notes) {
 	store := newFakeNoteStore(note(1, "a", "local"))
 	f.local.notes = store
 
-	notes, err := NewNotes(store, fixedClock(t1), seqIDs(), f.changes)
+	notes, err := NewNotes(store, fixedClock(t1), seqIDs(), f.changes, nopIndex{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1202,5 +1202,59 @@ func TestSyncRemembersOffer(t *testing.T) {
 
 	if got := settings.s.TrustedKey(); got != "ssh-ed25519 AAAA" {
 		t.Errorf("trusted key = %q", got)
+	}
+}
+
+// restoreIndex records NotesReplaced calls and whether they ran under the
+// edit lock of changes.
+type restoreIndex struct {
+	changes  *ChangeTracker
+	calls    int
+	unlocked int
+}
+
+func (r *restoreIndex) NotesReplaced(context.Context) {
+	r.calls++
+
+	if r.changes.edit.TryLock() {
+		r.changes.edit.Unlock()
+		r.unlocked++
+	}
+}
+
+func TestCommitRestoreTellsIndex(t *testing.T) {
+	f, _, notes := restoreWithNotes(t)
+	index := &restoreIndex{changes: f.changes}
+	f.sync.d.Index = index
+
+	ctx := context.Background()
+	if _, err := f.sync.PrepareRestore(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.sync.CommitRestore(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if index.calls != 1 || index.unlocked != 0 {
+		t.Errorf("NotesReplaced calls = %d, %d of them outside the edit lock; want 1 under the lock",
+			index.calls, index.unlocked)
+	}
+
+	// A Restore that is not applied does not reach the index.
+	if _, err := f.sync.PrepareRestore(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := notes.Save(ctx, testID(1), "a", "edited"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.sync.CommitRestore(ctx); !errors.Is(err, domain.ErrLocalChanged) {
+		t.Fatalf("CommitRestore = %v, want ErrLocalChanged", err)
+	}
+
+	if index.calls != 1 {
+		t.Errorf("NotesReplaced calls = %d after a refused Restore, want 1", index.calls)
 	}
 }

@@ -1,0 +1,2 @@
+# Protocol samples are compared byte for byte: no line-ending conversion or text diffs.
+*.cbor binary
