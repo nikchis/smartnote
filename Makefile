@@ -19,6 +19,13 @@ TASK ?= task
 # Cargo of the Rust search worker in search/; the toolchain comes from search/rust-toolchain.toml
 CARGO ?= cargo
 
+# SEARCH_MODEL=1 runs the search tests marked #[ignore] too: they need the model and ONNX Runtime
+# fetched into build/model and build/ort (task model:fetch, task ort:fetch)
+ifdef SEARCH_MODEL
+SEARCH_MODEL_ENV := SMARTNOTE_MODEL_DIR=$(CURDIR)/build/model SMARTNOTE_ORT_LIB=$(firstword $(wildcard $(CURDIR)/build/ort/libonnxruntime.*))
+SEARCH_MODEL_ARGS := -- --include-ignored
+endif
+
 help: ## Display this help screen
 	@echo "Makefile available targets:"
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  * \033[36m%-17s\033[0m %s\n", $$1, $$2}'
@@ -65,9 +72,9 @@ endif
 
 # The dump test runs again with the release profile (opt-level 3, lto thin, panic abort) of the
 # shipped worker: dropping the zeroing as a dead store shows only in optimised code.
-search-test: ## Run the tests of the Rust search worker, with the probe binaries (needs gdb)
+search-test: ## Run the tests of the Rust search worker, with the probe binaries (needs gdb, strace; SEARCH_MODEL=1 adds the model tests)
 	@echo "+ $@"
-	cd search && $(CARGO) test --workspace --features test-probes
+	cd search && $(SEARCH_MODEL_ENV) $(CARGO) test --workspace --features test-probes $(SEARCH_MODEL_ARGS)
 	cd search && $(CARGO) test --release -p worker --features test-probes --test zalloc_dump
 
 search-lint: ## Check format, clippy and cargo-deny policy of the Rust search worker

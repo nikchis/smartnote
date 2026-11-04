@@ -36,6 +36,10 @@ pub enum Request {
     Remove { req: u64, items: Vec<RemovalIn> },
     /// Searches; answered by [`Reply::Result`].
     Search { req: u64, query: String, limit: u16 },
+    /// Test probe: blocks the index thread for `ms` milliseconds, without an answer. Only in
+    /// builds with feature `test-probes`: it lets the tests queue requests deterministically.
+    #[cfg(feature = "test-probes")]
+    DebugPause { ms: u64 },
 }
 
 /// A note to index.

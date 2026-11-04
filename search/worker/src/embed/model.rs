@@ -1,6 +1,6 @@
 //! The e5-small model: `kitoken` tokenizer and an ONNX Runtime session (spec §5.1, §6.9).
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use kitoken::Kitoken;
 use ort::environment::Environment;
@@ -33,6 +33,9 @@ static ENVIRONMENT: Mutex<Option<Environment>> = Mutex::new(None);
 /// telemetry off, log level errors only. Call it only when [`super::has_avx2`] is true.
 /// Later calls return `Ok(())` without loading anything.
 ///
+/// ONNX Runtime logs through [`log_to_stderr`]: errors only, whatever `ORT_LOG` says, and
+/// without their text (spec §6.2: stderr gets codes only).
+///
 /// # Errors
 ///
 /// [`ModelError::Load`] when the library cannot be loaded, [`ModelError::Ort`] when the
@@ -46,11 +49,30 @@ pub fn load_ort(lib: &OrtLibrary) -> Result<(), ModelError> {
         .map_err(ModelError::Load)?
         .with_name("smartnote-search")
         .with_telemetry(false)
+        .with_logger(Arc::new(log_to_stderr))
         .build()?;
-    // The level the environment starts with comes from `ORT_LOG`; errors only, whatever it is.
+    // A custom logger starts at the verbose level: errors only from here on.
     env.set_log_level(LogLevel::Error);
     *slot = Some(env);
     Ok(())
+}
+
+/// Logger of ONNX Runtime: an error or a fatal message becomes `onnxruntime <level> at
+/// <source location>`; lower levels are dropped. The message text is dropped too: it may
+/// quote values of the run.
+fn log_to_stderr(level: LogLevel, _category: &str, _id: &str, location: &str, _message: &str) {
+    if let Some(line) = log_line(level, location) {
+        eprintln!("{line}");
+    }
+}
+
+fn log_line(level: LogLevel, location: &str) -> Option<String> {
+    let name = match level {
+        LogLevel::Verbose | LogLevel::Info | LogLevel::Warning => return None,
+        LogLevel::Error => "error",
+        LogLevel::Fatal => "fatal",
+    };
+    Some(format!("onnxruntime {name} at {location}"))
 }
 
 /// The embedding model.
@@ -220,6 +242,21 @@ mod tests {
         let err = Model::new(files, 1).err();
 
         assert!(matches!(err, Some(ModelError::NotLoaded)), "{err:?}");
+    }
+
+    #[test]
+    fn ort_log_keeps_errors_without_text() {
+        for level in [LogLevel::Verbose, LogLevel::Info, LogLevel::Warning] {
+            assert_eq!(log_line(level, "session.cc:12"), None, "{level:?}");
+        }
+        assert_eq!(
+            log_line(LogLevel::Error, "session.cc:12").as_deref(),
+            Some("onnxruntime error at session.cc:12")
+        );
+        assert_eq!(
+            log_line(LogLevel::Fatal, "env.cc:3").as_deref(),
+            Some("onnxruntime fatal at env.cc:3")
+        );
     }
 
     #[test]

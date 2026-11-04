@@ -86,7 +86,7 @@ mod linux {
                 ),
             ])
         });
-        let level = sandbox.then(sandbox::apply);
+        let level = sandbox.then(|| sandbox::apply().level);
         let thread_results = start
             .send(())
             .ok()
@@ -115,7 +115,8 @@ mod linux {
             ("setxattr", outcome(set_xattr(&existing))),
             ("read_file", outcome(fs::read(&existing))),
         ];
-        let socket_reported = sandbox::extra_open_fds().contains(&tcp.as_raw_fd());
+        let socket_reported =
+            sandbox::extra_open_fds().is_ok_and(|fds| fds.contains(&tcp.as_raw_fd()));
 
         let mut out = io::stdout().lock();
         let mut report = || -> io::Result<()> {

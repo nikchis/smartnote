@@ -5,7 +5,8 @@
 //!   the build target from `ort.lock.json`. A target without a pinned library gets `None`, so the
 //!   worker builds and runs without semantic search;
 //! - marks the build `gdb_missing` when the dump test of feature `test-probes` cannot run
-//!   (`tests/zalloc_dump.rs` is then ignored instead of failing).
+//!   (`tests/zalloc_dump.rs` is then ignored instead of failing), and `strace_missing` when the
+//!   system call test cannot (`tests/strace.rs`).
 
 use std::env;
 use std::fmt::Write as _;
@@ -24,7 +25,13 @@ const MODEL_FILES: &[(&str, &str)] = &[
 
 fn main() {
     write_pins();
-    mark_gdb();
+    println!("cargo::rerun-if-env-changed=PATH");
+    if env::var_os("CARGO_FEATURE_TEST_PROBES").is_some() {
+        mark_missing("gdb", "gdb_missing");
+    } else {
+        println!("cargo::rustc-check-cfg=cfg(gdb_missing)");
+    }
+    mark_missing("strace", "strace_missing");
 }
 
 fn write_pins() {
@@ -98,18 +105,15 @@ fn bytes(hex: &str) -> String {
     format!("[{}]", items.join(", "))
 }
 
-fn mark_gdb() {
-    println!("cargo::rustc-check-cfg=cfg(gdb_missing)");
-    println!("cargo::rerun-if-env-changed=PATH");
-    if env::var_os("CARGO_FEATURE_TEST_PROBES").is_none() {
-        return;
-    }
-    let gdb = Command::new("gdb")
+/// Declares `cfg(<name>)` and sets it when `tool --version` does not run.
+fn mark_missing(tool: &str, name: &str) {
+    println!("cargo::rustc-check-cfg=cfg({name})");
+    let status = Command::new(tool)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
-    if !gdb.is_ok_and(|s| s.success()) {
-        println!("cargo::rustc-cfg=gdb_missing");
+    if !status.is_ok_and(|s| s.success()) {
+        println!("cargo::rustc-cfg={name}");
     }
 }

@@ -10,27 +10,6 @@ pub mod protocol;
 pub mod rank;
 pub mod sandbox;
 pub mod text;
+pub mod worker;
 
-use std::io::{self, Read};
-
-/// Serves the parent until `input` (stdin) reaches EOF.
-///
-/// Placeholder until the worker loop (task 9): reads and discards the input.
-///
-/// # Errors
-///
-/// Returns the read error of `input`.
-pub fn run(mut input: impl Read) -> io::Result<()> {
-    io::copy(&mut input, &mut io::sink())?;
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Cursor;
-
-    #[test]
-    fn run_returns_at_eof() {
-        super::run(Cursor::new(b"frame".to_vec())).expect("EOF ends the run");
-    }
-}
+pub use worker::run;

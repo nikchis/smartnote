@@ -3,6 +3,8 @@
 //! scope (spec §14).
 #![allow(unsafe_code, reason = "prctl through libc; every block is commented")]
 
+use std::io;
+
 use serde::{Deserialize, Serialize};
 
 /// How much of the sandbox the kernel enforces; reported in `ready.sandbox` (spec §7.2).
@@ -17,6 +19,49 @@ pub enum SandboxLevel {
     None,
 }
 
+/// A part of the sandbox the kernel does not enforce. [`Gap::code`] names it for the log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gap {
+    /// `PR_SET_NO_NEW_PRIVS` failed, so nothing else could be enforced.
+    NoNewPrivs,
+    /// Landlock does not handle every file-system right (unavailable, or ABI below 5).
+    LandlockFs,
+    /// Landlock does not handle TCP bind and connect (unavailable, or ABI below 4).
+    LandlockNet,
+    /// The seccomp filter has no backend for this architecture.
+    SeccompArch,
+    /// Installing the seccomp filter failed.
+    Seccomp,
+    /// Other threads ran during [`apply`] and Landlock could not be synchronised to them.
+    Threads,
+    /// This system has no sandbox in this scope (not Linux).
+    Unsupported,
+}
+
+impl Gap {
+    /// Short stable code of the gap, for the log.
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::NoNewPrivs => "no_new_privs",
+            Self::LandlockFs => "landlock_fs",
+            Self::LandlockNet => "landlock_net",
+            Self::SeccompArch => "seccomp_arch",
+            Self::Seccomp => "seccomp",
+            Self::Threads => "threads",
+            Self::Unsupported => "unsupported_os",
+        }
+    }
+}
+
+/// Result of [`apply`]: the level and, below [`SandboxLevel::Full`], what is missing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Applied {
+    pub level: SandboxLevel,
+    /// Empty exactly when `level` is [`SandboxLevel::Full`].
+    pub gaps: Vec<Gap>,
+}
+
 /// Restricts the current process irreversibly (spec §10.2 pp. 2–4): `PR_SET_NO_NEW_PRIVS`,
 /// then Landlock (no file-system changes anywhere, no TCP bind or connect, abstract Unix
 /// sockets and signals scoped to the process), then seccomp (`socket`, `socketpair`,
@@ -28,24 +73,28 @@ pub enum SandboxLevel {
 /// calling thread and the threads it creates later are always restricted, threads that
 /// already run only where the kernel can synchronise them (seccomp always, Landlock since
 /// ABI 8); otherwise the result is at most [`SandboxLevel::Partial`]. Applies whatever the
-/// kernel supports and never fails; the result tells how much. Not Linux:
+/// kernel supports and never fails; the result tells how much and what is missing. Not Linux:
 /// [`SandboxLevel::None`].
 #[must_use]
-pub fn apply() -> SandboxLevel {
+pub fn apply() -> Applied {
     os::apply()
 }
 
-/// Open descriptors of the process other than 0, 1 and 2, read from `/proc/self/fd`.
+/// Open descriptors of the process other than 0, 1 and 2, read from `/proc/self/fd`; empty on
+/// systems other than Linux.
 ///
-/// Empty when `/proc/self/fd` cannot be read, and on systems other than Linux.
-#[must_use]
-pub fn extra_open_fds() -> Vec<i32> {
+/// # Errors
+///
+/// The error of reading `/proc/self/fd`: then nothing is known about open descriptors.
+pub fn extra_open_fds() -> io::Result<Vec<i32>> {
     os::extra_open_fds()
 }
 
 #[cfg(target_os = "linux")]
 mod os {
     use std::fs;
+    use std::io;
+    use std::path::Path;
 
     use landlock::{
         ABI, Access, AccessFs, AccessNet, BitFlags, CompatLevel, Compatible, LandlockStatus,
@@ -54,7 +103,7 @@ mod os {
     };
     use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
 
-    use super::SandboxLevel;
+    use super::{Applied, Gap, SandboxLevel};
 
     /// The Landlock ABI the ruleset is written for; older kernels get what they support.
     const LANDLOCK_ABI: ABI = ABI::V6;
@@ -81,23 +130,29 @@ mod os {
     #[cfg(target_arch = "x86_64")]
     const X32_SYSCALL_BIT: i64 = 0x4000_0000;
 
-    pub(super) fn apply() -> SandboxLevel {
+    pub(super) fn apply() -> Applied {
         // Without no_new_privs an unprivileged process can enforce neither Landlock nor seccomp.
         if !set_no_new_privs() {
-            return SandboxLevel::None;
+            return Applied {
+                level: SandboxLevel::None,
+                gaps: vec![Gap::NoNewPrivs],
+            };
         }
         let landlock = restrict_landlock();
-        let seccomp = deny_syscalls().is_ok();
+        let seccomp = seccomp_outcome(&deny_syscalls());
         let abi = landlock.map(|l| l.abi);
-        Enforced {
+        let enforced = Enforced {
             fs: coverage(fs_rights(), abi),
             net: coverage(net_rights(), abi),
             seccomp,
             // Counted after the restrictions: a single thread now means that every later
             // thread descends from the restricted one.
             every_thread: landlock.is_some_and(|l| l.all_threads) || thread_count() == Some(1),
+        };
+        Applied {
+            level: enforced.level(),
+            gaps: enforced.gaps(),
         }
-        .level()
     }
 
     /// Threads of the process, `None` when `/proc/self/task` cannot be read.
@@ -105,19 +160,21 @@ mod os {
         Some(fs::read_dir("/proc/self/task").ok()?.count())
     }
 
-    pub(super) fn extra_open_fds() -> Vec<i32> {
-        let Ok(entries) = fs::read_dir("/proc/self/fd") else {
-            return Vec::new();
-        };
-        let listed: Vec<i32> = entries
+    pub(super) fn extra_open_fds() -> io::Result<Vec<i32>> {
+        list_fds(Path::new("/proc/self/fd"))
+    }
+
+    /// Descriptors above 2 listed in `dir` (a `/proc/<pid>/fd` directory) that are still open.
+    fn list_fds(dir: &Path) -> io::Result<Vec<i32>> {
+        let listed: Vec<i32> = fs::read_dir(dir)?
             .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
             .filter(|&fd| fd > 2)
             .collect();
         // The listing held the descriptor of the directory itself, closed by now.
-        listed
+        Ok(listed
             .into_iter()
-            .filter(|fd| fs::symlink_metadata(format!("/proc/self/fd/{fd}")).is_ok())
-            .collect()
+            .filter(|fd| fs::symlink_metadata(dir.join(fd.to_string())).is_ok())
+            .collect())
     }
 
     fn set_no_new_privs() -> bool {
@@ -184,6 +241,25 @@ mod os {
         native.collect()
     }
 
+    /// What installing the seccomp filter achieved.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Seccomp {
+        Applied,
+        /// seccompiler has no backend for the architecture of the build.
+        UnsupportedArch,
+        Failed,
+    }
+
+    fn seccomp_outcome(result: &seccompiler::Result<()>) -> Seccomp {
+        match result {
+            Ok(()) => Seccomp::Applied,
+            Err(seccompiler::Error::Backend(seccompiler::BackendError::InvalidTargetArch(_))) => {
+                Seccomp::UnsupportedArch
+            }
+            Err(_) => Seccomp::Failed,
+        }
+    }
+
     /// Installs the seccomp filter on every thread of the process (TSYNC).
     fn deny_syscalls() -> seccompiler::Result<()> {
         let rules = denied_syscall_numbers()
@@ -228,7 +304,7 @@ mod os {
     struct Enforced {
         fs: Coverage,
         net: Coverage,
-        seccomp: bool,
+        seccomp: Seccomp,
         /// Landlock restricts every thread of the process: it was synchronised to all of
         /// them, or the process had a single thread.
         every_thread: bool,
@@ -238,11 +314,30 @@ mod os {
         /// `Full` when the file-system rights, the network rights and seccomp all apply
         /// (the Landlock scopes do not count) to every thread, `None` when nothing applies.
         fn level(self) -> SandboxLevel {
-            match (self.fs, self.net, self.seccomp, self.every_thread) {
+            let seccomp = self.seccomp == Seccomp::Applied;
+            match (self.fs, self.net, seccomp, self.every_thread) {
                 (Coverage::Full, Coverage::Full, true, true) => SandboxLevel::Full,
                 (Coverage::None, Coverage::None, false, _) => SandboxLevel::None,
                 _ => SandboxLevel::Partial,
             }
+        }
+
+        /// What keeps the level below `Full`, in a fixed order.
+        fn gaps(self) -> Vec<Gap> {
+            let seccomp = match self.seccomp {
+                Seccomp::Applied => None,
+                Seccomp::UnsupportedArch => Some(Gap::SeccompArch),
+                Seccomp::Failed => Some(Gap::Seccomp),
+            };
+            [
+                (self.fs != Coverage::Full).then_some(Gap::LandlockFs),
+                (self.net != Coverage::Full).then_some(Gap::LandlockNet),
+                seccomp,
+                (!self.every_thread).then_some(Gap::Threads),
+            ]
+            .into_iter()
+            .flatten()
+            .collect()
         }
     }
 
@@ -286,17 +381,26 @@ mod os {
         #[test]
         fn level_is_full_only_with_every_layer() {
             use Coverage::{Full, None, Partial};
+            let on = Seccomp::Applied;
+            let off = Seccomp::Failed;
             let cases = [
-                (Full, Full, true, true, SandboxLevel::Full),
-                (Full, Full, false, true, SandboxLevel::Partial),
-                (Partial, Full, true, true, SandboxLevel::Partial),
-                (Full, None, true, true, SandboxLevel::Partial),
-                (None, None, true, true, SandboxLevel::Partial),
-                (Partial, None, false, true, SandboxLevel::Partial),
-                (None, None, false, true, SandboxLevel::None),
+                (Full, Full, on, true, SandboxLevel::Full),
+                (Full, Full, off, true, SandboxLevel::Partial),
+                (
+                    Full,
+                    Full,
+                    Seccomp::UnsupportedArch,
+                    true,
+                    SandboxLevel::Partial,
+                ),
+                (Partial, Full, on, true, SandboxLevel::Partial),
+                (Full, None, on, true, SandboxLevel::Partial),
+                (None, None, on, true, SandboxLevel::Partial),
+                (Partial, None, off, true, SandboxLevel::Partial),
+                (None, None, off, true, SandboxLevel::None),
                 // Other threads ran and Landlock could not be synchronised to them (ABI < 8).
-                (Full, Full, true, false, SandboxLevel::Partial),
-                (None, None, false, false, SandboxLevel::None),
+                (Full, Full, on, false, SandboxLevel::Partial),
+                (None, None, off, false, SandboxLevel::None),
             ];
             for (fs, net, seccomp, every_thread, level) in cases {
                 let enforced = Enforced {
@@ -307,6 +411,75 @@ mod os {
                 };
                 assert_eq!(enforced.level(), level, "{enforced:?}");
             }
+        }
+
+        #[test]
+        fn gaps_name_every_missing_layer() {
+            use Coverage::{Full, None, Partial};
+            let cases = [
+                (Full, Full, Seccomp::Applied, true, vec![]),
+                (
+                    Partial,
+                    None,
+                    Seccomp::UnsupportedArch,
+                    false,
+                    vec![
+                        Gap::LandlockFs,
+                        Gap::LandlockNet,
+                        Gap::SeccompArch,
+                        Gap::Threads,
+                    ],
+                ),
+                (
+                    Full,
+                    Partial,
+                    Seccomp::Failed,
+                    true,
+                    vec![Gap::LandlockNet, Gap::Seccomp],
+                ),
+            ];
+            for (fs, net, seccomp, every_thread, gaps) in cases {
+                let enforced = Enforced {
+                    fs,
+                    net,
+                    seccomp,
+                    every_thread,
+                };
+                assert_eq!(enforced.gaps(), gaps, "{enforced:?}");
+            }
+        }
+
+        #[test]
+        fn seccomp_outcome_tells_unsupported_arch_apart() {
+            let arch = seccompiler::Error::Backend(seccompiler::BackendError::InvalidTargetArch(
+                "pdp11".into(),
+            ));
+            assert_eq!(seccomp_outcome(&Err(arch)), Seccomp::UnsupportedArch);
+            assert_eq!(
+                seccomp_outcome(&Err(seccompiler::Error::EmptyFilter)),
+                Seccomp::Failed
+            );
+            assert_eq!(seccomp_outcome(&Ok(())), Seccomp::Applied);
+        }
+
+        #[test]
+        fn gap_codes_are_distinct() {
+            let gaps = [
+                Gap::NoNewPrivs,
+                Gap::LandlockFs,
+                Gap::LandlockNet,
+                Gap::SeccompArch,
+                Gap::Seccomp,
+                Gap::Threads,
+                Gap::Unsupported,
+            ];
+            let codes: std::collections::HashSet<&str> = gaps.iter().map(|g| g.code()).collect();
+            assert_eq!(codes.len(), gaps.len(), "{codes:?}");
+        }
+
+        #[test]
+        fn listing_fds_of_a_missing_directory_fails() {
+            assert!(list_fds(std::path::Path::new("/nonexistent/fd")).is_err());
         }
 
         #[test]
@@ -361,7 +534,7 @@ mod os {
         #[test]
         fn extra_open_fds_lists_open_descriptors_only() {
             let file = File::open("/proc/self/stat").expect("open a file");
-            let fds = extra_open_fds();
+            let fds = extra_open_fds().expect("/proc/self/fd is readable");
             assert!(fds.contains(&file.as_raw_fd()), "{fds:?}");
             for fd in fds {
                 assert!(fd > 2, "{fd}");
@@ -377,13 +550,18 @@ mod os {
 
 #[cfg(not(target_os = "linux"))]
 mod os {
-    use super::SandboxLevel;
+    use std::io;
 
-    pub(super) fn apply() -> SandboxLevel {
-        SandboxLevel::None
+    use super::{Applied, Gap, SandboxLevel};
+
+    pub(super) fn apply() -> Applied {
+        Applied {
+            level: SandboxLevel::None,
+            gaps: vec![Gap::Unsupported],
+        }
     }
 
-    pub(super) fn extra_open_fds() -> Vec<i32> {
-        Vec::new()
+    pub(super) fn extra_open_fds() -> io::Result<Vec<i32>> {
+        Ok(Vec::new())
     }
 }

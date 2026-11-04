@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use serde::Deserialize;
 use worker::embed::{
-    ChunkParams, DIM, Model, ModelFiles, OrtLibrary, chunk_note, has_avx2, load_ort,
+    ChunkParams, DIM, Manifest, Model, ModelFiles, OrtLibrary, chunk_note, has_avx2, load_ort,
 };
 
 const MIN_COSINE: f32 = 0.9999;
@@ -73,6 +73,11 @@ fn model_embeddings_match_reference() {
     assert!(has_avx2(), "the ONNX Runtime build needs AVX2 on x86_64");
 
     let files = ModelFiles::read(&model_dir).expect("model files match model.lock.json");
+    assert_eq!(
+        files.manifest,
+        Manifest::pinned(),
+        "the manifest of the pinned files"
+    );
     let lib = OrtLibrary::verify(&ort_lib).expect("library matches ort.lock.json");
     load_ort(&lib).expect("ONNX Runtime loads");
     load_ort(&lib).expect("loading twice is a no-op");

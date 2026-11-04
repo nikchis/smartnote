@@ -96,6 +96,23 @@ jobs:
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-deny@0.20.2
+      # task model:fetch and task ort:fetch run Go tools.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - run: go install github.com/go-task/task/v3/cmd/task@$TASK_VERSION
+      # The model files and the ONNX Runtime library are cached by their lock files; the fetch
+      # tasks check the SHA-256 of every file after a restore as well and download what differs.
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: build/model
+          key: search-model-${{ hashFiles('model.lock.json') }}
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: build/ort
+          key: search-ort-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ort.lock.json') }}
+      - run: task model:fetch
+      - run: task ort:fetch
       # gdb takes the core dump of the allocator test; strace runs the syscall test.
       - run: sudo apt-get update && sudo apt-get install -y gdb strace
       # Landlock ABI (landlock_create_ruleset with LANDLOCK_CREATE_RULESET_VERSION, syscall 444)
@@ -107,8 +124,9 @@ jobs:
           python3 -c 'import ctypes; libc = ctypes.CDLL(None, use_errno=True); print("landlock abi:", libc.syscall(444, None, ctypes.c_size_t(0), ctypes.c_uint32(1)), "errno:", ctypes.get_errno())'
           sysctl kernel.yama.ptrace_scope kernel.core_pattern
       - run: make search-lint
-      # Includes the dump test with the release profile (see Makefile).
-      - run: make search-test
+      # Includes the dump test with the release profile and, with SEARCH_MODEL=1, the tests that
+      # need the model (see Makefile).
+      - run: make search-test SEARCH_MODEL=1
 
   package:
     strategy:

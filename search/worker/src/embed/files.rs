@@ -41,6 +41,19 @@ pub struct Manifest {
     pub kit_sha256: [u8; 32],
 }
 
+impl Manifest {
+    /// The manifest of the model pinned at build time: the only one [`ModelFiles::read`]
+    /// accepts. Known without reading the files, so the index version id
+    /// ([`super::index_id`]) is the same whether or not the model is available.
+    #[must_use]
+    pub fn pinned() -> Self {
+        Self {
+            onnx_sha256: MODEL_PINS.onnx,
+            kit_sha256: MODEL_PINS.kit,
+        }
+    }
+}
+
 /// The model files, read into memory and verified.
 pub struct ModelFiles {
     /// `model.onnx`.
@@ -354,6 +367,14 @@ mod tests {
                 "{name} pin differs from model.lock.json"
             );
         }
+    }
+
+    #[test]
+    fn pinned_manifest_names_the_pinned_files() {
+        let manifest = Manifest::pinned();
+
+        assert_eq!(manifest.onnx_sha256, MODEL_PINS.onnx);
+        assert_eq!(manifest.kit_sha256, MODEL_PINS.kit);
     }
 
     #[test]
