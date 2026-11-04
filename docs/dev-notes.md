@@ -261,8 +261,8 @@ at a directory.
 - `make search-asan` runs the unsafe code (the zeroing allocator `search/zalloc`, the hardening and
   the sandbox of the worker, `-p worker --lib`) under AddressSanitizer
   (`RUSTFLAGS=-Zsanitizer=address`, `--target x86_64-unknown-linux-gnu`). It needs a nightly
-  toolchain (`rustup toolchain install nightly`) and is not part of CI. Last run 2026-11-04 with
-  nightly 1.100.0 (4b6d04e70 2026-09-13): `zalloc` 3 + 4 tests, `worker` 126 tests, no sanitizer
+  toolchain (`rustup toolchain install nightly`) and is not part of CI. Last run 2026-11-05 with
+  nightly 1.101.0 (708c94ef0 2026-11-03): `zalloc` 3 + 4 tests, `worker` 126 tests, no sanitizer
   report.
 - In CI (`CI=true`) on Linux with feature `test-probes`, `search/worker/build.rs` fails when `gdb`
   or `strace` is missing instead of marking their tests ignored: the core dump test and the system
