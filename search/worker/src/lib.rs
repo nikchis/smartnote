@@ -3,6 +3,7 @@
 
 pub mod harden;
 pub mod panic;
+pub mod sandbox;
 
 use std::io::{self, Read};
 

@@ -17,15 +17,26 @@ name = "probe_zalloc"
 path = "src/bin/probe_zalloc.rs"
 required-features = ["test-probes"]
 
+# Test helper: the worker's sandbox and the operations it must deny (tests/sandbox.rs).
+[[bin]]
+name = "probe_sandbox"
+path = "src/bin/probe_sandbox.rs"
+required-features = ["test-probes"]
+
 [features]
 test-probes = ["dep:tantivy"]
 
 [dependencies]
 zalloc = { path = "../zalloc" }
 tantivy = { version = "0.27.0", default-features = false, optional = true }
+serde = { version = "1.0.229", features = ["derive"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.7"
+seccompiler = "0.5.0"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
