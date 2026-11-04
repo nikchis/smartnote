@@ -2,6 +2,7 @@
 //! and answers search queries over stdin/stdout (spec §6).
 
 pub mod harden;
+pub mod index;
 pub mod panic;
 pub mod protocol;
 pub mod sandbox;

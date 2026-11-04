@@ -568,6 +568,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "frostem"
+version = "1.20260821.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e2488a10218a17366ce6bd38b6d081b4387a9548d350029db9feddc9bb44d6d"
+
+[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1351,6 +1357,7 @@ dependencies = [
  "downcast-rs",
  "fastdivide",
  "fnv",
+ "frostem",
  "htmlescape",
  "itertools 0.14.0",
  "levenshtein_automata",
@@ -1777,6 +1784,7 @@ dependencies = [
  "ciborium",
  "landlock",
  "libc",
+ "memchr",
  "seccompiler",
  "serde",
  "serde_bytes",

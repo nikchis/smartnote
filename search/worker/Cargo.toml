@@ -24,11 +24,12 @@ path = "src/bin/probe_sandbox.rs"
 required-features = ["test-probes"]
 
 [features]
-test-probes = ["dep:tantivy"]
+test-probes = []
 
 [dependencies]
 zalloc = { path = "../zalloc" }
-tantivy = { version = "0.27.0", default-features = false, optional = true }
+tantivy = { version = "0.27.0", default-features = false, features = ["stemmer"] }
+memchr = "2.8.0"
 serde = { version = "1.0.229", features = ["derive"] }
 ciborium = "0.2.2"
 serde_bytes = "0.11.19"
