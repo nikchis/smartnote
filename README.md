@@ -120,7 +120,7 @@ Tools:
 |---|---|
 | Go | 1.27.3 (`toolchain` in `go.mod`) |
 | Node.js | LTS (developed with 24.21.0) |
-| Wails CLI | v3.0.0: `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0` |
+| Wails CLI | v3.1.0: `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0` |
 | Task | 3.54.0: `go install github.com/go-task/task/v3/cmd/task@v3.54.0` |
 | golangci-lint | 2.15.0: `make install-lint` puts it in `bin/` |
 

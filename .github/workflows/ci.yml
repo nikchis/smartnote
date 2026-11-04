@@ -12,7 +12,7 @@ permissions:
 # release): a moved tag cannot change what builds the packages.
 
 env:
-  WAILS_VERSION: v3.0.0
+  WAILS_VERSION: v3.1.0
   TASK_VERSION: v3.54.0
   NODE_VERSION: "24"
   # Wails v3 needs GTK 4 and WebKitGTK 6.0 headers to compile on Linux (cgo).
