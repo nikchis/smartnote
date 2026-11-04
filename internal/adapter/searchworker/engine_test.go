@@ -1,0 +1,690 @@
+package searchworker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/nikchis/smartnote/internal/usecase"
+)
+
+// fakePath is the fake worker built by TestMain.
+var fakePath string
+
+// hangGuard bounds every wait of a test that would otherwise hang.
+const hangGuard = 20 * time.Second
+
+func TestMain(m *testing.M) {
+	os.Exit(runTests(m))
+}
+
+func runTests(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "searchworker-fake")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer os.RemoveAll(dir)
+
+	fakePath = filepath.Join(dir, "fakeworker")
+	if runtime.GOOS == "windows" {
+		fakePath += ".exe"
+	}
+
+	build := exec.CommandContext(context.Background(), "go", "build", "-o", fakePath, "./testdata/fakeworker")
+	if out, err := build.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "build the fake worker: %v\n%s", err, out)
+		return 1
+	}
+
+	return m.Run()
+}
+
+// logRecorder keeps the records of the engine's logger.
+type logRecorder struct {
+	mu      sync.Mutex
+	records []slog.Record
+	added   chan struct{} // signalled after each record
+}
+
+func newLogRecorder() *logRecorder { return &logRecorder{added: make(chan struct{}, 1)} }
+
+func (r *logRecorder) Enabled(context.Context, slog.Level) bool { return true }
+
+func (r *logRecorder) Handle(_ context.Context, rec slog.Record) error {
+	r.mu.Lock()
+	r.records = append(r.records, rec.Clone())
+	r.mu.Unlock()
+
+	select {
+	case r.added <- struct{}{}:
+	default:
+	}
+
+	return nil
+}
+
+// waitLine waits for a record that contains all of parts.
+func (r *logRecorder) waitLine(t *testing.T, parts ...string) {
+	t.Helper()
+
+	guard := time.After(hangGuard)
+
+	for r.countLines(parts...) == 0 {
+		select {
+		case <-r.added:
+		case <-guard:
+			t.Fatalf("no log record with %q within %v", parts, hangGuard)
+		}
+	}
+}
+
+func (r *logRecorder) WithAttrs([]slog.Attr) slog.Handler { return r }
+
+func (r *logRecorder) WithGroup(string) slog.Handler { return r }
+
+// lines returns the records as text, one per record.
+func (r *logRecorder) lines() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	lines := make([]string, 0, len(r.records))
+
+	for _, rec := range r.records {
+		var b strings.Builder
+
+		b.WriteString(rec.Message)
+		rec.Attrs(func(a slog.Attr) bool {
+			fmt.Fprintf(&b, " %s=%s", a.Key, a.Value)
+			return true
+		})
+
+		lines = append(lines, b.String())
+	}
+
+	return lines
+}
+
+// countLines counts the records that contain all of parts.
+func (r *logRecorder) countLines(parts ...string) int {
+	n := 0
+
+	for _, line := range r.lines() {
+		all := true
+		for _, p := range parts {
+			all = all && strings.Contains(line, p)
+		}
+
+		if all {
+			n++
+		}
+	}
+
+	return n
+}
+
+// afterCall is one pause the engine asked for.
+type afterCall struct {
+	d    time.Duration
+	fire chan time.Time
+}
+
+// manualAfter records the pauses; the test ends each one.
+type manualAfter struct {
+	calls chan afterCall
+}
+
+func newManualAfter() *manualAfter { return &manualAfter{calls: make(chan afterCall, 64)} }
+
+func (m *manualAfter) After(d time.Duration) <-chan time.Time {
+	c := make(chan time.Time, 1)
+	m.calls <- afterCall{d: d, fire: c}
+
+	return c
+}
+
+// immediateAfter ends every pause at once.
+func immediateAfter(time.Duration) <-chan time.Time {
+	c := make(chan time.Time, 1)
+	c <- time.Now()
+
+	return c
+}
+
+type testEngine struct {
+	*Engine
+	log *logRecorder
+}
+
+// newTestEngine returns an engine over the fake worker in mode; edit may
+// change the configuration. The engine is closed at the end of the test.
+func newTestEngine(t *testing.T, mode string, edit func(*Config), env ...string) testEngine {
+	t.Helper()
+
+	rec := newLogRecorder()
+	cfg := Config{
+		Path:     fakePath,
+		OrtLib:   "/opt/ort/libonnxruntime.so",
+		ModelDir: "/opt/model",
+		Threads:  2,
+		Log:      slog.New(rec),
+		Timeouts: Timeouts{Hello: 10 * time.Second, Command: 10 * time.Second, Search: 5 * time.Second},
+		After:    immediateAfter,
+	}
+
+	if edit != nil {
+		edit(&cfg)
+	}
+
+	e, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e.extraEnv = append([]string{"FAKE_MODE=" + mode}, env...)
+
+	t.Cleanup(func() { _ = e.Close() })
+
+	return testEngine{Engine: e, log: rec}
+}
+
+func (e testEngine) start(t *testing.T) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), hangGuard)
+	defer cancel()
+
+	if err := e.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+}
+
+// waitEvent reads events until match accepts one.
+func (e testEngine) waitEvent(t *testing.T, what string, match func(usecase.SearchEvent) bool) usecase.SearchEvent {
+	t.Helper()
+
+	guard := time.After(hangGuard)
+
+	for {
+		select {
+		case ev, ok := <-e.Events():
+			if !ok {
+				t.Fatalf("events closed while waiting for %s", what)
+			}
+
+			if match(ev) {
+				return ev
+			}
+		case <-guard:
+			t.Fatalf("no %s within %v", what, hangGuard)
+		}
+	}
+}
+
+func isRestarted(ev usecase.SearchEvent) bool { return ev.Restarted }
+
+func testNote(info string) usecase.IndexedNote {
+	return usecase.IndexedNote{ID: uuid.New(), Rev: 1, Name: "note", Info: info}
+}
+
+func TestNewValidates(t *testing.T) {
+	log := slog.New(newLogRecorder())
+
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{name: "no path", cfg: Config{Log: log}},
+		{name: "relative path", cfg: Config{Path: "smartnote-search", Log: log}},
+		{name: "no log", cfg: Config{Path: fakePath}},
+		{name: "negative threads", cfg: Config{Path: fakePath, Log: log, Threads: -1}},
+		{name: "threads over u16", cfg: Config{Path: fakePath, Log: log, Threads: 1 << 16}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := New(tt.cfg); err == nil {
+				t.Fatal("New accepted the configuration")
+			}
+		})
+	}
+}
+
+func TestEngineHelloAndSearch(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "ok", nil, "ORT_LOGGING_LEVEL=0", "LD_PRELOAD=/nonexistent/inject.so")
+	e.start(t)
+
+	info, ok := e.Ready()
+	if !ok {
+		t.Fatal("no ready after Start")
+	}
+
+	wantWorker := fmt.Sprintf("fake proto=1 threads=2 model=/opt/model ort=/opt/ort/libonnxruntime.so parent=true env=%s", "ORT_DISABLE_TELEMETRY=1")
+	if !strings.HasPrefix(info.Worker, wantWorker) || strings.Contains(info.Worker, "ORT_LOGGING_LEVEL") || strings.Contains(info.Worker, "LD_PRELOAD") {
+		t.Fatalf("worker %q, want prefix %q and no other ORT_ or LD_PRELOAD", info.Worker, wantWorker)
+	}
+
+	if info.Lexical != usecase.SearchReady || info.Semantic != usecase.SearchLoading || info.Sandbox != "none" {
+		t.Fatalf("ready %+v", info)
+	}
+
+	e.waitEvent(t, "semantic ready status", func(ev usecase.SearchEvent) bool {
+		if ev.Restarted {
+			t.Fatal("Restarted after the first start")
+		}
+
+		return ev.Status != nil && ev.Status.Semantic == usecase.SearchReady
+	})
+
+	ctx := t.Context()
+	note := testNote("if (a == b)")
+
+	if err := e.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if err := e.Upsert(ctx, []usecase.IndexedNote{note}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	ev := e.waitEvent(t, "embedded", func(ev usecase.SearchEvent) bool { return ev.Embedded != nil })
+	if ev.Embedded.ID != note.ID || ev.Embedded.Rev != 1 || string(ev.Embedded.Data) != "emb:"+note.ID.String() {
+		t.Fatalf("embedded %+v", ev.Embedded)
+	}
+
+	hits, err := e.Search(ctx, "==", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	want := usecase.SearchHit{
+		NoteID: note.ID, Line: 1, Start: 6, End: 8, Text: "==", Snippet: "if (a == b)",
+		Marks: [][2]int{{6, 8}}, Sources: []string{"substring"}, Score: 0.5,
+	}
+	if len(hits) != 1 || fmt.Sprint(hits[0]) != fmt.Sprint(want) {
+		t.Fatalf("hits %+v, want [%+v]", hits, want)
+	}
+
+	if err := e.Remove(ctx, []usecase.IndexedRemoval{{ID: note.ID, Rev: 2}}); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	if hits, err = e.Search(ctx, "==", 10); err != nil || len(hits) != 0 {
+		t.Fatalf("Search after Remove: %v, %v", hits, err)
+	}
+
+	if n := e.log.countLines("source=search-worker", "fake: started mode=ok"); n != 1 {
+		t.Fatalf("%d stderr records of the start, want 1; log:\n%s", n, strings.Join(e.log.lines(), "\n"))
+	}
+}
+
+func TestEngineUpsertOverLimit(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "ok", nil)
+	e.start(t)
+
+	notes := make([]usecase.IndexedNote, maxUpsert+1)
+	for i := range notes {
+		notes[i] = testNote("x")
+	}
+
+	if err := e.Upsert(t.Context(), notes); err == nil {
+		t.Fatal("Upsert accepted 101 notes")
+	}
+
+	if err := e.Upsert(t.Context(), notes[:maxUpsert]); err != nil {
+		t.Fatalf("Upsert of 100 notes: %v", err)
+	}
+}
+
+func TestEngineFloodDoesNotBlockReplies(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "flood-events", func(c *Config) { c.Timeouts.Command = 5 * time.Second })
+	e.start(t)
+
+	// Nobody reads Events while the worker floods them.
+	note := testNote("flood")
+	if err := e.Upsert(t.Context(), []usecase.IndexedNote{note}); err != nil {
+		t.Fatalf("Upsert during a flood of events: %v", err)
+	}
+
+	// The embedded events are all kept, in order.
+	var next uint64
+
+	e.waitEvent(t, "all flooded embedded events", func(ev usecase.SearchEvent) bool {
+		if ev.Embedded == nil {
+			return false
+		}
+
+		if ev.Embedded.Rev != next {
+			t.Fatalf("embedded rev %d, want %d", ev.Embedded.Rev, next)
+		}
+
+		next++
+
+		return next == 10000
+	})
+
+	if gen := e.liveGen.Load(); gen != 1 {
+		t.Fatalf("generation %d, want 1", gen)
+	}
+}
+
+func TestEngineCommandTimeoutRestarts(t *testing.T) {
+	t.Parallel()
+
+	const timeout = 300 * time.Millisecond
+
+	e := newTestEngine(t, "hang-on-upsert", func(c *Config) { c.Timeouts.Command = timeout })
+	e.start(t)
+
+	began := time.Now()
+
+	err := e.Upsert(t.Context(), []usecase.IndexedNote{testNote("x")})
+	if !errors.Is(err, errTimeout) {
+		t.Fatalf("Upsert: %v, want errTimeout", err)
+	}
+
+	if took := time.Since(began); took < timeout || took > hangGuard {
+		t.Fatalf("Upsert returned after %v, want about %v", took, timeout)
+	}
+
+	e.waitEvent(t, "Restarted", isRestarted)
+
+	if gen := e.liveGen.Load(); gen != 2 {
+		t.Fatalf("generation %d, want 2", gen)
+	}
+
+	if _, ok := e.Ready(); !ok {
+		t.Fatal("no ready worker after the restart")
+	}
+
+	if err := e.Reset(t.Context()); err != nil {
+		t.Fatalf("Reset on the new worker: %v", err)
+	}
+}
+
+func TestEngineSearchTimeout(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "ignore-search", func(c *Config) { c.Timeouts.Search = 200 * time.Millisecond })
+	e.start(t)
+
+	hits, err := e.Search(t.Context(), "query", 10)
+	if err != nil || len(hits) != 0 {
+		t.Fatalf("Search: %v, %v; want no hits and no error", hits, err)
+	}
+
+	// The worker is the same one and still answers.
+	if err := e.Reset(t.Context()); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if gen := e.liveGen.Load(); gen != 1 {
+		t.Fatalf("generation %d, want 1", gen)
+	}
+}
+
+func TestEngineCrashBackoffAndGiveUp(t *testing.T) {
+	t.Parallel()
+
+	after := newManualAfter()
+	e := newTestEngine(t, "crash-on-hello", func(c *Config) { c.After = after.After })
+
+	started := make(chan error, 1)
+	go func() { started <- e.Start(t.Context()) }()
+
+	for _, want := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second} {
+		select {
+		case call := <-after.calls:
+			if call.d != want {
+				t.Fatalf("pause %v, want %v", call.d, want)
+			}
+
+			call.fire <- time.Now()
+		case <-time.After(hangGuard):
+			t.Fatalf("no pause of %v", want)
+		}
+	}
+
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("Start did not return after the engine gave up")
+	}
+
+	ev := e.waitEvent(t, "status", func(ev usecase.SearchEvent) bool { return ev.Status != nil })
+	if ev.Status.Lexical != usecase.SearchUnavailable || ev.Status.Semantic != usecase.SearchUnavailable {
+		t.Fatalf("status %+v, want both unavailable", ev.Status)
+	}
+
+	select {
+	case call := <-after.calls:
+		t.Fatalf("pause of %v after giving up", call.d)
+	default:
+	}
+
+	if n := e.log.countLines("fake: started"); n != 6 {
+		t.Fatalf("%d starts, want 6 (the first and 5 restarts)", n)
+	}
+
+	// Off for good: commands do nothing, searches find nothing.
+	if err := e.Upsert(t.Context(), []usecase.IndexedNote{testNote("x")}); err != nil {
+		t.Fatalf("Upsert after giving up: %v", err)
+	}
+
+	if hits, err := e.Search(t.Context(), "x", 10); err != nil || len(hits) != 0 {
+		t.Fatalf("Search after giving up: %v, %v", hits, err)
+	}
+
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start after giving up: %v", err)
+	}
+}
+
+func TestEngineProtocolFailuresRestart(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"bad-frame", "exit-after-n"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			e := newTestEngine(t, mode, nil)
+			e.start(t)
+
+			if err := e.Reset(t.Context()); err == nil {
+				t.Fatal("Reset succeeded")
+			}
+
+			e.waitEvent(t, "Restarted", isRestarted)
+
+			if gen := e.liveGen.Load(); gen != 2 {
+				t.Fatalf("generation %d, want 2", gen)
+			}
+
+			if n := e.log.countLines("search worker failed", "gen=1"); n != 1 {
+				t.Fatalf("%d failure records, want 1; log:\n%s", n, strings.Join(e.log.lines(), "\n"))
+			}
+		})
+	}
+}
+
+func TestEngineOldGenerationDropped(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "exit-after-n", nil)
+	e.start(t)
+
+	if err := e.Reset(t.Context()); err == nil {
+		t.Fatal("Reset succeeded")
+	}
+
+	e.waitEvent(t, "Restarted", isRestarted)
+
+	// The reader of the first process delivers late, after the restart.
+	oldID, newID := uuid.New(), uuid.New()
+	e.queue.push(1, usecase.SearchEvent{Embedded: &usecase.EmbeddedEvent{ID: oldID, Rev: 1}})
+	e.queue.push(2, usecase.SearchEvent{Embedded: &usecase.EmbeddedEvent{ID: newID, Rev: 1}})
+
+	ev := e.waitEvent(t, "embedded", func(ev usecase.SearchEvent) bool { return ev.Embedded != nil })
+	if ev.Embedded.ID != newID {
+		t.Fatal("an event of the previous process reached Events")
+	}
+}
+
+func TestEngineMissingBinary(t *testing.T) {
+	t.Parallel()
+
+	after := newManualAfter()
+	e := newTestEngine(t, "ok", func(c *Config) {
+		c.Path = filepath.Join(t.TempDir(), "smartnote-search")
+		c.After = after.After
+	})
+	e.start(t)
+
+	ev := e.waitEvent(t, "status", func(ev usecase.SearchEvent) bool { return ev.Status != nil })
+	if ev.Status.Lexical != usecase.SearchUnavailable || ev.Status.Semantic != usecase.SearchUnavailable {
+		t.Fatalf("status %+v, want both unavailable", ev.Status)
+	}
+
+	if _, ok := e.Ready(); ok {
+		t.Fatal("ready without a worker")
+	}
+
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for ev := range e.Events() {
+		if ev.Status != nil {
+			t.Fatalf("a second status %+v", ev.Status)
+		}
+	}
+
+	if len(after.calls) != 0 {
+		t.Fatal("the engine paused for a restart")
+	}
+
+	if lines := e.log.lines(); len(lines) > 5 {
+		t.Fatalf("%d log records, want at most 5:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+}
+
+func TestEngineCloseKillsHungWorker(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "hang-on-upsert", func(c *Config) { c.Timeouts.Command = time.Minute })
+	e.start(t)
+
+	upserted := make(chan error, 1)
+	go func() { upserted <- e.Upsert(context.Background(), []usecase.IndexedNote{testNote("x")}) }()
+
+	// The upsert reached the worker, which hangs and ignores the end of stdin.
+	e.log.waitLine(t, "source=search-worker", "fake: hanging")
+
+	began := time.Now()
+
+	if err := e.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if took := time.Since(began); took > 3*time.Second {
+		t.Fatalf("Close took %v, want at most 3s", took)
+	}
+
+	select {
+	case err := <-upserted:
+		if err == nil {
+			t.Fatal("the hung Upsert succeeded")
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("the hung Upsert did not return after Close")
+	}
+
+	if err := e.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	if _, ok := <-e.Events(); ok {
+		t.Fatal("events open after Close")
+	}
+
+	if err := e.Reset(t.Context()); !errors.Is(err, errClosed) {
+		t.Fatalf("Reset after Close: %v, want errClosed", err)
+	}
+}
+
+func TestEngineCallsHonourContext(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "hang-on-upsert", func(c *Config) { c.Timeouts.Command = time.Minute })
+	e.start(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	began := time.Now()
+
+	if err := e.Upsert(ctx, []usecase.IndexedNote{testNote("x")}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Upsert: %v, want the context's error", err)
+	}
+
+	if took := time.Since(began); took > 5*time.Second {
+		t.Fatalf("Upsert returned after %v", took)
+	}
+
+	canceled, cancelNow := context.WithCancel(t.Context())
+	cancelNow()
+
+	if err := e.Start(canceled); err != nil {
+		t.Fatalf("Start of a started engine: %v", err)
+	}
+}
+
+func TestEngineStartHonoursContext(t *testing.T) {
+	t.Parallel()
+
+	after := newManualAfter()
+	e := newTestEngine(t, "crash-on-hello", func(c *Config) { c.After = after.After })
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	started := make(chan error, 1)
+	go func() { started <- e.Start(ctx) }()
+
+	// The first start failed and the engine waits for the first pause.
+	select {
+	case <-after.calls:
+	case <-time.After(hangGuard):
+		t.Fatal("no pause after the failed start")
+	}
+
+	cancel()
+
+	select {
+	case err := <-started:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Start: %v, want context.Canceled", err)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("Start ignored its context")
+	}
+}
