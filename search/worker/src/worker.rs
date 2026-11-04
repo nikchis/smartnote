@@ -310,8 +310,9 @@ fn report_sandbox(applied: &Applied) {
     match sandbox::extra_open_fds() {
         Ok(fds) if fds.is_empty() => {}
         Ok(fds) => eprintln!(
-            "sandbox: {} descriptors besides 0, 1, 2 are open",
-            fds.len()
+            "sandbox: {} descriptors besides 0, 1, 2 are open, {} writable",
+            fds.len(),
+            sandbox::writable_fds(&fds)
         ),
         Err(_) => eprintln!("sandbox: open descriptors cannot be listed"),
     }

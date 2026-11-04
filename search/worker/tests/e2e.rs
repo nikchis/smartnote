@@ -218,6 +218,67 @@ fn ready_reports_sandbox_full() {
     }
 }
 
+/// A writable descriptor that Smartnote's process leaks to the worker without `O_CLOEXEC` (as
+/// GTK and `WebKit` leave some) is closed before the worker reads its first frame (spec §10.2
+/// p. 1): Landlock and seccomp do not restrict descriptors that are already open. The test
+/// passes the write end of a pipe as descriptor 7 and keeps the read end: it reads end of file
+/// only once no process holds the write end. The worker is not dumpable, so its
+/// `/proc/<pid>/fd` cannot be read from here.
+#[cfg(target_os = "linux")]
+#[test]
+fn inherited_descriptors_are_closed() {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+    use std::sync::mpsc;
+    use std::thread;
+
+    const LEAKED_FD: libc::c_int = 7;
+
+    // Both ends are close-on-exec: only the copy made below reaches the worker.
+    let (mut reader, writer) = std::io::pipe().expect("pipe");
+    let write_end = writer.as_raw_fd();
+    let mut cmd = Command::new(common::WORKER);
+    // SAFETY: the closure runs in the child between fork and exec and calls only `dup2`, which
+    // is async-signal-safe; `write_end` is a plain integer of a descriptor open in the parent
+    // until after the spawn. `dup2` leaves the new descriptor without `FD_CLOEXEC`.
+    #[allow(unsafe_code, reason = "dup2 in the forked child before exec")]
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::dup2(write_end, LEAKED_FD) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut w = Worker::spawn(cmd, false);
+    drop(writer);
+    assert!(
+        matches!(w.hello(None), Reply::Ready { .. }),
+        "expected ready"
+    );
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = [0u8; 1];
+        let _ = tx.send(reader.read(&mut buf).map_err(|e| e.kind()));
+    });
+    let read = rx.recv_timeout(Duration::from_secs(10));
+    assert_eq!(
+        read,
+        Ok(Ok(0)),
+        "the worker still holds the inherited descriptor {LEAKED_FD}"
+    );
+
+    let (status, stderr) = w.finish();
+    assert_eq!(status.code(), Some(0));
+    assert!(
+        !stderr.contains("descriptors besides"),
+        "stderr reports open descriptors: {stderr}"
+    );
+}
+
 /// A paused index thread collects 20 searches: only the last one runs (spec §3.3 p. 7).
 #[cfg(feature = "test-probes")]
 #[test]

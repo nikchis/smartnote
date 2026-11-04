@@ -90,6 +90,14 @@ pub fn extra_open_fds() -> io::Result<Vec<i32>> {
     os::extra_open_fds()
 }
 
+/// How many of `fds` are open for writing (`O_WRONLY` or `O_RDWR`); a descriptor that is not
+/// open counts as not writable. Always 0 on systems other than Linux, where
+/// [`extra_open_fds`] lists nothing.
+#[must_use]
+pub fn writable_fds(fds: &[i32]) -> usize {
+    os::writable_fds(fds)
+}
+
 #[cfg(target_os = "linux")]
 mod os {
     use std::fs;
@@ -162,6 +170,17 @@ mod os {
 
     pub(super) fn extra_open_fds() -> io::Result<Vec<i32>> {
         list_fds(Path::new("/proc/self/fd"))
+    }
+
+    pub(super) fn writable_fds(fds: &[i32]) -> usize {
+        fds.iter()
+            .filter(|&&fd| {
+                // SAFETY: F_GETFL reads the status flags of a plain descriptor number; one that
+                // is not open fails with EBADF.
+                let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                flags != -1 && matches!(flags & libc::O_ACCMODE, libc::O_WRONLY | libc::O_RDWR)
+            })
+            .count()
     }
 
     /// Descriptors above 2 listed in `dir` (a `/proc/<pid>/fd` directory) that are still open.
@@ -532,6 +551,23 @@ mod os {
         }
 
         #[test]
+        fn writable_fds_counts_write_access() {
+            let (reader, writer) = std::io::pipe().expect("pipe");
+            let read_only = File::open("/proc/self/stat").expect("open a file");
+            let fds = [
+                reader.as_raw_fd(),
+                writer.as_raw_fd(),
+                read_only.as_raw_fd(),
+            ];
+            assert_eq!(writable_fds(&fds), 1);
+            assert_eq!(
+                writable_fds(&[-1]),
+                0,
+                "a closed descriptor is not writable"
+            );
+        }
+
+        #[test]
         fn extra_open_fds_lists_open_descriptors_only() {
             let file = File::open("/proc/self/stat").expect("open a file");
             let fds = extra_open_fds().expect("/proc/self/fd is readable");
@@ -563,5 +599,9 @@ mod os {
 
     pub(super) fn extra_open_fds() -> io::Result<Vec<i32>> {
         Ok(Vec::new())
+    }
+
+    pub(super) fn writable_fds(_fds: &[i32]) -> usize {
+        0
     }
 }

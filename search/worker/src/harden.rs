@@ -21,6 +21,34 @@ pub fn harden_process(parent_pid: Option<u32>) -> io::Result<()> {
     os::harden(parent_pid)
 }
 
+/// Closes every descriptor above 2 that the process inherited (spec §10.2 p. 1).
+///
+/// Smartnote passes the worker its three pipes as 0, 1 and 2, but a Unix child also inherits
+/// every descriptor of the parent opened without `O_CLOEXEC` (GTK and `WebKit` leave some), and
+/// neither Landlock nor seccomp restricts a descriptor that is already open. On Linux it is
+/// `close_range(3, ~0)`, or on kernels before 5.9 a loop over `/proc/self/fd`; on macOS a loop
+/// over `/dev/fd`. Windows needs nothing: Go starts the worker with an explicit list of the
+/// three standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), so no other handle is
+/// inherited.
+///
+/// The check before `ready` ([`crate::sandbox::extra_open_fds`]) reports what is still open.
+///
+/// # Errors
+///
+/// The error of `close_range` other than "not supported", or of listing the descriptors.
+///
+/// # Safety
+///
+/// No object of the process may own a descriptor above 2: call it first in `main`, while the
+/// process is single-threaded and has opened nothing.
+pub unsafe fn close_inherited_fds() -> io::Result<()> {
+    // SAFETY: the caller guarantees that nothing owns a descriptor above 2.
+    unsafe { os::close_fds_from(FIRST_INHERITED_FD) }
+}
+
+/// The lowest descriptor [`close_inherited_fds`] closes.
+const FIRST_INHERITED_FD: i32 = 3;
+
 /// Converts the `-1` failure return of a libc call into the `errno` error.
 #[cfg(unix)]
 fn check(rc: libc::c_int) -> io::Result<()> {
@@ -33,7 +61,9 @@ fn check(rc: libc::c_int) -> io::Result<()> {
 
 #[cfg(unix)]
 mod unix {
+    use std::fs;
     use std::io;
+    use std::path::Path;
 
     use super::check;
 
@@ -75,6 +105,27 @@ mod unix {
         }
     }
 
+    /// Closes the descriptors from `first` on that `dir` (`/proc/self/fd` or `/dev/fd`) lists.
+    /// The numbers are collected first: the listing holds a descriptor of its own, closed
+    /// again before the loop, so closing that number fails with `EBADF`, as may others. A
+    /// failed `close` is not reported: the check before `ready` lists what is still open.
+    ///
+    /// # Safety
+    ///
+    /// No object of the process may own a descriptor from `first` on.
+    pub(super) unsafe fn close_listed(dir: &Path, first: libc::c_int) -> io::Result<()> {
+        let fds: Vec<libc::c_int> = fs::read_dir(dir)?
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+            .filter(|&fd| fd >= first)
+            .collect();
+        for fd in fds {
+            // SAFETY: `fd` is a plain integer; the caller guarantees that no object owns it, so
+            // closing it invalidates nothing. A number that is not open fails with `EBADF`.
+            unsafe { libc::close(fd) };
+        }
+        Ok(())
+    }
+
     /// `RLIMIT_CORE` = 0, soft and hard: no core dump of this process.
     pub(super) fn disable_core_dumps() -> io::Result<()> {
         let zero = libc::rlimit {
@@ -89,6 +140,7 @@ mod unix {
 #[cfg(target_os = "linux")]
 mod os {
     use std::io;
+    use std::path::Path;
 
     use super::{check, unix};
 
@@ -111,6 +163,31 @@ mod os {
         Ok(())
     }
 
+    /// `close_range(first, ~0, 0)`; before Linux 5.9 (`ENOSYS`, or `EINVAL` under some
+    /// seccomp profiles of containers) a loop over `/proc/self/fd`.
+    ///
+    /// # Safety
+    ///
+    /// No object of the process may own a descriptor from `first` on.
+    pub(super) unsafe fn close_fds_from(first: libc::c_int) -> io::Result<()> {
+        let first = libc::c_uint::try_from(first).map_err(io::Error::other)?;
+        let (last, flags): (libc::c_uint, libc::c_uint) = (libc::c_uint::MAX, 0);
+        // SAFETY: `close_range` takes plain integers and closes descriptors only; the caller
+        // guarantees that no object owns one of them.
+        let rc = unsafe { libc::syscall(libc::SYS_close_range, first, last, flags) };
+        if rc == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            // SAFETY: the same guarantee of the caller.
+            Some(libc::ENOSYS | libc::EINVAL) => unsafe {
+                unix::close_listed(Path::new("/proc/self/fd"), first.cast_signed())
+            },
+            _ => Err(err),
+        }
+    }
+
     /// `prctl(option, arg, 0, 0, 0)` for options whose argument is a plain integer.
     fn prctl(option: libc::c_int, arg: libc::c_ulong) -> io::Result<()> {
         let zero: libc::c_ulong = 0;
@@ -123,6 +200,7 @@ mod os {
 #[cfg(target_os = "macos")]
 mod os {
     use std::io;
+    use std::path::Path;
 
     use super::{check, unix};
 
@@ -132,6 +210,16 @@ mod os {
         // SAFETY: PT_DENY_ATTACH ignores `pid`, `addr` and `data`; the null `addr` is never
         // dereferenced.
         check(unsafe { libc::ptrace(libc::PT_DENY_ATTACH, 0, std::ptr::null_mut(), 0) })
+    }
+
+    /// A loop over `/dev/fd`: macOS has no `close_range`.
+    ///
+    /// # Safety
+    ///
+    /// No object of the process may own a descriptor from `first` on.
+    pub(super) unsafe fn close_fds_from(first: libc::c_int) -> io::Result<()> {
+        // SAFETY: the same guarantee of the caller.
+        unsafe { unix::close_listed(Path::new("/dev/fd"), first) }
     }
 }
 
@@ -193,6 +281,19 @@ mod os {
         })
     }
 
+    /// Nothing to close: the worker inherits only the handles Go lists for it.
+    ///
+    /// # Safety
+    ///
+    /// None; `unsafe` only to match the other systems.
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "the same signature on every system"
+    )]
+    pub(super) unsafe fn close_fds_from(_first: i32) -> io::Result<()> {
+        Ok(())
+    }
+
     /// A policy structure and the `PROCESS_MITIGATION_POLICY` value that expects it.
     trait MitigationPolicy {
         const KIND: PROCESS_MITIGATION_POLICY;
@@ -232,7 +333,11 @@ mod os {
 compile_error!("process hardening is implemented for Linux, macOS and Windows only");
 
 #[cfg(all(test, target_os = "linux"))]
+#[allow(unsafe_code, reason = "descriptors made and checked through libc")]
 mod tests {
+    use std::os::fd::AsRawFd;
+    use std::path::Path;
+
     use super::unix::{WORKER_NICE, lower_priority, nice};
 
     // On Linux the nice value belongs to the calling thread; every test runs in its own
@@ -254,5 +359,43 @@ mod tests {
         assert_eq!(rc, 0);
         lower_priority().expect("an unprivileged thread cannot lower its nice value");
         assert_eq!(nice().expect("read the nice value"), 19);
+    }
+
+    /// Copies of a pipe end at `fds`, owned by nothing; returns the pipe kept by the test.
+    fn leak_at(fds: &[libc::c_int]) -> (std::io::PipeReader, std::io::PipeWriter) {
+        let (reader, writer) = std::io::pipe().expect("pipe");
+        for &fd in fds {
+            // SAFETY: plain integers; the test process uses no descriptor this high.
+            let rc = unsafe { libc::dup2(writer.as_raw_fd(), fd) };
+            assert_eq!(rc, fd, "dup2 to {fd}");
+        }
+        (reader, writer)
+    }
+
+    fn is_open(fd: libc::c_int) -> bool {
+        // SAFETY: F_GETFD reads the flags of a plain descriptor number.
+        unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
+    }
+
+    // Both tests close only descriptors from 900 on, which they create themselves: the test
+    // harness keeps its own below that.
+
+    #[test]
+    fn close_fds_from_closes_from_first_on() {
+        let (_reader, writer) = leak_at(&[900, 901, 1000]);
+        // SAFETY: descriptors from 900 on are the leaked copies, owned by nothing.
+        unsafe { super::os::close_fds_from(900) }.expect("close_range");
+        assert!(!is_open(900) && !is_open(901) && !is_open(1000));
+        assert!(is_open(writer.as_raw_fd()), "below `first` stays open");
+    }
+
+    #[test]
+    fn close_listed_closes_from_first_on() {
+        let (_reader, writer) = leak_at(&[950, 951]);
+        // SAFETY: descriptors from 950 on are the leaked copies, owned by nothing.
+        unsafe { super::unix::close_listed(Path::new("/proc/self/fd"), 950) }
+            .expect("list /proc/self/fd");
+        assert!(!is_open(950) && !is_open(951));
+        assert!(is_open(writer.as_raw_fd()), "below `first` stays open");
     }
 }

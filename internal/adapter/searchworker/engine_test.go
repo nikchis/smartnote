@@ -745,7 +745,7 @@ func TestDefaultStderrLevel(t *testing.T) {
 		{"model loaded in 641 ms", slog.LevelInfo},
 		{"sandbox partial: landlock-ioctl-dev", slog.LevelError},
 		{"sandbox none: landlock seccomp", slog.LevelError},
-		{"sandbox: 2 descriptors besides 0, 1, 2 are open", slog.LevelError},
+		{"sandbox: 2 descriptors besides 0, 1, 2 are open, 1 writable", slog.LevelError},
 		{"sandbox: open descriptors cannot be listed", slog.LevelError},
 		{"panic at src/worker.rs:10:5", slog.LevelError},
 		{"semantic search unavailable: the CPU has no AVX2", slog.LevelError},

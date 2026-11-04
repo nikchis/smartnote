@@ -124,9 +124,13 @@ type writeReq struct {
 	done  chan error
 }
 
-// startGeneration starts the worker at path with env as generation n. Only
-// the three pipes are passed to the child; Go creates them close-on-exec, so
-// no other child inherits them.
+// startGeneration starts the worker at path with env as generation n. Its
+// stdin, stdout and stderr are the three pipes; Go creates them close-on-exec,
+// so no other child inherits them. On Unix the child also inherits every
+// descriptor of this process opened without close-on-exec (GTK and WebKit
+// leave some), which os/exec cannot prevent: the worker closes all above 2
+// itself first thing (spec §10.2 p. 1). On Windows Go passes only the listed
+// handles.
 func startGeneration(n uint64, path string, env []string, cfg *Config, queue *eventQueue) (*generation, error) {
 	g := &generation{
 		n:           n,
