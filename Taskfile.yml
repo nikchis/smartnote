@@ -112,10 +112,16 @@ tasks:
     summary: |
       Downloads the official ONNX Runtime archive of the current OS and architecture listed in ort.lock.json,
       checks its SHA-256, extracts the runtime library and its licence notices into build/ort and checks
-      the library's SHA-256.
+      the library's SHA-256. The target is GOOS and ARCH (the host's by default).
     run: once
+    vars:
+      TARGET: '{{.GOOS}}-{{.ARCH | default ARCH}}'
+    preconditions:
+      # The targets of ort.lock.json; darwin/amd64 has a worker target but no pinned library.
+      - sh: '[ "{{.TARGET}}" = linux-amd64 ] || [ "{{.TARGET}}" = darwin-arm64 ] || [ "{{.TARGET}}" = windows-amd64 ]'
+        msg: "ONNX Runtime, and so a package with search, exists for linux/amd64, darwin/arm64 and windows/amd64 only: ort.lock.json pins no library for {{.TARGET}}."
     cmds:
-      - go run ./tools/ortfetch -lock ort.lock.json -out build/ort
+      - go run ./tools/ortfetch -lock ort.lock.json -out build/ort -target {{.TARGET}}
 
   search:build:
     summary: |

@@ -96,8 +96,6 @@ tasks:
 
   package:
     summary: Packages the application
-    deps:
-      - task: :search:files
     cmds:
       - task: '{{if eq (.FORMAT | default "nsis") "msix"}}create:msix:package{{else}}create:nsis:installer{{end}}'
         vars:
@@ -120,6 +118,7 @@ tasks:
     dir: build/windows/nsis
     deps:
       - task: build
+      - task: :search:files
     preconditions:
       - sh: '[ "{{.INSTALL_SCOPE}}" = "user" ] || [ "{{.INSTALL_SCOPE}}" = "machine" ]'
         msg: "INSTALL_SCOPE must be 'user' or 'machine', got '{{.INSTALL_SCOPE}}'"
@@ -141,9 +140,12 @@ tasks:
 
   create:msix:package:
     summary: Creates an MSIX package
-    deps:
-      - task: build
+    preconditions:
+      - sh: "false"
+        msg: "No MSIX package: it would not contain the search worker, ONNX Runtime and the model. Use the NSIS installer (FORMAT=nsis, the default)."
+    # build is a command rather than a dependency, so the precondition fails first.
     cmds:
+      - task: build
       - |-
         wails3 tool msix \
           --config "{{.ROOT_DIR}}/build/config.yml" \

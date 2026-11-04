@@ -458,3 +458,41 @@ fn ort_log_stays_off_stderr() {
         .collect();
     assert!(foreign.is_empty(), "stderr: {foreign:#?}");
 }
+
+/// An ONNX Runtime library with the pinned digest that the loader still cannot load (a
+/// dependency of it is missing or broken, as `onnxruntime.dll` without the Visual C++
+/// Redistributable on Windows) leaves semantic search unavailable with the reason in the log,
+/// and the worker keeps serving full-text search. Here a broken `libstdc++.so.6` lies beside
+/// the copy of the library, where its `RUNPATH` (`$ORIGIN`) finds it first.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs SMARTNOTE_MODEL_DIR and SMARTNOTE_ORT_LIB: task model:fetch, task ort:fetch"]
+fn ort_load_failure_keeps_full_text_search() {
+    let (model_dir, ort_lib) = required_model_paths();
+    let dir = common::TempDir::new("ort-broken-dependency");
+    let lib = dir
+        .path()
+        .join(ort_lib.file_name().expect("library file name"));
+    std::fs::copy(&ort_lib, &lib).expect("copy the library");
+    std::fs::write(dir.path().join("libstdc++.so.6"), b"not a library").expect("write");
+
+    let mut w = Worker::start();
+    assert_eq!(
+        ready_semantic(&w.hello(Some((model_dir, lib)))),
+        State::Unavailable
+    );
+    w.send(&Request::Upsert {
+        req: 1,
+        notes: vec![note(1, 1, "Код", "if (a == b) {}")],
+    });
+    w.wait_ok(1);
+    let hits = search(&mut w, 2, "==");
+    assert_eq!(hits.len(), 1, "full-text search works");
+
+    let (status, stderr) = w.finish();
+    assert_eq!(status.code(), Some(0));
+    assert!(
+        stderr.contains("semantic search unavailable: loading the ONNX Runtime library failed"),
+        "stderr: {stderr}"
+    );
+}

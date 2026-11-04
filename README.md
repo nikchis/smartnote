@@ -15,7 +15,7 @@ Packages are not signed.
 |---|---|---|
 | Ubuntu 26.04 (amd64) | `smartnote.deb` | `sudo apt install ./smartnote.deb` pulls in GTK 4 and WebKitGTK 6.0. |
 | Ubuntu desktop (amd64) | `smartnote-x86_64.AppImage` | `chmod +x` and run. A minimal system also needs `libegl1 libgles2 libfontconfig1 libfribidi0 libharfbuzz0b bubblewrap xdg-dbus-proxy`, which every Ubuntu desktop has. |
-| Windows 10/11 | `smartnote-amd64-installer.exe` | SmartScreen shows "Windows protected your PC": choose **More info**, then **Run anyway**. |
+| Windows 10/11 | `smartnote-amd64-installer.exe` | SmartScreen shows "Windows protected your PC": choose **More info**, then **Run anyway**. Semantic search needs the Microsoft Visual C++ Redistributable (x64), which most systems have; without it only full-text search works. |
 | macOS 12+ on Apple Silicon (arm64) | `smartnote.dmg` | Not for Intel Macs: build from source there. Gatekeeper refuses an unsigned app: drag Smartnote to Applications, then either open **System Settings → Privacy & Security** and press **Open Anyway** after the first attempt, or run `xattr -dr com.apple.quarantine /Applications/smartnote.app`. |
 
 Where the data lives:

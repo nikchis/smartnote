@@ -127,7 +127,7 @@ tasks:
       # would deploy the new files too: it sets the RPATH of every library in usr/lib, which changes
       # the ONNX Runtime library and breaks its pinned SHA-256.
       # Each new directory is named, since install -d gives the parents it creates the umask's mode.
-      - for dir in lib/smartnote share/smartnote share/smartnote/model share/doc share/doc/smartnote share/doc/smartnote/licenses share/doc/smartnote/licenses/onnxruntime; do install -d -m 0755 "{{.APPDIR}}/usr/$dir"; done
+      - install -d -m 0755 "{{.APPDIR}}/usr/lib/smartnote" "{{.APPDIR}}/usr/share/smartnote" "{{.APPDIR}}/usr/share/smartnote/model" "{{.APPDIR}}/usr/share/doc" "{{.APPDIR}}/usr/share/doc/smartnote" "{{.APPDIR}}/usr/share/doc/smartnote/licenses" "{{.APPDIR}}/usr/share/doc/smartnote/licenses/onnxruntime"
       - install -m 0755 "{{.ROOT_DIR}}/{{.BIN_DIR}}/smartnote-search" "{{.APPDIR}}/usr/lib/smartnote/"
       - install -m 0644 "{{.ROOT_DIR}}/build/ort/libonnxruntime.so.1.31.0" "{{.APPDIR}}/usr/lib/smartnote/"
       - install -m 0644 "{{.ROOT_DIR}}/build/model/model.onnx" "{{.ROOT_DIR}}/build/model/tokenizer.kit" "{{.ROOT_DIR}}/build/model/manifest.json" "{{.APPDIR}}/usr/share/smartnote/model/"

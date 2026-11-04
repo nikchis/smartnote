@@ -148,7 +148,8 @@ licence notices: `THIRD_PARTY_NOTICES.md` with `licenses/onnxruntime/{LICENSE,Th
 
 - `task search:files` prepares them and is a dependency of `linux:create:appimage`,
   `linux:create:deb` (and `create:rpm`, `create:aur`), `darwin:create:app:bundle` and
-  `windows:package`, so `task package:<os>` works from a clean checkout. It runs
+  `windows:create:nsis:installer` (the installer of `windows:package`), so `task package:<os>`
+  works from a clean checkout. It runs
   `search:build`, `model:fetch` and `ort:fetch`; the package tasks run `notices:build` themselves
   once the application is built, because `go list` needs `frontend/dist` (`go:embed`). Each of
   them runs once per `task` call.
@@ -158,9 +159,21 @@ licence notices: `THIRD_PARTY_NOTICES.md` with `licenses/onnxruntime/{LICENSE,Th
   `x86_64-pc-windows-msvc`) and copies the executable named in cargo's JSON messages to
   `bin/smartnote-search[.exe]`, so `CARGO_TARGET_DIR` and `RUSTUP_TOOLCHAIN` of the environment
   are honoured. Cargo runs every time. A `GOOS` other than the host's, or a target without a
-  worker, stops with a message: the worker is not cross-compiled.
-- `task ort:fetch` also extracts `LICENSE` and `ThirdPartyNotices.txt` from the release archive
-  (the `notices` of `ort.lock.json`; the archive SHA-256 covers them) into `build/ort`.
+  worker, stops with a message: the worker is not cross-compiled. On Windows the worker links the
+  C runtime statically (`search/.cargo/config.toml`, `-C target-feature=+crt-static`; a
+  `RUSTFLAGS` variable would replace it): the installer ships no Visual C++ Redistributable. The
+  official `onnxruntime.dll` still imports `MSVCP140.dll`, `MSVCP140_1.dll`, `VCRUNTIME140.dll`
+  and `VCRUNTIME140_1.dll`; without the Redistributable it does not load, semantic search is
+  unavailable ("semantic search unavailable: loading the ONNX Runtime library failed" in the
+  log) and full-text search works (`tests/e2e.rs`, `ort_load_failure_keeps_full_text_search`,
+  checks this with a broken dependency of the library on Linux). These DLLs are not copied
+  into the installer: they would be unpinned binaries.
+- `task ort:fetch` fetches the library of `GOOS`/`ARCH` and also extracts `LICENSE` and
+  `ThirdPartyNotices.txt` from the release archive (the `notices` of `ort.lock.json`; the archive
+  SHA-256 covers them, a later run only checks that they are present) into `build/ort`. A target
+  without a pinned library (darwin/amd64, linux/arm64) stops here with a message; so do
+  `darwin:package:universal` (the worker and the library are arm64 only) and the MSIX package
+  (`FORMAT=msix`, which would not contain the search files).
 - `task notices:build` runs `tools/notices`: the crates the worker links for its target, from
   `cargo metadata` (normal dependencies of package `worker`, without dev and build ones), and the
   Go modules of `go list -deps -tags production ./cmd/smartnote` for the target system, each with
@@ -168,7 +181,12 @@ licence notices: `THIRD_PARTY_NOTICES.md` with `licenses/onnxruntime/{LICENSE,Th
   identical texts are written once). Crates without licence files: the tantivy crates are covered
   by the files of `tantivy` (same repository); `kitoken` by the BSD-2-Clause text of its repository
   at v0.11.1, kept in `tools/notices/extra/kitoken/LICENSE`; `htmlescape` 0.3.1 (Apache-2.0 / MIT
-  / MPL-2.0) has none anywhere, the list names its licence and the tool warns about it.
+  / MPL-2.0) has none in the crate or its repository, so `extra/htmlescape/LICENSE-MIT` is the MIT
+  License with the author of its `Cargo.toml` as the copyright holder. The Rust standard library is
+  listed with the version of `rustc` and the `LICENSE-MIT` and `LICENSE-APACHE` of rust-lang/rust
+  at 1.99.0 (`extra/rust-std`; the copies under the toolchain's `share/doc/rust/licenses` are
+  templates without the copyright line), the Go standard library with `$GOROOT/LICENSE`. A package
+  with no licence text at all is named in a warning.
 - `.deb`: `contents` of `nfpm.yaml`, worker 0755, other files 0644; the notices go to
   `/usr/share/doc/smartnote/`. `task package:linux` ends with `task check:deb`
   (`build/linux/check-deb.sh`, from `dpkg-deb -c`).
@@ -183,6 +201,13 @@ licence notices: `THIRD_PARTY_NOTICES.md` with `licenses/onnxruntime/{LICENSE,Th
   bundle would sign it again and change the file, and the worker would refuse it. So the worker is
   signed on its own, the bundle without `--deep`, `codesign --verify --deep --strict` checks all of
   it, and `cmp` checks that the library in the bundle is the fetched one.
+  Trap: `task darwin:sign` and `darwin:sign:notarize` run `wails3 tool sign`, which signs with
+  `codesign --deep --force`: it would sign the dylib again and silently turn semantic search off.
+  Signing with a Developer ID needs the same order as `codesign:adhoc`, and the hardened runtime
+  that notarization requires enforces library validation: the worker loading a library signed by
+  another team (Microsoft) then needs a decision, e.g. the entitlement
+  `com.apple.security.cs.disable-library-validation` for the worker, or a copy signed with our own
+  identity, whose SHA-256 would have to be pinned instead.
 - Windows: `project.nsi` installs the files beside `smartnote.exe` (`model\`, `licenses\`) and the
   uninstaller deletes them before removing the folder.
 

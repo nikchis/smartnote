@@ -31,6 +31,7 @@ Smartnote: files older than that are not from this test.
 | 11 | With Smartnote open, in PowerShell: `Get-NetTCPConnection -OwningProcess (Get-Process smartnote-search).Id; Get-NetUDPEndpoint -OwningProcess (Get-Process smartnote-search).Id`. | `smartnote-search` runs; both commands list nothing (an error "No matching MSFT_NetTCPConnection objects" is the expected empty result). | | |
 | 12 | Close Smartnote, then in PowerShell: `Get-Process smartnote-search`. | No such process. | | |
 | 13 | In PowerShell: `Get-ChildItem $env:USERPROFILE -Recurse -Force -ErrorAction SilentlyContinue -Include onnxruntime.db, deviceid* \| Select-Object FullName, LastWriteTime`. | Nothing written after the start of the test. | | |
+| 14 | On a clean Windows without the Microsoft Visual C++ Redistributable (x64) (**Settings → Apps** lists no "Microsoft Visual C++ 2015-2022 Redistributable (x64)"; a fresh virtual machine), install and start Smartnote, add the note of step 10, search `milk`; look at `%LOCALAPPDATA%\smartnote\smartnote.log`. Then install the Redistributable (`vc_redist.x64.exe` from Microsoft), restart Smartnote and search `recipe for crepes`. | Without the Redistributable: `milk` lists "Pancakes" (full-text search works), "Semantic search unavailable" is shown, and the log has the reason "semantic search unavailable: loading the ONNX Runtime library failed". After installing it: no "Semantic search unavailable" once the model has loaded, and `recipe for crepes` lists "Pancakes". | | |
 
 ## macOS
 

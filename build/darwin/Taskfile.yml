@@ -123,9 +123,12 @@ tasks:
 
   package:universal:
     summary: Packages darwin universal binary (arm64 + amd64)
-    deps:
-      - task: build:universal
+    preconditions:
+      - sh: "false"
+        msg: "No universal package: the search worker and ONNX Runtime are built for arm64 only (ort.lock.json pins no darwin-amd64 library). Use task package:darwin."
+    # build:universal is a command rather than a dependency, so the precondition fails first.
     cmds:
+      - task: build:universal
       - task: create:app:bundle
 
   package:dmg:

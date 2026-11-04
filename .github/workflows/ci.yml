@@ -101,8 +101,9 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go install github.com/go-task/task/v3/cmd/task@$TASK_VERSION
-      # The model files and the ONNX Runtime library are cached by their lock files; the fetch
-      # tasks check the SHA-256 of every file after a restore as well and download what differs.
+      # The model files and the ONNX Runtime library are cached by their lock files; after a
+      # restore the fetch tasks check the SHA-256 of the model files and of the library (of the
+      # ONNX Runtime notices only that they are present) and download what differs.
       - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: build/model
@@ -175,7 +176,9 @@ jobs:
         with:
           workspaces: search
       # The model files and the ONNX Runtime library that task package fetches, cached by their
-      # lock files as in the search job; the fetch tasks check every SHA-256 after a restore.
+      # lock files as in the search job. After a restore the fetch tasks check the SHA-256 of the
+      # model files and of the library; of the ONNX Runtime notices (LICENSE,
+      # ThirdPartyNotices.txt) only that they are present, a missing one fetches the archive again.
       - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: build/model

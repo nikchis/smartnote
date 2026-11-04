@@ -201,11 +201,51 @@ func TestWriteNoticesUsesKeptTextsAndTheFilesOfTheSameRepository(t *testing.T) {
 
 	text := buf.String()
 	for _, want := range []string{
-		"The package has no licence file; the texts below come from its source repository.\n\nLICENSE:\n\nkitoken licence\n",
+		"The package has no licence file; the texts below are supplied for it.\n\nLICENSE:\n\nkitoken licence\n",
 		"The package has no licence file; the licence files of tantivy 0.27.0, from the same repository " + repo + ", cover it.\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("notices lack %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestWriteNoticesUsesKeptTextsOfAComponentWithoutSources(t *testing.T) {
+	comps := []component{{Name: "Rust standard library", Version: "1.99.0", License: "MIT OR Apache-2.0", Kept: "rust-std"}}
+	kept := fstest.MapFS{
+		"rust-std/LICENSE-MIT":    {Data: []byte("mit text\n")},
+		"rust-std/LICENSE-APACHE": {Data: []byte("apache text\n")},
+	}
+
+	var buf bytes.Buffer
+
+	missing, err := writeNotices(&buf, "Title", comps, kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(missing) != 0 {
+		t.Errorf("missing = %v, want none", missing)
+	}
+
+	text := buf.String()
+	for _, want := range []string{
+		"  Rust standard library 1.99.0 — MIT OR Apache-2.0\n",
+		"Rust standard library 1.99.0\n" + strings.Repeat("-", 80) + "\n\nLICENSE-APACHE:\n\napache text\n\nLICENSE-MIT:\n\nmit text\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("notices lack %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestRustStdVersion(t *testing.T) {
+	got, err := rustStdVersion("rustc 1.99.0 (b940084d7 2026-09-28)\n")
+	if err != nil || got != "1.99.0" {
+		t.Errorf("rustStdVersion() = %q, %v; want 1.99.0", got, err)
+	}
+
+	if _, err := rustStdVersion("cargo 1.99.0"); err == nil {
+		t.Error("rustStdVersion() error = nil for a line that is not rustc's")
 	}
 }

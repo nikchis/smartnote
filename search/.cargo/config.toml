@@ -1,0 +1,7 @@
+# The search worker links the C runtime statically on Windows: the installer ships no Visual C++
+# Redistributable, and a worker that needs vcruntime140.dll would not start on a system without
+# it, which would lose full-text search too. (onnxruntime.dll still needs the Redistributable;
+# without it only semantic search is unavailable, see docs/smoke-windows-macos.md.)
+# RUSTFLAGS in the environment replaces these flags.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -10,10 +10,18 @@
 //
 // It writes rust-crates.txt and go-modules.txt into the output directory.
 //
-// A package without licence files is covered by kept texts, extra/<name>/ (copied from the
-// package's source repository at the released version: kitoken v0.11.1,
-// https://github.com/Systemcluster/kitoken/blob/v0.11.1/LICENSE), or by the licence files of
-// a listed package from the same repository (the tantivy crates); otherwise it is reported.
+// The Rust standard library is listed with the crates and the Go standard library with the
+// modules ($GOROOT/LICENSE). A package without licence files is covered by kept texts,
+// extra/<name>/, or by the licence files of a listed package from the same repository (the
+// tantivy crates); otherwise it is reported. The kept texts:
+//
+//   - kitoken: LICENSE of its repository at v0.11.1,
+//     https://github.com/Systemcluster/kitoken/blob/v0.11.1/LICENSE;
+//   - htmlescape: neither the crate nor its repository has a licence file, so the MIT License
+//     (one of its three) with the author of its Cargo.toml as the copyright holder;
+//   - rust-std: LICENSE-MIT and LICENSE-APACHE of rust-lang/rust at tag 1.99.0 (the toolchain
+//     of search/rust-toolchain.toml); the copies in the toolchain's share/doc/rust/licenses are
+//     templates without the copyright line.
 package main
 
 import (
@@ -48,6 +56,8 @@ type component struct {
 	Dir string
 	// Extra names further licence files relative to Dir (Cargo's license-file).
 	Extra []string
+	// Kept names the directory of kept texts when it is not Name.
+	Kept string
 }
 
 type options struct {
@@ -102,9 +112,14 @@ func run(ctx context.Context, opts options) error {
 		return err
 	}
 
-	title := fmt.Sprintf("Third-party Rust crates linked into smartnote-search (%s), from search/Cargo.lock.\n"+
-		"The Rust standard library is under MIT OR Apache-2.0, Copyright (c) The Rust Project Contributors.", opts.rustTarget)
-	if err := writeFile(filepath.Join(opts.out, "rust-crates.txt"), title, crates); err != nil {
+	rustStd, err := rustStdComponent(ctx, opts.search)
+	if err != nil {
+		return err
+	}
+
+	title := fmt.Sprintf("Third-party Rust crates linked into smartnote-search (%s), from search/Cargo.lock, "+
+		"and the Rust standard library.", opts.rustTarget)
+	if err := writeFile(filepath.Join(opts.out, "rust-crates.txt"), title, append([]component{rustStd}, crates...)); err != nil {
 		return err
 	}
 
@@ -164,6 +179,36 @@ func goStdComponent(ctx context.Context) (component, error) {
 		Name: "Go standard library and runtime", Version: strings.TrimSpace(fields[0]),
 		License: "BSD-3-Clause", URL: "https://go.dev", Dir: strings.TrimSpace(fields[1]),
 	}, nil
+}
+
+// rustStdComponent is the Rust standard library of the toolchain that builds the worker (rustc
+// runs in the workspace, so its rust-toolchain.toml and RUSTUP_TOOLCHAIN count); its licence
+// texts are kept in extra/rust-std.
+func rustStdComponent(ctx context.Context, search string) (component, error) {
+	out, err := output(ctx, search, nil, "rustc", "--version")
+	if err != nil {
+		return component{}, err
+	}
+
+	version, err := rustStdVersion(string(out))
+	if err != nil {
+		return component{}, err
+	}
+
+	return component{
+		Name: "Rust standard library", Version: version, License: "MIT OR Apache-2.0",
+		URL: "https://github.com/rust-lang/rust", Kept: "rust-std",
+	}, nil
+}
+
+// rustStdVersion is the version in the output of rustc --version ("rustc 1.99.0 (…)").
+func rustStdVersion(line string) (string, error) {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || fields[0] != "rustc" {
+		return "", fmt.Errorf("rustc --version: unexpected output %q", line)
+	}
+
+	return fields[1], nil
 }
 
 // depKind is the kind of a dependency edge: nil for a normal one, "dev" or "build".
@@ -329,6 +374,10 @@ var codeExtensions = []string{".rs", ".go", ".c", ".h", ".py", ".sh", ".toml", "
 // licenseFiles returns the names of the licence files of comp: the files in its directory
 // whose names start with a licence prefix, and its extra files, sorted.
 func licenseFiles(comp component) ([]string, error) {
+	if comp.Dir == "" {
+		return nil, nil
+	}
+
 	entries, err := os.ReadDir(comp.Dir)
 	if err != nil {
 		return nil, err
@@ -380,8 +429,9 @@ func writeFile(path, title string, comps []component) error {
 type licenseText struct{ Name, Text string }
 
 // componentTexts returns the licence files of comp. When its package has none, it returns the
-// texts kept for it in kept/<name>/ with a note, or else only a note naming a component of comps
-// from the same repository that has licence files; no texts and no note mean none were found.
+// texts kept for it in kept/<name>/ (comp.Kept when set), with a note when comp has a package,
+// or else only a note naming a component of comps from the same repository that has licence
+// files; no texts and no note mean none were found.
 func componentTexts(comp component, comps []component, kept fs.FS) ([]licenseText, string, error) {
 	files, err := licenseFiles(comp)
 	if err != nil {
@@ -394,15 +444,25 @@ func componentTexts(comp component, comps []component, kept fs.FS) ([]licenseTex
 		return texts, "", err
 	}
 
-	if entries, err := fs.ReadDir(kept, comp.Name); err == nil && len(entries) > 0 {
+	keptDir := comp.Name
+	if comp.Kept != "" {
+		keptDir = comp.Kept
+	}
+
+	if entries, err := fs.ReadDir(kept, keptDir); err == nil && len(entries) > 0 {
 		names := make([]string, 0, len(entries))
 		for _, entry := range entries {
 			names = append(names, entry.Name())
 		}
 
-		texts, err := readTexts(kept, comp.Name, names)
+		texts, err := readTexts(kept, keptDir, names)
 
-		return texts, "The package has no licence file; the texts below come from its source repository.", err
+		note := ""
+		if comp.Dir != "" {
+			note = "The package has no licence file; the texts below are supplied for it."
+		}
+
+		return texts, note, err
 	}
 
 	for _, other := range comps {

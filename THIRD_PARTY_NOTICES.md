@@ -8,7 +8,7 @@ file:
 |---|---|
 | `licenses/onnxruntime/LICENSE` | Licence of ONNX Runtime 1.31.0 |
 | `licenses/onnxruntime/ThirdPartyNotices.txt` | Notices of the components inside ONNX Runtime 1.31.0 |
-| `licenses/rust-crates.txt` | List and licence files of the Rust crates in `smartnote-search` |
+| `licenses/rust-crates.txt` | List and licence files of the Rust crates in `smartnote-search` and of the Rust standard library |
 | `licenses/go-modules.txt` | List and licence files of the Go modules in `smartnote` and of the Go standard library |
 
 Where the files are installed:
