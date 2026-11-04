@@ -30,10 +30,10 @@ import (
 //
 // What is guaranteed: no text the worker chooses reaches the log, and what it
 // chooses (numbers, choices among fixed texts, line lengths) is at most about
-// 0.6 KB per run: at most 71 bits per stderr record (the densest forms carry
-// two 10-digit numbers, about 66 bits, plus the choice of the form) times 64,
-// about 570 bytes; 3 bits per error text times 64, 24 bytes; the two counts at
-// Close, under 16 bytes. Not covered: the code of an error reply (one of four,
+// 0.6 KB per run: at most about 72 bits per stderr record (the densest forms
+// carry two numbers of up to 10 digits, about 67 bits, plus the choice of the
+// form) times 64, about 580 bytes; under 3 bits per error text times 64, 24
+// bytes; the two counts at Close, under 16 bytes. Not covered: the code of an error reply (one of four,
 // shown with every failed command), the exit status and the timing of a
 // failed process, which the restart policy bounds per 10 minutes, not per run.
 //

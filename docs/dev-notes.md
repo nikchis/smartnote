@@ -253,7 +253,7 @@ at a directory.
   it is in `knownErrorTexts` (`protocol.go`). At most 64 stderr records, 64 error texts, 8 panic and
   8 ONNX Runtime lines per run; then one line "search worker: further worker output dropped", and
   `Close` logs the counts. What the worker chooses (numbers, choices among fixed texts, lengths) is
-  at most about 0.6 KB per run (71 bits per record × 64, 3 bits per text × 64, two counts). Not
+  at most about 0.6 KB per run (about 72 bits per record × 64, 3 bits per text × 64, two counts). Not
   covered: the code of an error reply, and the exit status and timing of a failed process (bounded
   by the restart policy per 10 minutes, not per run). A new `eprintln!` or source file in
   `search/worker/src` needs its form or its entry in `workerSourceFiles`:
