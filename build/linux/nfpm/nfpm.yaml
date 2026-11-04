@@ -6,7 +6,7 @@
 name: "smartnote"
 arch: ${GOARCH}
 platform: "linux"
-version: "2.0.1"
+version: "2.1.0"
 section: "default"
 priority: "extra"
 maintainer: "Nikita Chisnikov <chisnikov@gmail.com>"

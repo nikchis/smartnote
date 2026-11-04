@@ -10,7 +10,7 @@
   <Identity 
     Name="com.nikchis.smartnote"
     Publisher="CN=Nikita Chisnikov"
-    Version="2.0.1.0" 
+    Version="2.1.0.0" 
     ProcessorArchitecture="x64" />
   
   <Properties>

@@ -18,10 +18,10 @@ Packages are not signed.
 | Windows 10/11 | `smartnote-amd64-installer.exe` | SmartScreen shows "Windows protected your PC": choose **More info**, then **Run anyway**. Semantic search needs the Microsoft Visual C++ Redistributable (x64), which most systems have; without it only full-text search works. |
 | macOS 12+ on Apple Silicon (arm64) | `smartnote.dmg` | Not for Intel Macs: build from source there. Gatekeeper refuses an unsigned app: drag Smartnote to Applications, then either open **System Settings → Privacy & Security** and press **Open Anyway** after the first attempt, or run `xattr -dr com.apple.quarantine /Applications/smartnote.app`. |
 
-Upgrading from 2.0.0 or 2.0.1: the version with local search keeps the local storage in format 2
-(it adds the encrypted search data of the notes). The first unlock with it converts `local.db` for
+Upgrading from 2.0.x to 2.1.0 (local search): 2.1.0 keeps the local storage in format 2
+(it adds the encrypted search data of the notes). The first unlock with 2.1.0 converts `local.db` for
 good, and 2.0.x then refuses it with "Data was created by a newer version of Smartnote.". There is
-no conversion back. To return to 2.0.x, back up the notes to your server with the new version first
+no conversion back. To return to 2.0.x, back up the notes to your server with 2.1.0 first
 (**Save**), then in 2.0.x start with a new local storage (move `local.db` away), set up the
 connection in **Settings** again (the SSH key is kept in `local.db` as well: import your key file or
 generate a new key and authorize it on the server) and **Restore**.
