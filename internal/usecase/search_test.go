@@ -517,6 +517,7 @@ func TestSearchStatusWaitsForRebuild(t *testing.T) {
 
 	loading := SearchStatus{Lexical: SearchReady, Semantic: SearchLoading}
 	ready := SearchStatus{Notes: 1, Lexical: SearchReady, Semantic: SearchReady}
+
 	f.send(t, SearchEvent{Status: &loading})
 	f.send(t, SearchEvent{Status: &ready}) // returns once the first status is handled
 
@@ -537,6 +538,7 @@ func TestSearchStatusWaitsForRebuild(t *testing.T) {
 
 	// A restart holds them again until its rebuild is applied.
 	gate, entered = make(chan struct{}), make(chan struct{})
+
 	f.engine.mu.Lock()
 	f.engine.gate, f.engine.entered = gate, entered
 	f.engine.mu.Unlock()
