@@ -894,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn coalesce_without_searches_changes_nothing() {
+    fn coalesce_keeps_a_single_search_in_its_place() {
         let reset = Request::Reset { req: 4 };
         let mut queue = VecDeque::from([reset.clone(), search(5)]);
 
