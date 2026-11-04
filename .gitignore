@@ -19,5 +19,6 @@ build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 .test-coverage
 build/model/
 build/model-src/
+build/ort/
 tools/model/.venv/
 __pycache__/

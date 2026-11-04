@@ -96,3 +96,10 @@ tasks:
       MODEL_BASE_URL overrides the release URL (local work only, e.g. file:///path/to/dir/).
     cmds:
       - go run ./tools/modelfetch -lock model.lock.json -out build/model
+
+  ort:fetch:
+    summary: |
+      Downloads the official ONNX Runtime archive of the current OS and architecture listed in ort.lock.json,
+      checks its SHA-256, extracts only the runtime library into build/ort and checks the library's SHA-256.
+    cmds:
+      - go run ./tools/ortfetch -lock ort.lock.json -out build/ort
