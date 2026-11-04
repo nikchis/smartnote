@@ -31,16 +31,17 @@ func Harden() error {
 	// Keep the flags already set: at start the Go runtime ORs in
 	// WER_FAULT_REPORTING_NO_UI (runtime.osinit → preventErrorDialogs in
 	// runtime/signal_windows.go, checked in go1.27.3, the toolchain of go.mod).
+	// Without them WerSetFlags would clear that flag, so it is skipped then.
 	var flags uint32
 
 	getFlags := kernel32.NewProc("WerGetFlags")
 	if hr, _, _ := getFlags.Call(uintptr(windows.CurrentProcess()), uintptr(unsafe.Pointer(&flags))); int32(hr) < 0 {
 		errs = append(errs, fmt.Errorf("WerGetFlags: HRESULT 0x%08x", uint32(hr)))
-	}
-
-	setFlags := kernel32.NewProc("WerSetFlags")
-	if hr, _, _ := setFlags.Call(uintptr(flags | werFaultReportingFlagNoHeap)); int32(hr) < 0 {
-		errs = append(errs, fmt.Errorf("WerSetFlags: HRESULT 0x%08x", uint32(hr)))
+	} else {
+		setFlags := kernel32.NewProc("WerSetFlags")
+		if hr, _, _ := setFlags.Call(uintptr(flags | werFaultReportingFlagNoHeap)); int32(hr) < 0 {
+			errs = append(errs, fmt.Errorf("WerSetFlags: HRESULT 0x%08x", uint32(hr)))
+		}
 	}
 
 	policy := uint32(imageLoadNoRemoteImages | imageLoadNoLowMandatoryLabelImages)
