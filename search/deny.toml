@@ -1,0 +1,43 @@
+# cargo-deny policy of the search worker (spec §10.3): RustSec advisories, licenses,
+# crate sources, duplicate versions. Run: `cargo deny check` in search/.
+
+[graph]
+all-features = true
+
+[advisories]
+# Vulnerabilities, unsound and unmaintained crates fail the check.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+ignore = [
+  # paste: unmaintained, no fix; reaches only the dev-dependency tokenizers of model-tool
+  # (parity test of the tokenizer conversion), nothing that ships.
+  { id = "RUSTSEC-2024-0436", reason = "dev-only via tokenizers in model-tool" },
+]
+
+[licenses]
+# Each license expression of the tree must be satisfiable from this list (task 1 journal).
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",        # kitoken, sentencepiece-model
+  "BSD-3-Clause",        # frostem, zstd*, seccompiler (via OR)
+  "Unicode-3.0",         # unicode-ident, unicode-normalization (AND)
+  "Zlib",                # foldhash
+  "ISC",                 # hmac-sha256 (build dependency of ort-sys)
+  "CDLA-Permissive-2.0", # webpki-root-certs (build dependency of ort-sys)
+]
+confidence-threshold = 0.9
+# The list already covers the crates of later tasks (ort, tantivy defaults, seccompiler).
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

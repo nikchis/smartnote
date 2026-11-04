@@ -2,6 +2,9 @@
 bin/
 *.syso
 build/bin/
+search/target/
+# Cargo binary targets, not build output
+!search/*/src/bin/
 frontend/dist/
 frontend/node_modules/
 frontend/bindings/

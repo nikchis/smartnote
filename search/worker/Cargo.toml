@@ -1,0 +1,40 @@
+[package]
+name = "worker"
+version = "0.1.0"
+description = "smartnote-search: the local search worker process of Smartnote"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "smartnote-search"
+path = "src/main.rs"
+
+# Test helper: the worker's allocator and hardening without the worker loop (tests/*.rs).
+[[bin]]
+name = "probe_zalloc"
+path = "src/bin/probe_zalloc.rs"
+required-features = ["test-probes"]
+
+[features]
+test-probes = ["dep:tantivy"]
+
+[dependencies]
+zalloc = { path = "../zalloc" }
+tantivy = { version = "0.27.0", default-features = false, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_ErrorReporting",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true

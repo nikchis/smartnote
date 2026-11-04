@@ -16,6 +16,9 @@ COVER_FILE := .test-coverage
 # Wails builds, packages and the AppImage check live in Taskfile.yml (task 3.54.0); these targets call it
 TASK ?= task
 
+# Cargo of the Rust search worker in search/; the toolchain comes from search/rust-toolchain.toml
+CARGO ?= cargo
+
 help: ## Display this help screen
 	@echo "Makefile available targets:"
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  * \033[36m%-17s\033[0m %s\n", $$1, $$2}'
@@ -60,6 +63,16 @@ ifndef IS_LINT_INSTALLED
 	GOBIN=$(abspath $(dir $(LINT_BIN))) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(LINT_VERSION)
 endif
 
+search-test: ## Run the tests of the Rust search worker, with the probe binaries (needs gdb)
+	@echo "+ $@"
+	cd search && $(CARGO) test --workspace --features test-probes
+
+search-lint: ## Check format, clippy and cargo-deny policy of the Rust search worker
+	@echo "+ $@"
+	cd search && $(CARGO) fmt --check
+	cd search && $(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
+	cd search && $(CARGO) deny check
+
 build: ## Build the application to ./bin (task build)
 	@echo "+ $@"
 	$(TASK) build
@@ -72,4 +85,4 @@ smoke: ## Start the AppImage in a clean ubuntu:26.04 container (task smoke:appim
 	@echo "+ $@"
 	$(TASK) smoke:appimage
 
-.PHONY: help all dep frontend test integration lint lint-fix fmt install-lint build package smoke
+.PHONY: help all dep frontend test integration lint lint-fix fmt install-lint search-test search-lint build package smoke

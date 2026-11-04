@@ -1,0 +1,11 @@
+[package]
+name = "zalloc"
+version = "0.1.0"
+description = "Global allocator that zeroes every block before it returns to the system allocator"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

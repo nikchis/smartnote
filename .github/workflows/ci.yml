@@ -83,6 +83,32 @@ jobs:
         working-directory: frontend
       - run: make integration
 
+  search:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Installs the toolchain of search/rust-toolchain.toml with rustfmt and clippy.
+      - run: rustup toolchain install
+        working-directory: search
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: search
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-deny@0.20.2
+      # gdb takes the core dump of the allocator test; strace runs the syscall test.
+      - run: sudo apt-get update && sudo apt-get install -y gdb strace
+      # Landlock ABI (landlock_create_ruleset with LANDLOCK_CREATE_RULESET_VERSION, syscall 444)
+      # and the kernel LSM list, so a sandbox failure can be matched to the runner kernel.
+      - name: Kernel diagnostics
+        run: |
+          uname -r
+          cat /sys/kernel/security/lsm; echo
+          python3 -c 'import ctypes; libc = ctypes.CDLL(None, use_errno=True); print("landlock abi:", libc.syscall(444, None, ctypes.c_size_t(0), ctypes.c_uint32(1)), "errno:", ctypes.get_errno())'
+          sysctl kernel.yama.ptrace_scope kernel.core_pattern
+      - run: make search-lint
+      - run: make search-test
+
   package:
     strategy:
       fail-fast: false
