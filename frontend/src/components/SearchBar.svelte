@@ -34,8 +34,13 @@
     open = true;
   }
 
+  // The chosen row stays in view: the effect reads the selection and the hits,
+  // so it runs again after the arrow keys or new hits have updated the rows.
   $effect(() => {
-    if (shown) results?.querySelector(`[aria-selected="true"]`)?.scrollIntoView({ block: "nearest" });
+    const selected = box.selected;
+    if (shown && box.hits.length > 0 && selected >= 0) {
+      results?.querySelector(`#search-hit-${selected}`)?.scrollIntoView({ block: "nearest" });
+    }
   });
 
   function onfocus(e: FocusEvent): void {

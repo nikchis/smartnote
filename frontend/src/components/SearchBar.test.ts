@@ -84,6 +84,33 @@ describe("SearchBar", () => {
     expect(options()).toEqual(["note b"]);
   });
 
+  // From the review of PR 6: the list is at most 70vh high, so the row the
+  // arrow keys choose must be scrolled into view.
+  it("scrolls the row chosen with the arrow keys into view", async () => {
+    const scrolled: Element[] = [];
+    const spy = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {
+      scrolled.push(this);
+    });
+    try {
+      api.results = Array.from({ length: 10 }, (_, i) => hit(String(i)));
+      field().focus();
+      await type("word");
+
+      press("ArrowDown");
+      press("ArrowDown");
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+
+      expect(scrolled.at(-1)?.id).toBe("search-hit-2");
+      press("ArrowUp");
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+      expect(scrolled.at(-1)?.id).toBe("search-hit-1");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("takes at most the 256 UTF-16 units of a query that the worker reads", () => {
     // maxlength counts UTF-16 units, as the worker and SearchService.Search do.
     expect(field().maxLength).toBe(256);
