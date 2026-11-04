@@ -313,6 +313,49 @@ fn search_latest_wins() {
     assert_eq!(answered, (first..=last).collect::<Vec<_>>());
 }
 
+/// Coalescing never moves a search before a change that came first: of `[search, upsert,
+/// search]` queued behind a pause, the last search sees the upserted note (spec §3.3 p. 7).
+#[cfg(feature = "test-probes")]
+#[test]
+fn search_runs_after_earlier_changes() {
+    let mut w = Worker::start();
+    w.hello(None);
+    let next = upsert_marked(&mut w, 1, "older", 1);
+
+    w.send(&Request::DebugPause { ms: 500 });
+    let (stale, change, fresh) = (next, next + 1, next + 2);
+    w.send(&Request::Search {
+        req: stale,
+        query: "zeppelin".into(),
+        limit: 10,
+    });
+    w.send(&Request::Upsert {
+        req: change,
+        notes: vec![note(99, 1, "airships", "the zeppelin landed")],
+    });
+    w.send(&Request::Search {
+        req: fresh,
+        query: "zeppelin".into(),
+        limit: 10,
+    });
+
+    let mut answered = Vec::new();
+    while answered.len() < 3 {
+        match w.recv() {
+            Reply::Result { req, hits } => {
+                if req == fresh {
+                    assert_eq!(hits.len(), 1, "the last search runs after the upsert");
+                }
+                answered.push(req);
+            }
+            Reply::Ok { req } => answered.push(req),
+            _ => {}
+        }
+    }
+    answered.sort_unstable();
+    assert_eq!(answered, [stale, change, fresh]);
+}
+
 /// No note, name or query text reaches stderr, not even on a protocol error (spec §6.2,
 /// §12.5).
 #[test]

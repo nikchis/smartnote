@@ -9,8 +9,9 @@
 //! - the calling thread becomes the **reader**: it decodes frames and forwards requests to the
 //!   index thread over an unbounded channel, so it never blocks on the other threads;
 //! - the **index** thread owns the [`Engine`] and the queue of notes waiting for embeddings;
-//!   it applies `reset`/`upsert`/`remove` with one commit each, answers searches (only the
-//!   latest of the pending ones runs) and hands one note at a time to the embed thread;
+//!   it applies `reset`/`upsert`/`remove` with one commit each, answers searches in their
+//!   order with the changes (only the latest of the pending ones runs, in its place) and hands
+//!   one note at a time to the embed thread;
 //! - the **embed** thread owns the [`Model`]: it embeds one chunk per model call and answers a
 //!   query vector request before the next chunk;
 //! - the **writer** thread owns `output` and writes the replies of all threads.
@@ -504,18 +505,11 @@ impl IndexThread {
     }
 
     fn handle_next_request(&mut self) {
-        if matches!(self.requests.front(), Some(Request::Search { .. })) {
-            let (latest, superseded) = coalesce_searches(&mut self.requests);
-            for req in superseded {
-                self.send(Reply::Result {
-                    req,
-                    hits: Vec::new(),
-                });
-            }
-            if let Some(Request::Search { req, query, limit }) = latest {
-                self.search(req, &query, limit);
-            }
-            return;
+        for req in coalesce_searches(&mut self.requests) {
+            self.send(Reply::Result {
+                req,
+                hits: Vec::new(),
+            });
         }
         let Some(request) = self.requests.pop_front() else {
             return;
@@ -529,10 +523,11 @@ impl IndexThread {
             }
             Request::Upsert { req, notes } => self.upsert(req, notes),
             Request::Remove { req, items } => self.remove(req, &items),
+            Request::Search { req, query, limit } => self.search(req, &query, limit),
             #[cfg(feature = "test-probes")]
             Request::DebugPause { ms } => thread::sleep(Duration::from_millis(ms)),
-            // The reader answers these itself and never forwards them.
-            Request::Hello { .. } | Request::Search { .. } => {}
+            // The reader answers `hello` itself and never forwards it.
+            Request::Hello { .. } => {}
         }
     }
 
@@ -777,23 +772,30 @@ impl NoteWork {
     }
 }
 
-/// Takes every `search` out of `queue`: returns the latest one and the request numbers of the
-/// others, which get an empty result. Other requests keep their order.
-fn coalesce_searches(queue: &mut VecDeque<Request>) -> (Option<Request>, Vec<u64>) {
-    let mut latest = None;
+/// Takes every `search` but the last out of `queue` and returns their request numbers; they
+/// get an empty result. The last search keeps its place, so it runs after every change that
+/// came before it and before those that came after it; the other requests keep their order.
+fn coalesce_searches(queue: &mut VecDeque<Request>) -> Vec<u64> {
+    let Some(last) = queue
+        .iter()
+        .rposition(|r| matches!(r, Request::Search { .. }))
+    else {
+        return Vec::new();
+    };
     let mut superseded = Vec::new();
-    let mut rest = VecDeque::with_capacity(queue.len());
-    for request in queue.drain(..) {
-        if matches!(request, Request::Search { .. }) {
-            if let Some(Request::Search { req, .. }) = latest.replace(request) {
-                superseded.push(req);
+    let mut at = 0;
+    queue.retain(|request| {
+        let keep = match request {
+            Request::Search { req, .. } if at != last => {
+                superseded.push(*req);
+                false
             }
-        } else {
-            rest.push_back(request);
-        }
-    }
-    *queue = rest;
-    (latest, superseded)
+            _ => true,
+        };
+        at += 1;
+        keep
+    });
+    superseded
 }
 
 /// Notes waiting for embeddings, each id once, oldest first. The revision is not kept: the
@@ -838,28 +840,58 @@ mod tests {
         }
     }
 
-    #[test]
-    fn coalesce_keeps_last() {
-        let upsert = Request::Upsert {
-            req: 10,
+    fn upsert(req: u64) -> Request {
+        Request::Upsert {
+            req,
             notes: Vec::new(),
-        };
-        let mut queue = VecDeque::from([search(1), upsert.clone(), search(2), search(3)]);
+        }
+    }
 
-        let (latest, superseded) = coalesce_searches(&mut queue);
+    #[test]
+    fn coalesce_keeps_last_in_its_place() {
+        let mut queue = VecDeque::from([search(1), upsert(10), search(2), search(3)]);
 
-        assert_eq!(latest, Some(search(3)));
+        let superseded = coalesce_searches(&mut queue);
+
         assert_eq!(superseded, [1, 2]);
-        assert_eq!(queue, [upsert]);
+        assert_eq!(queue, [upsert(10), search(3)]);
+    }
+
+    #[test]
+    fn coalesce_never_moves_a_search_before_a_change() {
+        let mut queue = VecDeque::from([search(1), upsert(10), search(2)]);
+
+        let superseded = coalesce_searches(&mut queue);
+
+        assert_eq!(superseded, [1]);
+        assert_eq!(
+            queue,
+            [upsert(10), search(2)],
+            "the upsert that came first is applied first"
+        );
+    }
+
+    #[test]
+    fn coalesce_keeps_changes_after_the_last_search() {
+        let remove = Request::Remove {
+            req: 11,
+            items: Vec::new(),
+        };
+        let mut queue = VecDeque::from([search(1), search(2), remove.clone()]);
+
+        let superseded = coalesce_searches(&mut queue);
+
+        assert_eq!(superseded, [1]);
+        assert_eq!(queue, [search(2), remove]);
     }
 
     #[test]
     fn coalesce_without_searches_changes_nothing() {
         let reset = Request::Reset { req: 4 };
-        let mut queue = VecDeque::from([reset.clone()]);
+        let mut queue = VecDeque::from([reset.clone(), search(5)]);
 
-        assert_eq!(coalesce_searches(&mut queue), (None, Vec::new()));
-        assert_eq!(queue, [reset]);
+        assert_eq!(coalesce_searches(&mut queue), Vec::<u64>::new());
+        assert_eq!(queue, [reset, search(5)]);
     }
 
     #[test]
