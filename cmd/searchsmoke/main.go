@@ -150,8 +150,14 @@ func waitSemantic(ctx context.Context, events <-chan usecase.SearchEvent, state 
 	return state, nil
 }
 
-// searchNote indexes one note and returns the number of its hits.
+// searchNote indexes one note and returns the number of its hits. It resets
+// the index first, as every rebuild of Smartnote does: a worker answers
+// searches only after its first reset.
 func searchNote(ctx context.Context, engine *searchworker.Engine) (int, error) {
+	if err := engine.Reset(ctx); err != nil {
+		return 0, fmt.Errorf("reset: %w", err)
+	}
+
 	note := usecase.IndexedNote{ID: uuid.New(), Rev: 1, Name: "smoke", Info: smokeText}
 	if err := engine.Upsert(ctx, []usecase.IndexedNote{note}); err != nil {
 		return 0, fmt.Errorf("upsert: %w", err)
