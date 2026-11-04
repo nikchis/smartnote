@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SearchHitDTO } from "./api";
 import { scrollTopFor, textMatches } from "./jump";
 
@@ -45,9 +45,30 @@ describe("scrollTopFor", () => {
 
   afterEach(() => {
     area.remove();
+    vi.restoreAllMocks();
   });
 
-  it("grows with the number of the line", () => {
+  function longArea(lines: number): HTMLTextAreaElement {
+    const a = document.createElement("textarea");
+    a.style.font = "16px monospace";
+    a.style.lineHeight = "20px";
+    a.value = Array.from({ length: lines }, (_, i) => `line ${i + 1}`).join("\n");
+    document.body.append(a);
+    return a;
+  }
+
+  it("takes the line from the mirror when there is layout", () => {
+    area = longArea(400);
+    // A laid-out mirror: rows of 19 px, less than the line-height of the style.
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(400 * 19);
+    vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(function (this: HTMLElement) {
+      return this.tagName === "SPAN" ? 320 * 19 : 0;
+    });
+
+    expect(scrollTopFor(area, area.value.indexOf("line 321\n"))).toBe(320 * 19);
+  });
+
+  it("without layout grows with the number of the line", () => {
     area = document.createElement("textarea");
     area.style.font = "16px monospace";
     area.style.lineHeight = "20px";

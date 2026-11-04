@@ -60,10 +60,13 @@ export function scrollTopFor(area: HTMLTextAreaElement, offset: number): number 
   mirror.append(before, marker);
   document.body.append(mirror);
   const line = lineHeight(style);
-  // Each line break starts at least one visual line: the bound holds where
-  // no layout is computed, the marker counts the wrapped lines as well.
-  const breaks = before.split("\n").length - 1;
-  const top = Math.max(marker.offsetTop, (parseFloat(style.paddingTop) || 0) + breaks * line);
+  // The marker is where the line starts, wrapped lines counted. Without layout
+  // (no WebView, as in tests) every element is 0 high: then each line break
+  // counts as one line of the style's height.
+  const top =
+    mirror.offsetHeight > 0
+      ? marker.offsetTop
+      : (parseFloat(style.paddingTop) || 0) + (before.split("\n").length - 1) * line;
   mirror.remove();
 
   return Math.max(Math.round(top - Math.max(area.clientHeight - line, 0) / 2), 0);

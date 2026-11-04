@@ -27,4 +27,7 @@ export default defineConfig({
     strictPort: true,
   },
   plugins: [svelte(), wails("./bindings"), devInlineStyles()],
+  // Component tests mount Svelte components in happy-dom: Vitest must take the
+  // browser build of Svelte, not the server one.
+  resolve: process.env.VITEST ? { conditions: ["browser"] } : undefined,
 });

@@ -210,7 +210,7 @@ describe("highlight", () => {
 });
 
 describe("isFindShortcut", () => {
-  const key = (init: KeyboardEventInit) => ({ key: "f", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...init });
+  const key = (init: KeyboardEventInit) => ({ key: "f", code: "KeyF", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...init });
 
   it("is Ctrl+F off macOS and Cmd+F on macOS", () => {
     expect(isFindShortcut(key({ ctrlKey: true }), false)).toBe(true);
@@ -220,9 +220,17 @@ describe("isFindShortcut", () => {
     expect(isFindShortcut(key({ ctrlKey: true }), true)).toBe(false);
   });
 
+  it("is the F key in a Cyrillic layout, where the key is а", () => {
+    expect(isFindShortcut(key({ key: "а", ctrlKey: true }), false)).toBe(true);
+    expect(isFindShortcut(key({ key: "а", metaKey: true }), true)).toBe(true);
+    expect(isFindShortcut(key({ key: "а", metaKey: true }), false)).toBe(false);
+    expect(isFindShortcut(key({ key: "а", ctrlKey: true, altKey: true }), false)).toBe(false);
+    expect(isFindShortcut(key({ key: "п", code: "KeyG", ctrlKey: true }), false)).toBe(false);
+  });
+
   it("is not F with Alt or Shift, nor another key", () => {
     expect(isFindShortcut(key({ ctrlKey: true, altKey: true }), false)).toBe(false);
     expect(isFindShortcut(key({ ctrlKey: true, shiftKey: true }), false)).toBe(false);
-    expect(isFindShortcut(key({ key: "g", ctrlKey: true }), false)).toBe(false);
+    expect(isFindShortcut(key({ key: "g", code: "KeyG", ctrlKey: true }), false)).toBe(false);
   });
 });

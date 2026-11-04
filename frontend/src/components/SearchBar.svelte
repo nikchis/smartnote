@@ -20,10 +20,15 @@
   const line = $derived(box.statusLine());
   const shown = $derived(open && box.query.trim() !== "" && (box.hits.length > 0 || line !== ""));
 
-  /** focus puts the focus on the field with its text selected, as Ctrl+F does in a browser. */
+  /**
+   * focus puts the focus on the field with its text selected, as Ctrl+F does
+   * in a browser, and shows the hits; the field may have the focus already,
+   * as after a jump to a note that is gone, so no focus event opens them.
+   */
   export function focus(): void {
     field?.focus();
     field?.select();
+    open = true;
   }
 
   $effect(() => {

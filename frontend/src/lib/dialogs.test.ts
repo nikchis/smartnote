@@ -38,7 +38,7 @@ describe("dialogs", () => {
   });
 
   it("ask with labels shows them and answers like Yes and No", async () => {
-    const labels = { yes: "Discard", no: "Cancel" };
+    const labels = { yes: "Discard", no: "Cancel", primary: "no" } as const;
     const discard = dialogs.ask("Discard unsaved changes?", labels);
     expect(currentDialog()).toEqual({ kind: "ask", message: "Discard unsaved changes?", labels });
     answer("yes");

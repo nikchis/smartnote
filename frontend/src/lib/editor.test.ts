@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { NoteDTO, SearchHitDTO, VersionDTO } from "./api";
-import type { Dialogs } from "./dialogs.svelte";
+import type { Dialogs, Labels } from "./dialogs.svelte";
 import { Editor, type NotesApi } from "./editor.svelte";
 import { SearchBox, type SearchApi } from "./search.svelte";
 
@@ -41,6 +41,7 @@ class FakeNotes implements NotesApi {
 
 class FakeDialogs implements Dialogs {
   shown: string[] = [];
+  labels: (Labels | undefined)[] = [];
   answer = true;
   async info(msg: string) {
     this.shown.push(`info: ${msg}`);
@@ -48,7 +49,8 @@ class FakeDialogs implements Dialogs {
   async error(msg: string) {
     this.shown.push(`error: ${msg}`);
   }
-  async ask(msg: string, labels?: { yes: string; no: string }) {
+  async ask(msg: string, labels?: Labels) {
+    this.labels.push(labels);
     this.shown.push(labels ? `ask: ${msg} [${labels.yes}/${labels.no}]` : `ask: ${msg}`);
     return this.answer;
   }
@@ -184,6 +186,7 @@ describe("Editor", () => {
     d.answer = false;
     await expect(ed.openHit(hit("b", 1, 0, "second"))).resolves.toBe("cancelled");
     expect(d.shown).toEqual([DISCARD]);
+    expect(d.labels).toEqual([{ yes: "Discard", no: "Cancel", primary: "no" }]);
     expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "unsaved" });
 
     d.answer = true;

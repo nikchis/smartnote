@@ -149,10 +149,13 @@ export function highlight(snippet: string, marks: number[][] | null): Piece[] {
   return pieces;
 }
 
-type Keys = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">;
+type Keys = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">;
 
-/** isFindShortcut tells whether e is Ctrl+F, or Cmd+F on macOS. */
+/**
+ * isFindShortcut tells whether e is Ctrl+F, or Cmd+F on macOS. The F is the
+ * letter in a Latin layout or the F key in any other, as а in Russian.
+ */
 export function isFindShortcut(e: Keys, mac: boolean): boolean {
   const command = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-  return command && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f";
+  return command && !e.altKey && !e.shiftKey && (e.key.toLowerCase() === "f" || e.code === "KeyF");
 }

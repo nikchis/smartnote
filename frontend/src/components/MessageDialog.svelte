@@ -6,10 +6,12 @@
   import { modal } from "../lib/modal";
 
   const dialog = $derived(currentDialog());
+  /** primary is OK or Yes; a question may give the focus to No instead (Labels.primary). */
   let primary: HTMLButtonElement | undefined = $state();
+  let noButton: HTMLButtonElement | undefined = $state();
 
   $effect(() => {
-    if (dialog) primary?.focus();
+    if (dialog) (dialog.labels?.primary === "no" ? noButton : primary)?.focus();
   });
 
   function onkeydown(e: KeyboardEvent) {
@@ -38,7 +40,7 @@
       <div class="buttons">
         {#if dialog.kind === "ask" || dialog.kind === "choose"}
           <button bind:this={primary} onclick={() => answer("yes")}>{dialog.labels?.yes ?? "Yes"}</button>
-          <button onclick={() => answer("no")}>{dialog.labels?.no ?? "No"}</button>
+          <button bind:this={noButton} onclick={() => answer("no")}>{dialog.labels?.no ?? "No"}</button>
           {#if dialog.kind === "choose"}
             <button onclick={() => answer("cancel")}>Cancel</button>
           {/if}

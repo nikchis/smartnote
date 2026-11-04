@@ -26,7 +26,9 @@ export type Place = { field: "name" | "info"; start: number; end: number };
 /** Jump is how openHit ended: the place is selected, the note is open without a selection, the draft was kept, or the note is gone. */
 export type Jump = "selected" | "unselected" | "cancelled" | "gone";
 
-const DISCARD = { message: "Discard unsaved changes?", labels: { yes: "Discard", no: "Cancel" } } as const;
+// Cancel has the focus: the question comes up on Enter in the search field,
+// and a held or repeated Enter must not discard the draft.
+const DISCARD = { message: "Discard unsaved changes?", labels: { yes: "Discard", no: "Cancel", primary: "no" } } as const;
 
 export class Editor {
   notes: NoteDTO[] = $state([]);

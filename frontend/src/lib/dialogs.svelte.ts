@@ -7,8 +7,11 @@ export type DialogKind = "info" | "error" | "ask" | "choose";
 /** Answer is the button pressed; OK of info and error is "yes". */
 export type Answer = "yes" | "no" | "cancel";
 
-/** Labels name the Yes and No buttons of a question, as Discard and Cancel. */
-export type Labels = { yes: string; no: string };
+/**
+ * Labels name the Yes and No buttons of a question, as Discard and Cancel;
+ * primary is the button with the focus, Yes unless it is "no".
+ */
+export type Labels = { yes: string; no: string; primary?: "yes" | "no" };
 
 type Pending = { kind: DialogKind; message: string; labels?: Labels; resolve: (a: Answer) => void };
 
