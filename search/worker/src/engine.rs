@@ -43,6 +43,8 @@ pub struct Engine {
     /// document of a removed note can never be taken for another note.
     next_key: NoteKey,
     lexical: Option<LexicalIndex>,
+    /// Lowest score the semantic list takes: [`TAU`] unless the calibration changes it.
+    tau: f32,
 }
 
 /// A note in memory. No `Debug`: it holds note text.
@@ -93,7 +95,15 @@ impl Engine {
             revs: HashMap::new(),
             next_key: 0,
             lexical: LexicalIndex::new().ok(),
+            tau: TAU,
         }
+    }
+
+    /// Sets the lowest dot product of a chunk with the query that the semantic list takes,
+    /// [`TAU`] by default. Used by the calibration of the threshold (`tests/bench.rs`); the
+    /// worker keeps the default.
+    pub fn set_semantic_threshold(&mut self, tau: f32) {
+        self.tau = tau;
     }
 
     /// Whether word search is available (see the type documentation).
@@ -222,7 +232,7 @@ impl Engine {
     /// at most [`PER_NOTE`] lines of a note; at most `limit` hits.
     ///
     /// The semantic list runs when `q` has semantic text and `qvec` is given: chunks whose dot
-    /// product with the normalized `qvec` is at least [`TAU`].
+    /// product with the normalized `qvec` is at least the threshold ([`TAU`] by default).
     #[must_use]
     pub fn search(&self, q: &Query, qvec: Option<&[f32; DIM]>, limit: usize) -> Vec<Hit> {
         if limit == 0 {
@@ -300,7 +310,7 @@ impl Engine {
         rank::cap(hits, |h| h.note, PER_NOTE, BRANCH_K)
     }
 
-    /// The semantic list (spec §6.7, §6.8): every chunk at or above [`TAU`], best first (ties
+    /// The semantic list (spec §6.7, §6.8): every chunk at or above the threshold, best first (ties
     /// by note and chunk order), placed on a line: the best line of the chunk found by the
     /// word or substring list, otherwise the first non-empty line with the chunk remembered
     /// for the highlight. A line is taken once, by its best chunk.
@@ -322,7 +332,7 @@ impl Engine {
                     .flatten()
                     .map(move |chunk| (rank::dot(&qvec, &chunk.vec), key, note, chunk))
             })
-            .filter(|&(score, ..)| score >= TAU)
+            .filter(|&(score, ..)| score >= self.tau)
             .collect();
         // Chunks of a note are compared by position: `first`, then `last`.
         scored.sort_by(|a, b| {
@@ -746,6 +756,18 @@ mod tests {
             "all below"
         );
         assert_eq!(e.search(&q, None, 10), Vec::<Hit>::new(), "no query vector");
+    }
+
+    #[test]
+    fn search_semantic_threshold_set() {
+        let mut e = engine(vec![note("a", 1, "first", "alpha line")]);
+        e.set_chunks("a", 1, vec![chunk(1, 1, &at_cos(0.85))]);
+        let q = parse_query("unrelated query");
+        assert_eq!(e.search(&q, Some(&axis(0)), 10).len(), 1, "default");
+        e.set_semantic_threshold(0.9);
+        assert_eq!(e.search(&q, Some(&axis(0)), 10), Vec::<Hit>::new());
+        e.set_semantic_threshold(0.84);
+        assert_eq!(e.search(&q, Some(&axis(0)), 10).len(), 1);
     }
 
     #[test]

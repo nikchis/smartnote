@@ -79,6 +79,20 @@ search-test: ## Run the tests of the Rust search worker, with the probe binaries
 	cd search && ORT_DISABLE_TELEMETRY=1 $(SEARCH_MODEL_ENV) $(CARGO) test --workspace --features test-probes $(SEARCH_MODEL_ARGS)
 	cd search && ORT_DISABLE_TELEMETRY=1 $(CARGO) test --release -p worker --features test-probes --test zalloc_dump
 
+# Benchmark of the search (spec §12.4): the release worker and the notes of the benchmark set
+SEARCH_TARGET_DIR := $(or $(CARGO_TARGET_DIR),$(CURDIR)/search/target)
+BENCH_CORPUS ?= $(SEARCH_TARGET_DIR)/bench-corpus.json
+
+search-bench: ## Measure search quality and criterion 4 on the benchmark set (needs the model; takes minutes, keep the machine idle)
+	@echo "+ $@"
+	cd search && ORT_DISABLE_TELEMETRY=1 SMARTNOTE_BENCH=sweep SMARTNOTE_MODEL_DIR=$(CURDIR)/build/model SMARTNOTE_ORT_LIB=$(firstword $(wildcard $(CURDIR)/build/ort/libonnxruntime.*)) \
+		$(CARGO) test --release -p worker --test bench -- --ignored --nocapture
+	cd search && $(CARGO) build --release -p worker --bin smartnote-search
+	cd search && $(CARGO) run --release -p worker --example bench_corpus -- $(BENCH_CORPUS)
+	SMARTNOTE_SEARCH_BIN=$(SEARCH_TARGET_DIR)/release/smartnote-search SMARTNOTE_BENCH_CORPUS=$(BENCH_CORPUS) \
+	SMARTNOTE_MODEL_DIR=$(CURDIR)/build/model SMARTNOTE_ORT_LIB=$(firstword $(wildcard $(CURDIR)/build/ort/libonnxruntime.*)) \
+		$(GO) test -tags integration -run '^$$' -bench BenchmarkSearchService -benchtime 2000x -timeout 60m -v ./internal/adapter/wailsui
+
 search-lint: ## Check format, clippy and cargo-deny policy of the Rust search worker
 	@echo "+ $@"
 	cd search && $(CARGO) fmt --check
@@ -97,4 +111,4 @@ smoke: ## Start the AppImage in a clean ubuntu:26.04 container (task smoke:appim
 	@echo "+ $@"
 	$(TASK) smoke:appimage
 
-.PHONY: help all dep frontend test integration lint lint-fix fmt install-lint search-test search-lint build package smoke
+.PHONY: help all dep frontend test integration lint lint-fix fmt install-lint search-test search-bench search-lint build package smoke

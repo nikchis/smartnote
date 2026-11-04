@@ -29,6 +29,11 @@ required-features = ["test-probes"]
 name = "embed"
 harness = false
 
+# Quality of the search on the benchmark set (spec §12.4); loads ONNX Runtime like `embed`.
+[[test]]
+name = "bench"
+harness = false
+
 [features]
 test-probes = []
 

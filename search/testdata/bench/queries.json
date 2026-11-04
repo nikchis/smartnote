@@ -1,0 +1,196 @@
+{
+  "plants": [
+    {"note": 10, "kind": "ru", "title": "Ремонт велосипеда", "lines": [
+      "Отнёс велосипед в мастерскую на Профсоюзной: нужно заменить цепь и переднюю звёздочку.",
+      "Мастер сказал, что задний переключатель тоже износился, ремонт обойдётся в 4500 рублей.",
+      "Забрать можно в четверг после шести вечера, квитанция лежит в кошельке."
+    ]},
+    {"note": 14, "kind": "en", "title": "Car rental in Tbilisi", "lines": [
+      "Rented a car at Tbilisi airport for five days: a Toyota RAV4 with unlimited mileage.",
+      "The deposit was 300 lari and came back two days after the drop-off.",
+      "Fuel policy is full to full; the rental desk closes at 23:00."
+    ]},
+    {"note": 21, "kind": "ru", "title": "Страховка", "lines": [
+      "Не забыть продлить полис ОСАГО до 15 марта, иначе штраф.",
+      "Агент Светлана предлагает скидку 10% при оплате онлайн, документы прислать на почту."
+    ]},
+    {"note": 25, "kind": "en", "title": "Sourdough starter", "lines": [
+      "Feed the sourdough starter twice a day with equal parts rye flour and water.",
+      "After a week it doubled in four hours, ready for the first loaf."
+    ]},
+    {"note": 17, "kind": "code", "title": "retry helper", "lines": [
+      "func retryWithBackoff(ctx context.Context, attempts int, fn func() error) error {",
+      "\tdelay := 100 * time.Millisecond",
+      "\tfor i := 0; i < attempts; i++ {",
+      "\t\tif err := fn(); err == nil {",
+      "\t\t\treturn nil",
+      "\t\t}",
+      "\t\tselect {",
+      "\t\tcase <-ctx.Done():",
+      "\t\t\treturn ctx.Err()",
+      "\t\tcase <-time.After(delay):",
+      "\t\t}",
+      "\t\tdelay *= 2",
+      "\t}",
+      "\treturn errors.New(\"retry: attempts exhausted\")",
+      "}"
+    ]},
+    {"note": 28, "kind": "code", "title": "temp dir guard", "lines": [
+      "impl Drop for TempDir {",
+      "    fn drop(&mut self) {",
+      "        let _ = std::fs::remove_dir_all(&self.path);",
+      "    }",
+      "}",
+      "let port: u16 = env::var(\"APP_PORT\").ok().and_then(|v| v.parse().ok()).unwrap_or(8080);"
+    ]},
+    {"note": 37, "kind": "code", "title": "phone numbers", "lines": [
+      "def normalize_phone(raw: str) -> str:",
+      "    digits = re.sub(r\"\\D\", \"\", raw)",
+      "    if len(digits) == 11 and digits.startswith(\"8\"):",
+      "        digits = \"7\" + digits[1:]",
+      "    return \"+\" + digits"
+    ]},
+    {"note": 48, "kind": "code", "title": "inactive customers query", "lines": [
+      "SELECT u.email, count(o.id) AS orders",
+      "FROM users u",
+      "LEFT JOIN orders o ON o.user_id = u.id AND o.created_at >= now() - interval '30 days'",
+      "GROUP BY u.email",
+      "HAVING count(o.id) = 0;"
+    ]},
+    {"note": 57, "kind": "code", "title": "debounce", "lines": [
+      "const debounce = (fn, ms) => {",
+      "  let timer;",
+      "  return (...args) => {",
+      "    clearTimeout(timer);",
+      "    timer = setTimeout(() => fn(...args), ms);",
+      "  };",
+      "};"
+    ]},
+    {"note": 68, "kind": "code", "title": "web01 maintenance", "lines": [
+      "find /var/log/nginx -name '*.gz' -mtime +14 -delete",
+      "rsync -avz --delete ./dist/ deploy@web01:/srv/www/"
+    ]},
+    {"note": 19, "kind": "mixed", "title": "Платформа / platform sync", "lines": [
+      "Митинг с командой платформы: решили перейти на gRPC streaming для событий заказов.",
+      "Action item: Олег обновит events.proto до пятницы.",
+      "rpc Subscribe(SubscribeRequest) returns (stream Event);"
+    ]},
+    {"note": 29, "kind": "mixed", "title": "Поход / camping list", "lines": [
+      "Список покупок для похода: tent, sleeping bag, газовая горелка, headlamp, аптечка.",
+      "Не забыть power bank на 20000 mAh и запасные батарейки для фонарика."
+    ]},
+    {"note": 32, "kind": "ru", "title": "Борщ", "lines": [
+      "Свёклу натереть на крупной тёрке и тушить с томатной пастой десять минут.",
+      "Капусту добавить за пятнадцать минут до готовности, чеснок и зелень — в самом конце."
+    ]},
+    {"note": 36, "kind": "en", "title": "Quarterly OKR review", "lines": [
+      "Retention target of 85% missed by three points; churn mostly comes from the annual plan.",
+      "Next quarter: onboarding emails, an in-app tour and a pricing page experiment."
+    ]},
+    {"note": 43, "kind": "ru", "title": "Барсик", "lines": [
+      "Барсику поставили прививку от бешенства у ветеринара, следующая через год.",
+      "Ветеринар посоветовал сменить корм на гипоаллергенный и взвесить кота через месяц."
+    ]},
+    {"note": 44, "kind": "en", "title": "Incident: node pool b2", "lines": [
+      "Pod evictions on node pool b2 because of memory pressure; set requests equal to limits.",
+      "Postmortem: the alert on kube_node_status_condition fired twenty minutes late."
+    ]},
+    {"note": 50, "kind": "ru", "title": "Налоговый вычет", "lines": [
+      "Подать декларацию 3-НДФЛ за лечение зубов до 30 апреля.",
+      "Нужны справка об оплате медицинских услуг и копия лицензии клиники."
+    ]},
+    {"note": 54, "kind": "en", "title": "Moving day", "lines": [
+      "Book the freight elevator for Saturday 9:00–12:00 and tell the concierge.",
+      "Label the boxes by room; fragile kitchenware goes into the blue crates."
+    ]},
+    {"note": 61, "kind": "ru", "title": "Испанский", "lines": [
+      "Повторить спряжение глаголов ser и estar, сделать двадцать карточек в Anki.",
+      "Разговорный клуб по средам в 19:30 на Покровке."
+    ]},
+    {"note": 77, "kind": "code", "title": "config defaults", "lines": [
+      "type Config struct {",
+      "\tAddr    string        `yaml:\"addr\"`",
+      "\tTimeout time.Duration `yaml:\"timeout\"`",
+      "}",
+      "if cfg.Timeout <= 0 {",
+      "\tcfg.Timeout = 5 * time.Second",
+      "}"
+    ]},
+    {"note": 70, "kind": "ru", "title": "Дача в мае", "lines": [
+      "Высадить рассаду томатов в теплицу после 20 мая, когда пройдут заморозки.",
+      "Купить шланг для капельного полива и мульчу из соломы."
+    ]},
+    {"note": 65, "kind": "en", "title": "Guitar practice", "lines": [
+      "Practise the barre chords F and Bm for fifteen minutes a day with a metronome at 60 bpm.",
+      "Next lesson: strumming patterns for the song in 6/8."
+    ]}
+  ],
+  "queries": [
+    {"q": "велосипеды мастерская", "kind": "word", "expect": 10},
+    {"q": "починка байка", "kind": "semantic", "expect": 10},
+    {"q": "bicycle chain replacement", "kind": "cross", "expect": 10},
+    {"q": "аренда автомобиля", "kind": "cross", "expect": 14},
+    {"q": "залог за машину в аэропорту", "kind": "cross", "expect": 14},
+    {"q": "renting cars", "kind": "word", "expect": 14},
+    {"q": "\"unlimited mileage\"", "kind": "phrase", "expect": 14},
+    {"q": "ОСАГО", "kind": "word", "expect": 21},
+    {"q": "автостраховка заканчивается", "kind": "semantic", "expect": 21},
+    {"q": "car insurance renewal deadline", "kind": "cross", "expect": 21},
+    {"q": "feeding starters", "kind": "word", "expect": 25},
+    {"q": "закваска для хлеба", "kind": "cross", "expect": 25},
+    {"q": "retryWithBackoff", "kind": "code", "expect": 17},
+    {"q": "WithBack", "kind": "substring", "expect": 17},
+    {"q": "delay *= 2", "kind": "operator", "expect": 17},
+    {"q": "exponential backoff between attempts", "kind": "semantic", "expect": 17},
+    {"q": "повтор запроса с растущей задержкой", "kind": "cross", "expect": 17},
+    {"q": "remove_dir_all", "kind": "code", "expect": 28},
+    {"q": "|v| v.parse()", "kind": "operator", "expect": 28},
+    {"q": "== 11", "kind": "operator", "expect": 37},
+    {"q": "привести номер телефона к международному формату", "kind": "cross", "expect": 37},
+    {"q": "HAVING count(o.id) = 0", "kind": "operator", "expect": 48},
+    {"q": "users without orders in the last month", "kind": "semantic", "expect": 48},
+    {"q": "пользователи без заказов", "kind": "cross", "expect": 48},
+    {"q": "(...args)", "kind": "operator", "expect": 57},
+    {"q": "clearTimeout", "kind": "code", "expect": 57},
+    {"q": "wait until the user stops typing before calling", "kind": "semantic", "expect": 57},
+    {"q": "-mtime +14", "kind": "operator", "expect": 68},
+    {"q": "удалить старые архивы логов", "kind": "cross", "expect": 68},
+    {"q": "events.proto", "kind": "substring", "expect": 19},
+    {"q": "\"stream Event\"", "kind": "phrase", "expect": 19},
+    {"q": "договорились о потоковой передаче событий", "kind": "semantic", "expect": 19},
+    {"q": "горелки", "kind": "word", "expect": 29},
+    {"q": "снаряжение для ночёвки в лесу", "kind": "semantic", "expect": 29},
+    {"q": "свекла тушить", "kind": "word", "expect": 32},
+    {"q": "beetroot soup recipe", "kind": "cross", "expect": 32},
+    {"q": "\"in-app tour\"", "kind": "phrase", "expect": 36},
+    {"q": "отток клиентов", "kind": "cross", "expect": 36},
+    {"q": "прививки ветеринар", "kind": "word", "expect": 43},
+    {"q": "cat vaccination", "kind": "cross", "expect": 43},
+    {"q": "kube_node_status_condition", "kind": "code", "expect": 44},
+    {"q": "вытеснение подов из-за нехватки памяти", "kind": "cross", "expect": 44},
+    {"q": "3-НДФЛ", "kind": "substring", "expect": 50},
+    {"q": "tax refund for dental treatment", "kind": "cross", "expect": 50},
+    {"q": "\"freight elevator\"", "kind": "phrase", "expect": 54},
+    {"q": "грузовой лифт для переезда", "kind": "cross", "expect": 54},
+    {"q": "спряжения глаголов", "kind": "word", "expect": 61},
+    {"q": "Spanish verb conjugation practice", "kind": "cross", "expect": 61},
+    {"q": "yaml:\"addr\"", "kind": "operator", "expect": 77},
+    {"q": "<= 0", "kind": "operator", "expect": 77},
+    {"q": "рассада томатов", "kind": "word", "expect": 70},
+    {"q": "tomato seedlings in the greenhouse", "kind": "cross", "expect": 70},
+    {"q": "аккорды на гитаре", "kind": "cross", "expect": 65},
+    {"q": "practising an instrument every day", "kind": "semantic", "expect": 65},
+    {"q": "qwertyzxcv", "kind": "nonsense", "expect": null},
+    {"q": "ывапролджэ", "kind": "nonsense", "expect": null},
+    {"q": "zxqv blorft wumpus", "kind": "nonsense", "expect": null},
+    {"q": "кщзщ ыфыв щшгн", "kind": "nonsense", "expect": null},
+    {"q": "xj9k2 pq7w", "kind": "nonsense", "expect": null},
+    {"q": "glarbonic fizzwhistle", "kind": "nonsense", "expect": null},
+    {"q": "ъхзщ", "kind": "nonsense", "expect": null},
+    {"q": "vbnmfghj", "kind": "nonsense", "expect": null},
+    {"q": "квантовая хромодинамика", "kind": "absent", "expect": null},
+    {"q": "volcanic eruption Iceland", "kind": "absent", "expect": null},
+    {"q": "керлинг чемпионат", "kind": "absent", "expect": null},
+    {"q": "submarine sonar calibration", "kind": "absent", "expect": null}
+  ]
+}
