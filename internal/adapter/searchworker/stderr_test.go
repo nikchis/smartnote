@@ -32,7 +32,11 @@ func TestStderrFilterKnownLines(t *testing.T) {
 		{"panic at src/worker.rs:10:5", "panic at src/worker.rs:10:5", slog.LevelError},
 		{"panic at <unknown>", "panic at <unknown>", slog.LevelError},
 		{"semantic search unavailable: the CPU has no AVX2", "semantic search unavailable: the CPU has no AVX2", slog.LevelError},
-		{"semantic search unavailable: model files: SHA-256 of model.onnx differs from the pinned digest", "semantic search unavailable: model files: SHA-256 of model.onnx differs from the pinned digest", slog.LevelError},
+		{
+			"semantic search unavailable: model files: SHA-256 of model.onnx differs from the pinned digest",
+			"semantic search unavailable: model files: SHA-256 of model.onnx differs from the pinned digest",
+			slog.LevelError,
+		},
 		{"semantic search unavailable: onnxruntime: reading a model file failed", "semantic search unavailable: onnxruntime: reading a model file failed", slog.LevelError},
 		{"semantic search unavailable: loading the ONNX Runtime library failed", "semantic search unavailable: loading the ONNX Runtime library failed", slog.LevelError},
 		{"semantic search unavailable: model: ONNX Runtime failed", "semantic search unavailable: model: ONNX Runtime failed", slog.LevelError},
@@ -143,7 +147,7 @@ func TestStderrFormsCoverWorker(t *testing.T) {
 			return nil
 		}
 
-		b, err := os.ReadFile(path) //nolint:gosec // a path below the repository's worker sources
+		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
