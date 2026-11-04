@@ -241,7 +241,9 @@ at a directory.
   stays unavailable until the next start. While no worker is ready, and when a search times out,
   `Search` fails with `usecase.ErrSearchUnavailable` (interface: `Search unavailable`, never
   `No matches`); three search timeouts in a row restart the worker. The search bar searches the
-  current query again when the word search becomes ready.
+  current query again when the word search becomes ready; `usecase.Search` holds the statuses
+  while a rebuild is queued (until its marker command `rebuilt` is reached), so that query never
+  meets the empty index of a new worker.
 - What the worker writes reaches `smartnote.log` only as a closed vocabulary: a stderr line is
   logged when it matches a form of `internal/adapter/searchworker/stderr.go`, otherwise as
   `search worker stderr: unrecognized line` with its length; the `msg` of an error reply only when
