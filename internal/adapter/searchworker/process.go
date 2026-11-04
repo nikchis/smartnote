@@ -116,6 +116,9 @@ type generation struct {
 	stopOnce sync.Once
 
 	searchTimeouts atomic.Int32 // searches in a row that timed out
+	// wasReset is set by the ok of the first reset: from then on the index
+	// holds what the rebuild sends, and searches go to the worker.
+	wasReset atomic.Bool
 
 	wg sync.WaitGroup
 }

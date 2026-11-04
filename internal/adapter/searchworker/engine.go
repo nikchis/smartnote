@@ -227,9 +227,16 @@ func (e *Engine) settledErr() error {
 	return nil
 }
 
-// Reset drops the index.
+// Reset drops the index. Its ok makes the worker answer searches: every
+// rebuild starts with a reset, and before the first one a new worker's index
+// is empty, not the notes.
 func (e *Engine) Reset(ctx context.Context) error {
-	return e.command(ctx, func(req uint64) any { return &resetMsg{T: tReset, Req: req} })
+	g, err := e.command(ctx, func(req uint64) any { return &resetMsg{T: tReset, Req: req} })
+	if g != nil {
+		g.wasReset.Store(true)
+	}
+
+	return err
 }
 
 // Upsert adds or replaces up to 100 notes; more are an error, as the worker
@@ -259,7 +266,7 @@ func (e *Engine) Upsert(ctx context.Context, notes []usecase.IndexedNote) error 
 
 	upsert := func(req uint64) any { return &upsertMsg{T: tUpsert, Req: req, Notes: in} }
 
-	err := e.command(ctx, upsert)
+	_, err := e.command(ctx, upsert)
 	if !cached || !errors.Is(err, errFrameTooLarge) {
 		return err
 	}
@@ -270,7 +277,9 @@ func (e *Engine) Upsert(ctx context.Context, notes []usecase.IndexedNote) error 
 		in[i].Emb = nil
 	}
 
-	return e.command(ctx, upsert)
+	_, err = e.command(ctx, upsert)
+
+	return err
 }
 
 // asShown is s with every byte of invalid UTF-8 replaced by U+FFFD, as
@@ -294,15 +303,18 @@ func (e *Engine) Remove(ctx context.Context, ids []usecase.IndexedRemoval) error
 		items[i] = removalIn{ID: r.ID.String(), Rev: r.Rev}
 	}
 
-	return e.command(ctx, func(req uint64) any { return &removeMsg{T: tRemove, Req: req, Items: items} })
+	_, err := e.command(ctx, func(req uint64) any { return &removeMsg{T: tRemove, Req: req, Items: items} })
+
+	return err
 }
 
-// command sends an index command and waits for its ok. A timeout kills the
-// worker, which the supervisor then restarts.
-func (e *Engine) command(ctx context.Context, msg func(req uint64) any) error {
+// command sends an index command and waits for its ok; it returns the worker
+// that answered ok. A timeout kills the worker, which the supervisor then
+// restarts.
+func (e *Engine) command(ctx context.Context, msg func(req uint64) any) (*generation, error) {
 	g, err := e.current()
 	if g == nil {
-		return err // nil after giving up: the engine is off
+		return nil, err // nil after giving up: the engine is off
 	}
 
 	req := e.req.Add(1)
@@ -313,26 +325,27 @@ func (e *Engine) command(ctx context.Context, msg func(req uint64) any) error {
 			g.kill(err)
 		}
 
-		return e.callErr(err)
+		return nil, e.callErr(err)
 	}
 
 	switch r := reply.(type) {
 	case *okMsg:
-		return nil
+		return g, nil
 	case *errorMsg:
-		return fmt.Errorf("search worker: %s", e.out.errorText(r))
+		return nil, fmt.Errorf("search worker: %s", e.out.errorText(r))
 	default:
 		err := fmt.Errorf("%w: %T answers a command", errProtocol, reply)
 		g.kill(err)
 
-		return fmt.Errorf("search worker: %w", err)
+		return nil, fmt.Errorf("search worker: %w", err)
 	}
 }
 
 // Search searches the index for at most limit hits. Without a ready worker,
-// or when the worker does not answer within the search timeout, it fails
-// with usecase.ErrSearchUnavailable: the search could not run, which is not
-// an empty result. The third timeout in a row restarts the worker.
+// before the worker's first reset, or when the worker does not answer within
+// the search timeout, it fails with usecase.ErrSearchUnavailable: the search
+// could not run, which is not an empty result. The third timeout in a row
+// restarts the worker.
 func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase.SearchHit, error) {
 	g, err := e.current()
 	if g == nil {
@@ -341,6 +354,12 @@ func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase
 		}
 
 		return nil, fmt.Errorf("search worker: %w", err)
+	}
+
+	// A new worker's index is empty until the rebuild that starts with a
+	// reset: usecase.Search may not have handled Restarted yet.
+	if !g.wasReset.Load() {
+		return nil, fmt.Errorf("search worker: index not rebuilt yet: %w", usecase.ErrSearchUnavailable)
 	}
 
 	if limit <= 0 {

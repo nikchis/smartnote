@@ -56,6 +56,11 @@ func TestEngineRealWorker(t *testing.T) {
 	ctx := t.Context()
 	note := testNote("if (a == b)")
 
+	// A new worker answers searches only after its first reset.
+	if err := e.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
 	if err := e.Upsert(ctx, []usecase.IndexedNote{note}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -81,6 +86,16 @@ func TestEngineRealWorker(t *testing.T) {
 
 	if hits, err = e.Search(ctx, marker, 10); err != nil || len(hits) == 0 {
 		t.Fatalf("Search of the marker: %v, %v", hits, err)
+	}
+
+	// Invalid UTF-8 of a note does not make the worker reject the message.
+	broken := testNote("bad \xff byte")
+	if err := e.Upsert(ctx, []usecase.IndexedNote{broken}); err != nil {
+		t.Fatalf("Upsert of invalid UTF-8: %v", err)
+	}
+
+	if hits, err = e.Search(ctx, "byte", 10); err != nil || len(hits) == 0 || e.liveGen.Load() != 1 {
+		t.Fatalf("Search after invalid UTF-8: %v, %v, generation %d", hits, err, e.liveGen.Load())
 	}
 
 	began := time.Now()

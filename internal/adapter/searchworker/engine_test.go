@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
@@ -531,6 +532,10 @@ func TestEngineSearchTimeout(t *testing.T) {
 	e := newTestEngine(t, "ignore-search", func(c *Config) { c.Timeouts.Search = 200 * time.Millisecond })
 	e.start(t)
 
+	if err := e.Reset(t.Context()); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
 	hits, err := e.Search(t.Context(), "query", 10)
 	if !errors.Is(err, usecase.ErrSearchUnavailable) || len(hits) != 0 {
 		t.Fatalf("Search: %v, %v; want no hits and ErrSearchUnavailable", hits, err)
@@ -559,6 +564,10 @@ func TestEngineSearchTimeoutsRestart(t *testing.T) {
 
 	e := newTestEngine(t, "ignore-search", func(c *Config) { c.Timeouts.Search = 100 * time.Millisecond })
 	e.start(t)
+
+	if err := e.Reset(t.Context()); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
 
 	search := func(query string) error {
 		_, err := e.Search(t.Context(), query, 10)
@@ -593,13 +602,18 @@ func TestEngineSearchTimeoutsRestart(t *testing.T) {
 
 // Between the loss of a worker and the ready of the next one the engine
 // reports the search unavailable, and searches fail with
-// ErrSearchUnavailable instead of finding nothing (spec §9.1, §11).
+// ErrSearchUnavailable instead of finding nothing (spec §9.1, §11); so they
+// do on the next worker until its reset.
 func TestEngineNoWorkerReportsUnavailable(t *testing.T) {
 	t.Parallel()
 
 	after := newManualAfter()
-	e := newTestEngine(t, "exit-after-n", func(c *Config) { c.After = after.After }, "FAKE_N=2")
+	e := newTestEngine(t, "exit-after-n", func(c *Config) { c.After = after.After }, "FAKE_N=3")
 	e.start(t)
+
+	if err := e.Reset(t.Context()); err != nil {
+		t.Fatalf("Reset on the ready worker: %v", err)
+	}
 
 	if _, err := e.Search(t.Context(), "x", 10); err != nil {
 		t.Fatalf("Search on the ready worker: %v", err)
@@ -631,6 +645,14 @@ func TestEngineNoWorkerReportsUnavailable(t *testing.T) {
 	e.waitEvent(t, "ready status", func(ev usecase.SearchEvent) bool {
 		return ev.Status != nil && ev.Status.Lexical == usecase.SearchReady
 	})
+
+	if _, err := e.Search(t.Context(), "x", 10); !errors.Is(err, usecase.ErrSearchUnavailable) {
+		t.Fatalf("Search on the new worker before its reset: %v, want ErrSearchUnavailable", err)
+	}
+
+	if err := e.Reset(t.Context()); err != nil {
+		t.Fatalf("Reset on the new worker: %v", err)
+	}
 
 	if _, err := e.Search(t.Context(), "x", 10); err != nil {
 		t.Fatalf("Search after the restart: %v", err)
@@ -1034,5 +1056,96 @@ func TestEventQueueHoldsStatusOfUnannouncedGeneration(t *testing.T) {
 
 	if item, ok := q.pop(); !ok || item.gen != 0 {
 		t.Fatalf("%+v, %v; want the status of generation 0", item, ok)
+	}
+}
+
+// storedNotes is a usecase.NoteLister over fixed notes.
+type storedNotes []domain.Note
+
+func (n storedNotes) ListNotes(context.Context) ([]domain.Note, error) { return n, nil }
+
+// heldEmbeddings is a usecase.EmbeddingStore without records whose first
+// PutEmbedding waits for release: the event handler of usecase.Search is
+// busy meanwhile.
+type heldEmbeddings struct {
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (e *heldEmbeddings) ListEmbeddings(context.Context) (map[uuid.UUID][]byte, []uuid.UUID, error) {
+	return nil, nil, nil
+}
+
+func (e *heldEmbeddings) DeleteEmbeddings(context.Context, []uuid.UUID) error { return nil }
+
+func (e *heldEmbeddings) PutEmbedding(context.Context, uuid.UUID, []byte) error {
+	e.once.Do(func() {
+		close(e.entered)
+		<-e.release
+	})
+
+	return nil
+}
+
+// A new worker answers from an empty index until its first reset: before
+// usecase.Search handles Restarted (its event handler may be busy), a search
+// must be unavailable, not "No matches" (spec §8.3). Reproduction of the
+// review of PR 6.
+func TestEngineRestartUnavailableUntilReset(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "ok", nil)
+	em := &heldEmbeddings{entered: make(chan struct{}), release: make(chan struct{})}
+	notes := storedNotes{{ID: uuid.New(), Name: "note", Info: "unique existing text"}}
+
+	s, err := usecase.NewSearch(usecase.SearchDeps{
+		Engine: e.Engine, Notes: notes, Embeddings: em, Changes: &usecase.ChangeTracker{},
+		Warn: func(err error) { t.Log(err) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+
+	go func() { done <- s.Run(ctx) }()
+
+	defer func() {
+		close(em.release)
+		cancel()
+		<-done
+	}()
+
+	select {
+	case <-em.entered:
+	case <-time.After(hangGuard):
+		t.Fatal("no embedding stored")
+	}
+
+	if hits, err := s.Query(ctx, "unique", 10); err != nil || len(hits) != 1 {
+		t.Fatalf("Query before the restart: %d hits, %v; want 1", len(hits), err)
+	}
+
+	old, _ := e.current()
+	old.kill(errExited)
+
+	deadline := time.Now().Add(hangGuard)
+
+	for {
+		if g, _ := e.current(); g != nil && g.n > old.n {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("no new worker")
+		}
+
+		time.Sleep(time.Millisecond)
+	}
+
+	hits, err := s.Query(ctx, "unique", 10)
+	if !errors.Is(err, usecase.ErrSearchUnavailable) {
+		t.Fatalf("Query on the new worker before its reset: %d hits, %v; want ErrSearchUnavailable", len(hits), err)
 	}
 }
