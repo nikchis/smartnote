@@ -3,7 +3,7 @@
 #![cfg(all(feature = "test-probes", target_os = "linux"))]
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,10 +12,14 @@ use std::time::{Duration, Instant};
 struct Probe(Child);
 
 impl Probe {
-    /// Starts `probe_zalloc sleep <arg>`.
+    /// Starts `probe_zalloc sleep <arg>`; its output goes to pipes, not to the test log.
     fn start(arg: Option<&str>) -> Self {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_probe_zalloc"));
-        cmd.arg("sleep").args(arg).stdout(Stdio::piped());
+        cmd.arg("sleep")
+            .args(arg)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         Self(cmd.spawn().expect("probe starts"))
     }
 
@@ -91,5 +95,17 @@ fn exits_on_parent_mismatch() {
         assert!(Instant::now() < deadline, "probe still runs after 1 s");
         thread::sleep(Duration::from_millis(10));
     };
+    let mut stderr = String::new();
+    probe
+        .0
+        .stderr
+        .take()
+        .expect("piped stderr")
+        .read_to_string(&mut stderr)
+        .expect("read probe stderr");
     assert!(!status.success(), "{status:?}");
+    assert!(
+        stderr.contains("parent process has changed"),
+        "stderr: {stderr}"
+    );
 }

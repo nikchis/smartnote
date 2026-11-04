@@ -107,6 +107,7 @@ jobs:
           python3 -c 'import ctypes; libc = ctypes.CDLL(None, use_errno=True); print("landlock abi:", libc.syscall(444, None, ctypes.c_size_t(0), ctypes.c_uint32(1)), "errno:", ctypes.get_errno())'
           sysctl kernel.yama.ptrace_scope kernel.core_pattern
       - run: make search-lint
+      # Includes the dump test with the release profile (see Makefile).
       - run: make search-test
 
   package:

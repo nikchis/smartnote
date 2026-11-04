@@ -63,9 +63,12 @@ ifndef IS_LINT_INSTALLED
 	GOBIN=$(abspath $(dir $(LINT_BIN))) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(LINT_VERSION)
 endif
 
+# The dump test runs again with the release profile (opt-level 3, lto thin, panic abort) of the
+# shipped worker: dropping the zeroing as a dead store shows only in optimised code.
 search-test: ## Run the tests of the Rust search worker, with the probe binaries (needs gdb)
 	@echo "+ $@"
 	cd search && $(CARGO) test --workspace --features test-probes
+	cd search && $(CARGO) test --release -p worker --features test-probes --test zalloc_dump
 
 search-lint: ## Check format, clippy and cargo-deny policy of the Rust search worker
 	@echo "+ $@"
