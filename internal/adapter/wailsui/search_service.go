@@ -3,6 +3,7 @@ package wailsui
 import (
 	"log/slog"
 	"sync"
+	"unicode/utf16"
 
 	"github.com/nikchis/smartnote/internal/applog"
 	"github.com/nikchis/smartnote/internal/usecase"
@@ -10,6 +11,11 @@ import (
 
 // searchLimit is the most hits one search returns.
 const searchLimit = 10
+
+// maxQueryUTF16 is the most UTF-16 units of a query: the worker reads no more
+// (search/worker/src/text/query.rs), and the search field of the interface
+// takes no more either (maxlength).
+const maxQueryUTF16 = 256
 
 // searchWarningKind marks the log records of search problems: the search
 // never fails a note operation, so they are warnings, but the error log keeps
@@ -80,11 +86,12 @@ func NewSearchService(env Env, s *usecase.Search, status *SearchStatusFeed) *Sea
 }
 
 // Search returns at most 10 places that match query, best first; none is an
-// empty list. A search the worker cannot run now fails with the code
-// search_unavailable and is not logged: the status events tell why. The search
-// bypasses the queue of index changes (spec §3.3 rule 7).
+// empty list. Only the first 256 UTF-16 units of query count. A search the
+// worker cannot run now fails with the code search_unavailable and is not
+// logged: the status events tell why. The search bypasses the queue of index
+// changes (spec §3.3 rule 7).
 func (s *SearchService) Search(query string) ([]SearchHitDTO, error) {
-	hits, err := s.search.Query(s.env.Ctx, query, searchLimit)
+	hits, err := s.search.Query(s.env.Ctx, truncateQuery(query), searchLimit)
 	if err != nil {
 		return nil, s.env.fail("search", err)
 	}
@@ -95,6 +102,21 @@ func (s *SearchService) Search(query string) ([]SearchHitDTO, error) {
 	}
 
 	return out, nil
+}
+
+// truncateQuery cuts q to maxQueryUTF16 UTF-16 units, never inside a
+// character, so a huge paste is not encoded and sent to the worker.
+func truncateQuery(q string) string {
+	units := 0
+
+	for i, r := range q {
+		units += utf16.RuneLen(r) // a bad byte is U+FFFD, one unit
+		if units > maxQueryUTF16 {
+			return q[:i]
+		}
+	}
+
+	return q
 }
 
 // Status returns the last known status of the search index; the interface

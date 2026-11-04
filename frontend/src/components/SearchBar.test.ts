@@ -83,4 +83,9 @@ describe("SearchBar", () => {
     expect(document.activeElement).toBe(field());
     expect(options()).toEqual(["note b"]);
   });
+
+  it("takes at most the 256 UTF-16 units of a query that the worker reads", () => {
+    // maxlength counts UTF-16 units, as the worker and SearchService.Search do.
+    expect(field().maxLength).toBe(256);
+  });
 });

@@ -5,6 +5,9 @@
   import type { SearchHitDTO } from "../lib/api";
   import { highlight, type SearchBox } from "../lib/search.svelte";
 
+  /** MAX_QUERY is the most UTF-16 units of a query the worker reads; maxlength counts them too. */
+  const MAX_QUERY = 256;
+
   let {
     box,
     nameOf,
@@ -93,6 +96,7 @@
     value={box.query}
     placeholder="Search notes"
     aria-label="Search notes"
+    maxlength={MAX_QUERY}
     role="combobox"
     aria-autocomplete="list"
     aria-expanded={shown}

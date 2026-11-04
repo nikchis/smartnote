@@ -18,18 +18,19 @@ import (
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
-// hitsEngine answers every search with hits or err and records the limit;
-// Search uses no other method of the engine.
+// hitsEngine answers every search with hits or err and records the query
+// and the limit; Search uses no other method of the engine.
 type hitsEngine struct {
 	usecase.SearchEngine
 
 	hits  []usecase.SearchHit
 	err   error
+	query string
 	limit int
 }
 
-func (e *hitsEngine) Search(_ context.Context, _ string, limit int) ([]usecase.SearchHit, error) {
-	e.limit = limit
+func (e *hitsEngine) Search(_ context.Context, query string, limit int) ([]usecase.SearchHit, error) {
+	e.query, e.limit = query, limit
 	return e.hits, e.err
 }
 
@@ -77,6 +78,40 @@ func (r *emitRecorder) emit(name string, data ...any) {
 	defer r.mu.Unlock()
 
 	r.events = append(r.events, emitted{name: name, data: data})
+}
+
+// The worker reads at most 256 UTF-16 units of a query; a longer one, up to
+// a paste over the 16 MiB frame, is cut before it goes there, never inside a
+// character.
+func TestSearchServiceTruncatesQuery(t *testing.T) {
+	a := strings.Repeat("a", 255)
+
+	tests := []struct {
+		name, query, want string
+	}{
+		{name: "short", query: "word", want: "word"},
+		{name: "at the limit", query: a + "b", want: a + "b"},
+		{name: "over the limit", query: a + "bc", want: a + "b"},
+		{name: "surrogate pair across the limit", query: a + "😀", want: a},
+		{name: "2-byte letters", query: strings.Repeat("я", 300), want: strings.Repeat("я", 256)},
+		{name: "huge paste", query: strings.Repeat("x", 17<<20), want: strings.Repeat("x", 256)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := &hitsEngine{}
+			env := Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}
+			svc := NewSearchService(env, newTestSearch(t, engine), NewSearchStatusFeed(usecase.SearchStatus{}, nil))
+
+			if _, err := svc.Search(tt.query); err != nil {
+				t.Fatalf("Search: %v", err)
+			}
+
+			if engine.query != tt.want {
+				t.Errorf("engine got a query of %d bytes, want %q", len(engine.query), tt.want)
+			}
+		})
+	}
 }
 
 func TestSearchServiceMapsHits(t *testing.T) {
