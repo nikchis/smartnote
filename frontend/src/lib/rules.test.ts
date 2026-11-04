@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buttons, settingsButtons, type EditorState } from "./rules";
+import { buttons, hasDraft, settingsButtons, type EditorState } from "./rules";
 
 const base: EditorState = {
   mode: "edit", name: "n", info: "i", savedName: "n", savedInfo: "i", hasVersions: false, hasNotes: true,
@@ -61,6 +61,43 @@ describe("buttons", () => {
 
   it("no notes: the list is inactive", () => {
     expect(buttons({ ...base, mode: "view", hasNotes: false }).list).toBe(false);
+  });
+});
+
+describe("hasDraft", () => {
+  const blank = { name: "", info: "", savedName: "", savedInfo: "" };
+
+  it("view has no draft", () => {
+    expect(hasDraft({ ...base, ...blank, mode: "view" })).toBe(false);
+  });
+
+  it("edit without changes has no draft", () => {
+    expect(hasDraft(base)).toBe(false);
+  });
+
+  it("edit with a changed name or text has a draft", () => {
+    expect(hasDraft({ ...base, name: "m" })).toBe(true);
+    expect(hasDraft({ ...base, info: "j" })).toBe(true);
+  });
+
+  it("edit with CRLF against the saved LF text has no draft", () => {
+    expect(hasDraft({ ...base, info: "a\r\nb", savedInfo: "a\nb" })).toBe(false);
+  });
+
+  it("an empty new note has no draft", () => {
+    expect(hasDraft({ ...base, ...blank, mode: "new" })).toBe(false);
+  });
+
+  it("a new note with a blank name and no text has no draft", () => {
+    expect(hasDraft({ ...base, ...blank, mode: "new", name: "   " })).toBe(false);
+  });
+
+  it("a new note with a text has a draft", () => {
+    expect(hasDraft({ ...base, ...blank, mode: "new", info: "text" })).toBe(true);
+  });
+
+  it("a new note with a name has a draft", () => {
+    expect(hasDraft({ ...base, ...blank, mode: "new", name: "n" })).toBe(true);
   });
 });
 

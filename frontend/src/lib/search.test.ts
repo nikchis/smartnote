@@ -1,0 +1,228 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SearchHitDTO, SearchStatusDTO } from "./api";
+import { highlight, isFindShortcut, SearchBox, type SearchApi } from "./search.svelte";
+
+function hit(noteId: string, line: number, text = "word"): SearchHitDTO {
+  return { noteId, line, start: 0, end: text.length, text, snippet: text, marks: [[0, text.length]], sources: ["words"] };
+}
+
+/** FakeSearch answers each query with the hits of results, or with one of its pending promises. */
+class FakeSearch implements SearchApi {
+  calls: string[] = [];
+  results: Record<string, SearchHitDTO[] | null> = {};
+  fail = false;
+  pending: { query: string; resolve: (hits: SearchHitDTO[]) => void }[] = [];
+  hold = false;
+
+  Search(q: string): Promise<SearchHitDTO[] | null> {
+    this.calls.push(q);
+    if (this.fail) return Promise.reject(new Error('{"code":"internal","message":"search failed"}'));
+    if (this.hold) return new Promise((resolve) => this.pending.push({ query: q, resolve }));
+    return Promise.resolve(this.results[q] ?? []);
+  }
+}
+
+const ready: SearchStatusDTO = { notes: 500, queued: 0, lexical: "ready", semantic: "ready" };
+
+let api: FakeSearch;
+let box: SearchBox;
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  api = new FakeSearch();
+  box = new SearchBox(api);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("SearchBox", () => {
+  it("debounces input", async () => {
+    box.input("n");
+    await vi.advanceTimersByTimeAsync(50);
+    box.input("ne");
+    await vi.advanceTimersByTimeAsync(50);
+    box.input("nee");
+    await vi.advanceTimersByTimeAsync(149);
+    expect(api.calls).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(api.calls).toEqual(["nee"]);
+  });
+
+  it("drops stale responses", async () => {
+    api.hold = true;
+    box.input("first");
+    await vi.advanceTimersByTimeAsync(150);
+    box.input("second");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(api.pending.map((p) => p.query)).toEqual(["first", "second"]);
+
+    api.pending[1].resolve([hit("b", 2)]);
+    await vi.advanceTimersByTimeAsync(0);
+    api.pending[0].resolve([hit("a", 1)]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(box.hits.map((h) => h.noteId)).toEqual(["b"]);
+  });
+
+  it("does not search for a blank query and clears the results", async () => {
+    api.results.word = [hit("a", 1)];
+    box.input("word");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(box.hits).toHaveLength(1);
+
+    box.input("  ");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(api.calls).toEqual(["word"]);
+    expect(box.hits).toEqual([]);
+    expect(box.current()).toBeUndefined();
+  });
+
+  it("treats null results from Go as none", async () => {
+    api.results.word = null;
+    box.input("word");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(box.hits).toEqual([]);
+  });
+
+  it("keeps at most 10 hits", async () => {
+    api.results.word = Array.from({ length: 12 }, (_, i) => hit(`n${i}`, 1));
+    box.input("word");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(box.hits).toHaveLength(10);
+  });
+
+  it("moves selection within bounds", async () => {
+    api.results.word = [hit("a", 1), hit("b", 2), hit("c", 3)];
+    box.input("word");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(box.current()?.noteId).toBe("a");
+
+    box.move(-1);
+    expect(box.selected).toBe(0);
+    box.move(1);
+    box.move(1);
+    box.move(1);
+    expect(box.selected).toBe(2);
+    expect(box.current()?.noteId).toBe("c");
+    box.move(-1);
+    expect(box.current()?.noteId).toBe("b");
+  });
+
+  it("move does nothing without hits", () => {
+    box.move(1);
+    expect(box.selected).toBe(-1);
+    expect(box.current()).toBeUndefined();
+  });
+
+  it("again searches the current query at once and returns its hits", async () => {
+    api.results.word = [hit("a", 1)];
+    box.input("word");
+    const hits = await box.again();
+
+    expect(api.calls).toEqual(["word"]);
+    expect(hits.map((h) => h.noteId)).toEqual(["a"]);
+    expect(box.hits.map((h) => h.noteId)).toEqual(["a"]);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(api.calls).toEqual(["word"]);
+  });
+
+  it("a failed search shows no hits and again returns none", async () => {
+    api.fail = true;
+    box.input("word");
+    await expect(box.again()).resolves.toEqual([]);
+    expect(box.hits).toEqual([]);
+    expect(box.statusLine()).toBe("Search unavailable");
+  });
+
+  it("status from Status() does not replace a newer event", () => {
+    const event = { ...ready, queued: 10 };
+    box.follow(event);
+    box.seed(ready);
+    expect(box.status).toEqual(event);
+
+    const fresh = new SearchBox(api);
+    fresh.seed(ready);
+    expect(fresh.status).toEqual(ready);
+  });
+
+  describe("status line texts", () => {
+    it.each([
+      { name: "nothing known", status: undefined, line: "" },
+      { name: "ready", status: ready, line: "" },
+      { name: "indexing", status: { ...ready, queued: 380 }, line: "Indexing 120 of 500" },
+      { name: "semantic loading", status: { ...ready, queued: 500, semantic: "loading" }, line: "Semantic search is loading" },
+      { name: "semantic unavailable", status: { ...ready, semantic: "unavailable" }, line: "Semantic search unavailable" },
+      { name: "lexical unavailable", status: { ...ready, queued: 3, lexical: "unavailable", semantic: "unavailable" }, line: "Search unavailable" },
+    ])("$name → '$line'", ({ status, line }) => {
+      if (status) box.follow(status);
+      expect(box.statusLine()).toBe(line);
+    });
+
+    it("No matches for a query without hits, before the indexing status", async () => {
+      box.follow({ ...ready, queued: 380 });
+      box.input("nothing");
+      expect(box.statusLine()).toBe("Indexing 120 of 500");
+
+      await vi.advanceTimersByTimeAsync(150);
+      expect(box.statusLine()).toBe("No matches");
+    });
+
+    it("no No matches while the answer to the current query is pending", async () => {
+      box.input("nothing");
+      await vi.advanceTimersByTimeAsync(150);
+      box.input("nothing more");
+      expect(box.statusLine()).toBe("");
+    });
+
+    it("Search unavailable before No matches", async () => {
+      box.follow({ ...ready, lexical: "unavailable" });
+      box.input("nothing");
+      await vi.advanceTimersByTimeAsync(150);
+      expect(box.statusLine()).toBe("Search unavailable");
+    });
+  });
+});
+
+describe("highlight", () => {
+  it("splits the snippet into marked and plain pieces", () => {
+    expect(highlight("one two three", [[4, 7]])).toEqual([
+      { text: "one ", mark: false },
+      { text: "two", mark: true },
+      { text: " three", mark: false },
+    ]);
+  });
+
+  it("sorts, merges overlaps and clamps marks to the snippet", () => {
+    expect(highlight("abcdef", [[4, 9], [0, 2], [1, 3]])).toEqual([
+      { text: "abc", mark: true },
+      { text: "d", mark: false },
+      { text: "ef", mark: true },
+    ]);
+  });
+
+  it("ignores empty or reversed marks and null", () => {
+    expect(highlight("abc", [[2, 2], [2, 1]])).toEqual([{ text: "abc", mark: false }]);
+    expect(highlight("abc", null)).toEqual([{ text: "abc", mark: false }]);
+  });
+});
+
+describe("isFindShortcut", () => {
+  const key = (init: KeyboardEventInit) => ({ key: "f", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...init });
+
+  it("is Ctrl+F off macOS and Cmd+F on macOS", () => {
+    expect(isFindShortcut(key({ ctrlKey: true }), false)).toBe(true);
+    expect(isFindShortcut(key({ key: "F", ctrlKey: true }), false)).toBe(true);
+    expect(isFindShortcut(key({ metaKey: true }), false)).toBe(false);
+    expect(isFindShortcut(key({ metaKey: true }), true)).toBe(true);
+    expect(isFindShortcut(key({ ctrlKey: true }), true)).toBe(false);
+  });
+
+  it("is not F with Alt or Shift, nor another key", () => {
+    expect(isFindShortcut(key({ ctrlKey: true, altKey: true }), false)).toBe(false);
+    expect(isFindShortcut(key({ ctrlKey: true, shiftKey: true }), false)).toBe(false);
+    expect(isFindShortcut(key({ key: "g", ctrlKey: true }), false)).toBe(false);
+  });
+});

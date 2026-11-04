@@ -37,8 +37,8 @@
       </div>
       <div class="buttons">
         {#if dialog.kind === "ask" || dialog.kind === "choose"}
-          <button bind:this={primary} onclick={() => answer("yes")}>Yes</button>
-          <button onclick={() => answer("no")}>No</button>
+          <button bind:this={primary} onclick={() => answer("yes")}>{dialog.labels?.yes ?? "Yes"}</button>
+          <button onclick={() => answer("no")}>{dialog.labels?.no ?? "No"}</button>
           {#if dialog.kind === "choose"}
             <button onclick={() => answer("cancel")}>Cancel</button>
           {/if}

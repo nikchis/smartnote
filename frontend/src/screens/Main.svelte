@@ -9,9 +9,13 @@
   import removeIcon from "../assets/icons/remove.png";
   import restoreIcon from "../assets/icons/restore.png";
   import saveIcon from "../assets/icons/save.png";
-  import { NotesService, type StateDTO } from "../lib/api";
+  import { Events } from "@wailsio/runtime";
+  import SearchBar from "../components/SearchBar.svelte";
+  import { NotesService, SearchService, type SearchHitDTO, type StateDTO } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
-  import { Editor } from "../lib/editor.svelte";
+  import { Editor, type Place } from "../lib/editor.svelte";
+  import { scrollTopFor } from "../lib/jump";
+  import { isFindShortcut, SearchBox } from "../lib/search.svelte";
   import { LIMITS, utf16Len } from "../lib/text";
   import ChangePassword from "./ChangePassword.svelte";
   import History from "./History.svelte";
@@ -23,11 +27,16 @@
     onRestore,
   }: { sync: StateDTO; onSettings: () => void; onBackup: () => void; onRestore: () => void } = $props();
 
-  const editor = new Editor(NotesService, dialogs);
+  const search = new SearchBox(SearchService);
+  const editor = new Editor(NotesService, dialogs, search);
   const b = $derived(editor.buttons);
   let showHistory = $state(false);
   let changingPassword = $state(false);
   let list: HTMLElement | undefined = $state();
+  let searchBar: ReturnType<typeof SearchBar> | undefined = $state();
+  let nameField: HTMLInputElement | undefined = $state();
+  let textField: HTMLTextAreaElement | undefined = $state();
+  const mac = navigator.userAgent.includes("Mac");
 
   /** reload reads the notes again, after a Restore; an unsaved edit is lost. */
   export function reload(): Promise<void> {
@@ -48,6 +57,59 @@
     void editor.load().then(focusSelected);
   });
 
+  // The status of the search index: subscribe first, then read the last one,
+  // so that no status sent in between is lost; seed keeps a newer event.
+  $effect(() => {
+    const off = Events.On("search:status", (ev) => search.follow(ev.data));
+    SearchService.Status().then(
+      (s) => search.seed(s),
+      // Status does not fail in Go; until an event comes the status line is empty.
+      () => undefined,
+    );
+    return off;
+  });
+
+  /** onWindowKey puts the focus on the search field with Ctrl+F (Cmd+F on macOS), unless a modal is open. */
+  function onWindowKey(e: KeyboardEvent): void {
+    if (!isFindShortcut(e, mac) || list?.closest("[inert]")) return;
+    e.preventDefault();
+    searchBar?.focus();
+  }
+
+  const nameOf = (id: string) => editor.notes.find((n) => n.id === id)?.name ?? "";
+
+  /** openHit jumps to a hit and selects its place (search spec §9.2). */
+  async function openHit(hit: SearchHitDTO): Promise<void> {
+    const jump = await editor.openHit(hit);
+    // The fields show the note and the Discard question is gone after the tick.
+    await tick();
+    switch (jump) {
+      case "selected":
+        if (editor.place) selectPlace(editor.place);
+        break;
+      case "unselected":
+        if (textField) selectPlace({ field: "info", start: 0, end: 0 });
+        break;
+      case "gone":
+        searchBar?.focus();
+        break;
+      case "cancelled":
+        break;
+    }
+  }
+
+  /**
+   * selectPlace selects a range of the name or of the text; the text is
+   * scrolled by the mirror so that the range is in the middle.
+   */
+  function selectPlace(p: Place): void {
+    const field = p.field === "name" ? nameField : textField;
+    if (!field) return;
+    field.focus({ preventScroll: true });
+    field.setSelectionRange(p.start, p.end);
+    if (field instanceof HTMLTextAreaElement) field.scrollTop = scrollTopFor(field, p.start);
+  }
+
   /** onListKey moves through the list with the arrow keys, as in the v1 grid. */
   function onListKey(e: KeyboardEvent): void {
     const delta = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
@@ -59,7 +121,12 @@
   const updated = $derived(editor.mode === "edit" && editor.selected ? new Date(editor.selected.updated).toLocaleString() : "");
 </script>
 
+<svelte:window onkeydown={onWindowKey} />
+
 <div class="main">
+  <div class="find">
+    <SearchBar bind:this={searchBar} box={search} {nameOf} onOpen={(hit) => void openHit(hit)} />
+  </div>
   <div class="content">
     <div class="list" bind:this={list}>
       <div class="head">Name</div>
@@ -79,7 +146,7 @@
       <div class="fields">
         <label class="name">
           Name:
-          <input bind:value={editor.name} maxlength={LIMITS.name} disabled={editor.locked} />
+          <input bind:this={nameField} bind:value={editor.name} maxlength={LIMITS.name} disabled={editor.locked} />
         </label>
         <label class="muted">
           Updated:
@@ -93,7 +160,7 @@
           <img src={historyIcon} alt="" />History
         </button>
       </div>
-      <textarea bind:value={editor.info} maxlength={LIMITS.info} disabled={editor.locked} aria-label="Text"></textarea>
+      <textarea bind:this={textField} bind:value={editor.info} maxlength={LIMITS.info} disabled={editor.locked} aria-label="Text"></textarea>
       <div class="actions">
         <button class="apply" type="submit" onclick={() => editor.apply()} disabled={!b.apply}>Apply changes</button>
         <div class="center">
@@ -148,7 +215,10 @@
     width: 100%;
     height: 100%;
     display: grid;
-    grid-template-rows: 1fr auto;
+    grid-template-rows: auto 1fr auto;
+  }
+  .find {
+    padding: 0.75rem 0.75rem 0;
   }
   .content {
     display: grid;

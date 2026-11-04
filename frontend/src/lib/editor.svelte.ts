@@ -1,8 +1,10 @@
-// State and actions of the note editor on the Main screen (spec §7, §7.1).
-import type { NoteDTO, VersionDTO } from "./api";
+// State and actions of the note editor on the Main screen (spec §7, §7.1)
+// and the jump to a search hit (search spec §9.2, §9.3).
+import type { NoteDTO, SearchHitDTO, VersionDTO } from "./api";
 import type { Dialogs } from "./dialogs.svelte";
 import { parseError } from "./errors";
-import { buttons, type Buttons, type EditorState } from "./rules";
+import { textMatches } from "./jump";
+import { buttons, hasDraft, type Buttons, type EditorState } from "./rules";
 
 const NO_BUTTONS: Buttons = { apply: false, cancel: false, new: false, delete: false, list: false, history: false };
 
@@ -14,6 +16,17 @@ export type NotesApi = {
   Delete(id: string): Promise<void>;
   Versions(id: string): Promise<VersionDTO[] | null>;
 };
+
+/** Research repeats the current search; SearchBox is one. */
+export type Research = { again(): Promise<SearchHitDTO[]> };
+
+/** Place is the range openHit found, for the screen to select: in the name or in the text. */
+export type Place = { field: "name" | "info"; start: number; end: number };
+
+/** Jump is how openHit ended: the place is selected, the note is open without a selection, the draft was kept, or the note is gone. */
+export type Jump = "selected" | "unselected" | "cancelled" | "gone";
+
+const DISCARD = { message: "Discard unsaved changes?", labels: { yes: "Discard", no: "Cancel" } } as const;
 
 export class Editor {
   notes: NoteDTO[] = $state([]);
@@ -42,7 +55,11 @@ export class Editor {
   constructor(
     private readonly api: NotesApi,
     private readonly dialogs: Dialogs,
+    private readonly search: Research,
   ) {}
+
+  /** place is the range the last openHit selected, undefined when it selected none. */
+  place: Place | undefined;
 
   /**
    * load reads the notes, for the first time or after a Restore: an unsaved
@@ -65,11 +82,47 @@ export class Editor {
     }
   }
 
-  /** select shows note id; an unsaved edit is lost without asking, as in v1. */
-  async select(id: string): Promise<void> {
-    if (this.mode === "new" || this.busy) return;
+  /**
+   * select shows note id, picked in the list. With unsaved changes it asks
+   * first (search spec §9.3, a change from v1); the selected note itself is
+   * left as it is. It is false when the note is not shown: the user kept the
+   * draft, a new note is being created (the list is off then) or an action runs.
+   */
+  async select(id: string): Promise<boolean> {
+    if (this.mode === "new" || this.busy) return false;
     const note = this.notes.find((n) => n.id === id);
-    if (note) await this.show(note);
+    if (!note) return false;
+    if (note.id === this.selected?.id) return true;
+    if (!(await this.discardDraft())) return false;
+    await this.show(note);
+    return true;
+  }
+
+  /**
+   * openHit opens the note of a search hit and finds the place to select
+   * (search spec §9.2). A draft, also of the same note or of a new one, is
+   * replaced only after Discard. When the text of the hit is no longer at its
+   * place, the search runs once more and the hit of the note with the nearest
+   * line is taken; if that does not match either, the note stays open without
+   * a selection. A note that is gone is not opened and the hits are renewed.
+   */
+  async openHit(hit: SearchHitDTO): Promise<Jump> {
+    this.place = undefined;
+    if (this.busy) return "cancelled";
+    const note = this.notes.find((n) => n.id === hit.noteId);
+    if (!note) {
+      await this.search.again();
+      return "gone";
+    }
+    // The open note without a draft stays as it is; anything else shows the saved fields.
+    const shown = this.mode === "edit" && this.selected?.id === note.id && !hasDraft(this.state);
+    if (!(await this.discardDraft())) return "cancelled";
+    if (!shown) await this.show(note);
+
+    const found = textMatches(hit, this.name, this.info) ? hit : await this.findAgain(hit);
+    if (!found) return "unselected";
+    this.place = { field: found.line === 0 ? "name" : "info", start: found.start, end: found.end };
+    return "selected";
   }
 
   /**
@@ -127,6 +180,21 @@ export class Editor {
   useVersion(info: string): void {
     if (this.busy) return;
     this.info = info;
+  }
+
+  /** discardDraft asks before unsaved input is replaced; true when there is none or the user discards it. */
+  private async discardDraft(): Promise<boolean> {
+    return !hasDraft(this.state) || this.dialogs.ask(DISCARD.message, DISCARD.labels);
+  }
+
+  /** findAgain searches again for a hit of the same note, the one with the nearest line, if its text matches. */
+  private async findAgain(hit: SearchHitDTO): Promise<SearchHitDTO | undefined> {
+    const same = (await this.search.again()).filter((h) => h.noteId === hit.noteId);
+    const nearest = same.reduce<SearchHitDTO | undefined>(
+      (best, h) => (!best || Math.abs(h.line - hit.line) < Math.abs(best.line - hit.line) ? h : best),
+      undefined,
+    );
+    return nearest && textMatches(nearest, this.name, this.info) ? nearest : undefined;
   }
 
   /**

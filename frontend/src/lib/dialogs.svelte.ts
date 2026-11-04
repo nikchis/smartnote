@@ -7,19 +7,23 @@ export type DialogKind = "info" | "error" | "ask" | "choose";
 /** Answer is the button pressed; OK of info and error is "yes". */
 export type Answer = "yes" | "no" | "cancel";
 
-type Pending = { kind: DialogKind; message: string; resolve: (a: Answer) => void };
+/** Labels name the Yes and No buttons of a question, as Discard and Cancel. */
+export type Labels = { yes: string; no: string };
+
+type Pending = { kind: DialogKind; message: string; labels?: Labels; resolve: (a: Answer) => void };
 
 const state = $state<{ queue: Pending[] }>({ queue: [] });
 
-function show(kind: DialogKind, message: string): Promise<Answer> {
-  return new Promise((resolve) => state.queue.push({ kind, message, resolve }));
+function show(kind: DialogKind, message: string, labels?: Labels): Promise<Answer> {
+  return new Promise((resolve) => state.queue.push({ kind, message, labels, resolve }));
 }
 
 /** Dialogs is what screens and flows need; tests pass a fake. */
 export type Dialogs = {
   info(msg: string): Promise<void>;
   error(msg: string): Promise<void>;
-  ask(msg: string): Promise<boolean>;
+  /** ask asks with Yes and No, or with labels in their place; Escape gives No. */
+  ask(msg: string, labels?: Labels): Promise<boolean>;
   /** choose asks with Yes, No and Cancel; Cancel and Escape give "cancel". */
   choose(msg: string): Promise<Answer>;
 };
@@ -31,8 +35,8 @@ export const dialogs: Dialogs = {
   async error(msg) {
     await show("error", msg);
   },
-  async ask(msg) {
-    return (await show("ask", msg)) === "yes";
+  async ask(msg, labels) {
+    return (await show("ask", msg, labels)) === "yes";
   },
   choose(msg) {
     return show("choose", msg);
@@ -40,9 +44,9 @@ export const dialogs: Dialogs = {
 };
 
 /** currentDialog is the dialog on screen, if any. */
-export function currentDialog(): { kind: DialogKind; message: string } | undefined {
+export function currentDialog(): { kind: DialogKind; message: string; labels?: Labels } | undefined {
   const d = state.queue[0];
-  return d && { kind: d.kind, message: d.message };
+  return d && { kind: d.kind, message: d.message, labels: d.labels };
 }
 
 /** answer closes the dialog on screen with the button pressed. */

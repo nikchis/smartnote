@@ -36,4 +36,16 @@ describe("dialogs", () => {
     answer("no");
     await expect(no).resolves.toBe(false);
   });
+
+  it("ask with labels shows them and answers like Yes and No", async () => {
+    const labels = { yes: "Discard", no: "Cancel" };
+    const discard = dialogs.ask("Discard unsaved changes?", labels);
+    expect(currentDialog()).toEqual({ kind: "ask", message: "Discard unsaved changes?", labels });
+    answer("yes");
+    await expect(discard).resolves.toBe(true);
+
+    const escape = dialogs.ask("Discard unsaved changes?", labels);
+    dismiss();
+    await expect(escape).resolves.toBe(false);
+  });
 });
