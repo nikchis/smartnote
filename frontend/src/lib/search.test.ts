@@ -40,6 +40,54 @@ afterEach(() => {
 });
 
 describe("SearchBox", () => {
+  it("tells that the hits answer an earlier query until the new answer comes", async () => {
+    api.results = { old: [hit("a", 1)], new: [hit("b", 1)] };
+    box.input("old");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(box.stale).toBe(false);
+
+    box.input("new");
+    expect(box.stale).toBe(true);
+    expect(box.hits.map((h) => h.noteId)).toEqual(["a"]);
+
+    await vi.advanceTimersByTimeAsync(150);
+    expect(box.stale).toBe(false);
+  });
+
+  it("fresh searches the query at once and gives the chosen hit of its answer", async () => {
+    api.results = { old: [hit("a", 1)], new: [hit("b", 1), hit("c", 2)] };
+    box.input("old");
+    await vi.advanceTimersByTimeAsync(150);
+    box.input("new");
+
+    const got = await box.fresh();
+
+    expect(api.calls).toEqual(["old", "new"]);
+    expect(got?.noteId).toBe("b");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(api.calls).toEqual(["old", "new"]);
+  });
+
+  it("fresh gives the chosen hit at once when the hits answer the query", async () => {
+    api.results = { word: [hit("a", 1), hit("b", 2)] };
+    box.input("word");
+    await vi.advanceTimersByTimeAsync(150);
+    box.move(1);
+
+    expect((await box.fresh())?.noteId).toBe("b");
+    expect(api.calls).toEqual(["word"]);
+  });
+
+  it("fresh gives nothing when the query changes before the answer", async () => {
+    api.hold = true;
+    box.input("new");
+    const got = box.fresh();
+    box.input("newer");
+    api.pending[0].resolve([hit("b", 1)]);
+
+    expect(await got).toBeUndefined();
+  });
+
   it("debounces input", async () => {
     box.input("n");
     await vi.advanceTimersByTimeAsync(50);

@@ -7,8 +7,12 @@ import SearchBar from "./SearchBar.svelte";
 
 class FakeSearch implements SearchApi {
   results: SearchHitDTO[] = [];
-  async Search() {
-    return this.results;
+  /** byQuery answers a query with its own hits; other queries get results. */
+  byQuery: Record<string, SearchHitDTO[]> = {};
+  calls: string[] = [];
+  async Search(q: string) {
+    this.calls.push(q);
+    return this.byQuery[q] ?? this.results;
   }
 }
 
@@ -53,7 +57,59 @@ function press(key: string): void {
   flushSync();
 }
 
+/** typeAhead puts q in the field without waiting for the search delay. */
+function typeAhead(q: string): void {
+  field().value = q;
+  field().dispatchEvent(new Event("input", { bubbles: true }));
+  flushSync();
+}
+
 describe("SearchBar", () => {
+  // The hits on screen answer the previous query until the new answer comes:
+  // Enter must not open one of them for the new query.
+  it("opens with Enter a hit of the query in the field, not of the previous one", async () => {
+    api.byQuery = { old: [hit("a")], new: [hit("b")] };
+    field().focus();
+    await type("old");
+    expect(options()).toEqual(["note a"]);
+
+    typeAhead("new");
+    press("Enter");
+    await vi.advanceTimersByTimeAsync(0);
+    flushSync();
+
+    expect(api.calls).toEqual(["old", "new"]);
+    expect(opened.map((h) => h.noteId)).toEqual(["b"]);
+  });
+
+  it("opens nothing with Enter when the field changed again before the answer", async () => {
+    api.byQuery = { old: [hit("a")], new: [hit("b")], newer: [hit("c")] };
+    field().focus();
+    await type("old");
+
+    typeAhead("new");
+    press("Enter");
+    typeAhead("newer");
+    await vi.advanceTimersByTimeAsync(0);
+    flushSync();
+
+    expect(opened).toEqual([]);
+  });
+
+  it("shows the hits of the previous query as stale and does not open them on a click", async () => {
+    api.byQuery = { old: [hit("a")], new: [hit("b")] };
+    field().focus();
+    await type("old");
+
+    typeAhead("new");
+    const row = target.querySelector<HTMLElement>('[role="option"]')!;
+    expect(row.closest('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+    row.click();
+    flushSync();
+
+    expect(opened).toEqual([]);
+  });
+
   it("opens the chosen hit with Enter and closes the list", async () => {
     api.results = [hit("a"), hit("b")];
     field().focus();

@@ -1,7 +1,9 @@
 <script lang="ts">
   // SearchBar is the search field above the list and the editor, with the
   // hits under it (search spec §9.1): ↑/↓ choose, Enter or a click opens,
-  // Escape closes and gives the focus back to where it was.
+  // Escape closes and gives the focus back to where it was. Until the answer
+  // to a changed query comes, the hits of the previous one stay dimmed and do
+  // not open; Enter then opens a hit of the new answer.
   import type { SearchHitDTO } from "../lib/api";
   import { highlight, type SearchBox } from "../lib/search.svelte";
 
@@ -59,10 +61,28 @@
     open = true;
   }
 
+  /** choose opens hit i of the list; a hit of an earlier query (stale) is not opened. */
   function choose(i: number): void {
     const hit = box.hits[i];
-    if (!hit) return;
+    if (!hit || box.stale) return;
     box.selected = i;
+    open = false;
+    onOpen(hit);
+  }
+
+  /**
+   * openFresh opens with Enter the chosen hit of the query in the field. While
+   * the answer to it is pending, the hits on screen answer the previous query:
+   * it searches at once and opens the chosen hit of the answer, unless the
+   * query changed again meanwhile.
+   */
+  async function openFresh(): Promise<void> {
+    if (!box.stale) {
+      choose(box.selected);
+      return;
+    }
+    const hit = await box.fresh();
+    if (!hit) return;
     open = false;
     onOpen(hit);
   }
@@ -85,7 +105,7 @@
         break;
       case "Enter":
         e.preventDefault();
-        if (shown) choose(box.selected);
+        if (open && box.query.trim() !== "") void openFresh();
         break;
       case "Escape":
         e.preventDefault();
@@ -115,7 +135,7 @@
   />
   {#if shown}
     <div class="dropdown">
-      <ul id="search-results" role="listbox" aria-label="Search results" bind:this={results}>
+      <ul id="search-results" role="listbox" aria-label="Search results" aria-busy={box.stale} bind:this={results}>
         {#each box.hits as hit, i (i)}
           <!-- The field keeps the focus: a click must not take it, the keys work in the field. -->
           <li
@@ -190,6 +210,11 @@
   }
   li.active {
     background: var(--accent);
+  }
+  /* The hits of the previous query while the answer to the new one is pending. */
+  ul[aria-busy="true"] li {
+    cursor: default;
+    opacity: 0.55;
   }
   .head {
     display: flex;

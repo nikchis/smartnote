@@ -72,6 +72,27 @@ export class SearchBox {
   }
 
   /**
+   * stale tells that the hits answer an earlier query: the answer to the
+   * current one is pending. They stay on screen until it comes, but they are
+   * not the hits of the query in the field.
+   */
+  get stale(): boolean {
+    return this.answered !== this.query;
+  }
+
+  /**
+   * fresh gives the chosen hit of an answer to the current query: at once
+   * when the hits answer it, else after searching it without the delay. It
+   * gives nothing when the query changed before the answer came.
+   */
+  async fresh(): Promise<SearchHitDTO | undefined> {
+    if (!this.stale) return this.current();
+    const q = this.query;
+    await this.again();
+    return this.query === q && !this.stale ? this.current() : undefined;
+  }
+
+  /**
    * follow takes a status from the search:status event. When the word search
    * is back (ready after loading or unavailable, or any ready status after a
    * search the worker could not run, code search_unavailable), it searches
