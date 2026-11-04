@@ -1,12 +1,15 @@
 # Smoke test on Windows and macOS
 
+A checklist for the unsigned Windows and macOS packages, including the search checks that CI
+cannot do. For testers with access to those systems.
+
 The packages for Windows (`smartnote-amd64-installer.exe`) and macOS (`smartnote.dmg`, Apple Silicon
 only) are built by CI
 (job `package`, artifacts `smartnote-windows` and `smartnote-darwin`) and are not signed. This check
 is run by hand on each system; the **Result** and **Checked by** columns are filled in by the tester.
 
-The server is the one from `docs/manual-test.md` (OpenSSH and PostgreSQL containers), reachable from
-the test machine.
+The server is the one from [Manual acceptance test](manual-test.md) (OpenSSH and PostgreSQL
+containers), reachable from the test machine.
 
 The search steps check what CI cannot: on Windows and macOS the search worker `smartnote-search` runs
 without the Linux sandbox, so the tester confirms that it ends with the application, opens no network
