@@ -318,13 +318,11 @@ fn report_sandbox(applied: &Applied) {
 }
 
 /// Checks AVX2 and loads ONNX Runtime, under the sandbox; the model files when both succeed.
-/// Must run before the worker starts any thread (see [`disable_ort_telemetry`]).
 fn load_runtime((files, lib): (ModelFiles, OrtLibrary)) -> Option<ModelFiles> {
     if !has_avx2() {
         eprintln!("semantic search unavailable: the CPU has no AVX2");
         return None;
     }
-    disable_ort_telemetry();
     match load_ort(&lib) {
         Ok(()) => Some(files),
         Err(err) => {
@@ -332,22 +330,6 @@ fn load_runtime((files, lib): (ModelFiles, OrtLibrary)) -> Option<ModelFiles> {
             None
         }
     }
-}
-
-/// Sets `ORT_DISABLE_TELEMETRY=1` for the ONNX Runtime library loaded next.
-///
-/// The official Linux build 1.31 starts its telemetry client (1DS) when the environment is
-/// created, whatever `DisableTelemetryEvents` says later: it reads `/proc/self/cgroup` and
-/// creates a device id and an SQLite store under `~/.cache/Microsoft/DeveloperTools`. The
-/// sandbox denies the writes; the variable keeps the client from starting at all.
-#[allow(
-    unsafe_code,
-    reason = "std::env::set_var while the process is single-threaded"
-)]
-fn disable_ort_telemetry() {
-    // SAFETY: `run` is called on a single-threaded process and starts its threads only after
-    // this; no other thread can read or write the environment concurrently.
-    unsafe { std::env::set_var("ORT_DISABLE_TELEMETRY", "1") };
 }
 
 /// The reader loop: forwards requests to the index thread until EOF or a bad request.

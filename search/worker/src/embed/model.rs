@@ -1,5 +1,7 @@
 //! The e5-small model: `kitoken` tokenizer and an ONNX Runtime session (spec §5.1, §6.9).
 
+use std::env;
+use std::ffi::OsStr;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use kitoken::Kitoken;
@@ -26,6 +28,14 @@ const ATTENTION_MASK: &str = "attention_mask";
 const TOKEN_TYPE_IDS: &str = "token_type_ids";
 const HIDDEN_STATE: &str = "last_hidden_state";
 
+/// Variable that keeps ONNX Runtime from starting its telemetry client; see [`load_ort`].
+pub const DISABLE_TELEMETRY: &str = "ORT_DISABLE_TELEMETRY";
+
+/// Whether the value of [`DISABLE_TELEMETRY`] disables the telemetry: exactly `1`.
+fn telemetry_disabled(value: Option<&OsStr>) -> bool {
+    value == Some(OsStr::new("1"))
+}
+
 /// The process-wide ONNX Runtime environment, set by [`load_ort`].
 static ENVIRONMENT: Mutex<Option<Environment>> = Mutex::new(None);
 
@@ -36,11 +46,21 @@ static ENVIRONMENT: Mutex<Option<Environment>> = Mutex::new(None);
 /// ONNX Runtime logs through [`log_to_stderr`]: errors only, whatever `ORT_LOG` says, and
 /// without their text (spec §6.2: stderr gets codes only).
 ///
+/// The process must have `ORT_DISABLE_TELEMETRY=1` in its environment, set before any thread
+/// starts (the worker does it first thing in `main`): the official Linux build 1.31 otherwise
+/// starts its telemetry client (1DS) when the environment is created, whatever
+/// `DisableTelemetryEvents` says later. It reads `/proc/self/cgroup` and writes a device id
+/// and an SQLite store under `~/.cache/Microsoft/DeveloperTools`.
+///
 /// # Errors
 ///
-/// [`ModelError::Load`] when the library cannot be loaded, [`ModelError::Ort`] when the
-/// environment cannot be created.
+/// [`ModelError::TelemetryEnabled`] when `ORT_DISABLE_TELEMETRY` is not `1` (nothing is
+/// loaded), [`ModelError::Load`] when the library cannot be loaded, [`ModelError::Ort`] when
+/// the environment cannot be created.
 pub fn load_ort(lib: &OrtLibrary) -> Result<(), ModelError> {
+    if !telemetry_disabled(env::var_os(DISABLE_TELEMETRY).as_deref()) {
+        return Err(ModelError::TelemetryEnabled);
+    }
     let mut slot = ENVIRONMENT.lock().unwrap_or_else(PoisonError::into_inner);
     if slot.is_some() {
         return Ok(());
@@ -242,6 +262,15 @@ mod tests {
         let err = Model::new(files, 1).err();
 
         assert!(matches!(err, Some(ModelError::NotLoaded)), "{err:?}");
+    }
+
+    #[test]
+    fn telemetry_must_be_disabled_by_exactly_one() {
+        use std::ffi::OsStr;
+        assert!(telemetry_disabled(Some(OsStr::new("1"))));
+        for value in [None, Some("0"), Some(""), Some("true"), Some("1 ")] {
+            assert!(!telemetry_disabled(value.map(OsStr::new)), "{value:?}");
+        }
     }
 
     #[test]

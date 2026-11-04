@@ -72,10 +72,12 @@ endif
 
 # The dump test runs again with the release profile (opt-level 3, lto thin, panic abort) of the
 # shipped worker: dropping the zeroing as a dead store shows only in optimised code.
+# ORT_DISABLE_TELEMETRY=1 keeps ONNX Runtime loaded into a test process from starting its
+# telemetry client; the worker sets it itself, and the tests that start it do not pass it on.
 search-test: ## Run the tests of the Rust search worker, with the probe binaries (needs gdb, strace; SEARCH_MODEL=1 adds the model tests)
 	@echo "+ $@"
-	cd search && $(SEARCH_MODEL_ENV) $(CARGO) test --workspace --features test-probes $(SEARCH_MODEL_ARGS)
-	cd search && $(CARGO) test --release -p worker --features test-probes --test zalloc_dump
+	cd search && ORT_DISABLE_TELEMETRY=1 $(SEARCH_MODEL_ENV) $(CARGO) test --workspace --features test-probes $(SEARCH_MODEL_ARGS)
+	cd search && ORT_DISABLE_TELEMETRY=1 $(CARGO) test --release -p worker --features test-probes --test zalloc_dump
 
 search-lint: ## Check format, clippy and cargo-deny policy of the Rust search worker
 	@echo "+ $@"

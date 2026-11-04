@@ -330,6 +330,8 @@ fn embedded_roundtrip() {
         w.try_recv(Duration::from_millis(500)).is_none(),
         "no new embedded"
     );
+    let (status, _) = w.finish();
+    assert_eq!(status.code(), Some(0));
 }
 
 /// A Russian recipe is found first by an English query (spec §6.7).
@@ -367,6 +369,8 @@ fn semantic_cross_lingual() {
     assert!(!hits.is_empty(), "the recipe is found");
     assert_eq!(hits[0].note, note(1, 0, "", "").id);
     assert!(hits[0].sources.contains(&Source::Semantic));
+    let (status, _) = w.finish();
+    assert_eq!(status.code(), Some(0));
 }
 
 /// ONNX Runtime messages below errors never reach stderr, whatever `ORT_LOG` says.

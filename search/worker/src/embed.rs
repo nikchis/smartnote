@@ -8,7 +8,7 @@ pub mod record;
 
 pub use chunk::{ChunkParams, ChunkSpan, chunk_note};
 pub use files::{Manifest, ModelFiles, OrtLibrary, has_avx2};
-pub use model::{DIM, Model, load_ort};
+pub use model::{DIM, DISABLE_TELEMETRY, Model, load_ort};
 pub use record::{ChunkVec, RECORD_VERSION, Record, index_id, text_hash};
 
 /// Failure to verify or load the model, or to compute an embedding. Carries no note text.
@@ -35,6 +35,9 @@ pub enum ModelError {
     /// Loading the ONNX Runtime library failed.
     #[error("loading the ONNX Runtime library failed")]
     Load(#[source] ort::LoadDynamicError),
+    /// `ORT_DISABLE_TELEMETRY` is not `1`: [`load_ort`] refuses to start ONNX Runtime.
+    #[error("ORT_DISABLE_TELEMETRY is not 1")]
+    TelemetryEnabled,
     /// [`load_ort`] has not succeeded before [`Model::new`].
     #[error("the ONNX Runtime library is not loaded")]
     NotLoaded,

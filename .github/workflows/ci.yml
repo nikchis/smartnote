@@ -125,8 +125,11 @@ jobs:
           sysctl kernel.yama.ptrace_scope kernel.core_pattern
       - run: make search-lint
       # Includes the dump test with the release profile and, with SEARCH_MODEL=1, the tests that
-      # need the model (see Makefile).
+      # need the model (see Makefile). ONNX Runtime must not start its telemetry client in any
+      # test process (the Makefile sets the variable too).
       - run: make search-test SEARCH_MODEL=1
+        env:
+          ORT_DISABLE_TELEMETRY: "1"
 
   package:
     strategy:

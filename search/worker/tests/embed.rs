@@ -5,10 +5,21 @@
 //! Needs the prepared model (`task model:fetch`) and the ONNX Runtime library
 //! (`task ort:fetch`):
 //! `SMARTNOTE_MODEL_DIR=$PWD/build/model SMARTNOTE_ORT_LIB=$PWD/build/ort/libonnxruntime.so.1.31.0`.
+//!
+//! The test loads ONNX Runtime into this process, without the worker's sandbox: `load_ort`
+//! needs `ORT_DISABLE_TELEMETRY=1`, which `main` sets before any thread exists. So the binary
+//! has its own harness (`harness = false`): libtest would start its threads first. Like a
+//! libtest `#[ignore]` test, it runs only with `--ignored` or `--include-ignored`.
+#![allow(
+    unsafe_code,
+    reason = "std::env::set_var while the process is single-threaded"
+)]
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use serde::Deserialize;
@@ -62,8 +73,56 @@ fn rss_kib() -> Option<u64> {
     line.split_whitespace().nth(1)?.parse().ok()
 }
 
-#[test]
-#[ignore = "needs SMARTNOTE_MODEL_DIR and SMARTNOTE_ORT_LIB: task model:fetch, task ort:fetch"]
+const TEST: &str = "model_embeddings_match_reference";
+
+/// Measurements are printed only with `--nocapture` or `--show-output`, as libtest would.
+static SHOW_OUTPUT: AtomicBool = AtomicBool::new(false);
+
+macro_rules! show {
+    ($($arg:tt)*) => {
+        if SHOW_OUTPUT.load(Ordering::Relaxed) {
+            println!($($arg)*);
+        }
+    };
+}
+const IGNORE: &str =
+    "needs SMARTNOTE_MODEL_DIR and SMARTNOTE_ORT_LIB: task model:fetch, task ort:fetch";
+
+fn main() -> ExitCode {
+    // SAFETY: the first statement of `main` of a binary without the libtest harness: no other
+    // thread exists (the constructors that run before `main` start none), so none can read or
+    // write the environment concurrently.
+    unsafe { env::set_var(worker::embed::DISABLE_TELEMETRY, "1") };
+
+    let args: Vec<String> = env::args().skip(1).collect();
+    let filters: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    if args.iter().any(|a| a == "--list") {
+        println!("{TEST}: test");
+        return ExitCode::SUCCESS;
+    }
+    let selected = filters.is_empty() || filters.iter().any(|f| TEST.contains(f.as_str()));
+    let run_ignored = args
+        .iter()
+        .any(|a| a == "--ignored" || a == "--include-ignored");
+    println!("\nrunning {} test", u8::from(selected));
+    if !selected {
+        println!("\ntest result: ok. 0 passed; 0 failed; 0 ignored; 1 filtered out\n");
+    } else if run_ignored {
+        let shown = args
+            .iter()
+            .any(|a| a == "--nocapture" || a == "--show-output");
+        SHOW_OUTPUT.store(shown, Ordering::Relaxed);
+        // A failed assertion panics, and `panic = "abort"` ends the process with a failure.
+        model_embeddings_match_reference();
+        println!("test {TEST} ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored\n");
+    } else {
+        println!(
+            "test {TEST} ... ignored, {IGNORE}\n\ntest result: ok. 0 passed; 0 failed; 1 ignored\n"
+        );
+    }
+    ExitCode::SUCCESS
+}
+
 fn model_embeddings_match_reference() {
     let model_dir = required_path("SMARTNOTE_MODEL_DIR");
     let ort_lib = required_path("SMARTNOTE_ORT_LIB");
@@ -83,7 +142,7 @@ fn model_embeddings_match_reference() {
     load_ort(&lib).expect("loading twice is a no-op");
     let started = Instant::now();
     let mut model = Model::new(files, THREADS).expect("model loads");
-    println!(
+    show!(
         "model load {:?}, RSS {:?} KiB",
         started.elapsed(),
         rss_kib()
@@ -112,7 +171,7 @@ fn model_embeddings_match_reference() {
         );
         worst = worst.min(similarity);
     }
-    println!("{} texts, min cosine {worst:.7}", texts.len());
+    show!("{} texts, min cosine {worst:.7}", texts.len());
 
     // Chunks of a long note with the model's own token counts stay within the model input.
     let mut note: Vec<String> = texts
@@ -140,7 +199,7 @@ fn model_embeddings_match_reference() {
         let tokens = model.count_tokens(&format!("passage: Long note\n{body}")) + 2;
         assert!(tokens <= p.max, "{span:?}: {tokens} tokens");
     }
-    println!("{} chunks of a long note", spans.len());
+    show!("{} chunks of a long note", spans.len());
 
     // Timing of one chunk of about 256 tokens with the prefix and special tokens.
     let body: String = (1..=16)
@@ -153,7 +212,7 @@ fn model_embeddings_match_reference() {
     for _ in 0..runs {
         model.embed_passage("Timing", &body).expect("embeds");
     }
-    println!(
+    show!(
         "embed {tokens} tokens: {:?} per chunk ({THREADS} threads), RSS {:?} KiB",
         started.elapsed() / runs,
         rss_kib()

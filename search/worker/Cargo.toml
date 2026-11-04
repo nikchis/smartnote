@@ -23,6 +23,12 @@ name = "probe_sandbox"
 path = "src/bin/probe_sandbox.rs"
 required-features = ["test-probes"]
 
+# Loads ONNX Runtime in the test process: its `main` sets ORT_DISABLE_TELEMETRY before any
+# thread starts (see tests/embed.rs).
+[[test]]
+name = "embed"
+harness = false
+
 [features]
 test-probes = []
 

@@ -6,7 +6,18 @@ use std::process::ExitCode;
 #[global_allocator]
 static ALLOC: zalloc::Zeroizing = zalloc::Zeroizing;
 
+#[allow(
+    unsafe_code,
+    reason = "std::env::set_var while the process is single-threaded"
+)]
 fn main() -> ExitCode {
+    // ONNX Runtime must not start its telemetry client (`worker::embed::load_ort` refuses to
+    // load otherwise), whatever environment Smartnote passes.
+    // SAFETY: the first statement of `main`, so the process is single-threaded: the Rust runtime
+    // starts no thread before `main`, and the only constructors that run earlier (`inventory`
+    // registrations of tantivy's `typetag`) push static nodes onto a list and start no thread.
+    // No other thread can read or write the environment concurrently.
+    unsafe { std::env::set_var(worker::embed::DISABLE_TELEMETRY, "1") };
     worker::panic::install_hook();
     // Before any thread exists; `hello` repeats it with the parent pid (spec §8.1).
     if let Err(err) = worker::harden::harden_process(None) {

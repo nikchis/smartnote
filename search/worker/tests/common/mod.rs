@@ -3,6 +3,7 @@
 #![allow(dead_code, reason = "each test crate uses a part of the helpers")]
 
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -73,20 +74,35 @@ pub struct Worker {
     pub parent_pid: u32,
     /// Empty model directory of a worker without the model, removed with the worker.
     empty_model: Option<TempDir>,
+    /// `HOME` and `XDG_CACHE_HOME` of the worker.
+    home: TempDir,
 }
 
 impl Worker {
-    /// Starts the worker binary without `ORT_LOG` in its environment.
+    /// Starts the worker binary.
     pub fn start() -> Self {
-        let mut cmd = Command::new(WORKER);
-        cmd.env_remove("ORT_LOG");
-        Self::spawn(cmd, false)
+        Self::spawn(Command::new(WORKER), false)
     }
 
     /// Starts `cmd`, which runs the worker either directly (the test is its parent) or, when
     /// `traced`, as the child of the started tracer.
+    ///
+    /// Like Smartnote, the harness passes no `ORT_*` variable of its own environment: only those
+    /// `cmd` sets explicitly. So `ORT_DISABLE_TELEMETRY=1` of `make search-test` cannot stand in
+    /// for the worker's own. `HOME` and `XDG_CACHE_HOME` point to a fresh directory, which
+    /// [`Worker::wait`] checks for files of the ONNX Runtime telemetry.
     pub fn spawn(mut cmd: Command, traced: bool) -> Self {
-        cmd.stdin(Stdio::piped())
+        let explicit: Vec<OsString> = cmd.get_envs().map(|(key, _)| key.to_owned()).collect();
+        for (key, _) in env::vars_os() {
+            let inherited_ort = key.to_str().is_some_and(|k| k.starts_with("ORT_"));
+            if inherited_ort && !explicit.contains(&key) {
+                cmd.env_remove(&key);
+            }
+        }
+        let home = TempDir::new("home");
+        cmd.env("HOME", home.path())
+            .env("XDG_CACHE_HOME", home.path().join(".cache"))
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = cmd.spawn().expect("worker starts");
@@ -118,6 +134,7 @@ impl Worker {
             stderr: Some(stderr),
             parent_pid,
             empty_model: None,
+            home,
         }
     }
 
@@ -199,8 +216,12 @@ impl Worker {
     }
 
     /// Waits for the exit (stdin stays as it is) and returns its status with the whole stderr.
+    /// Panics when the worker left any file in its `HOME`: ONNX Runtime telemetry writes
+    /// `onnxruntime.db` and a device id under `.cache/Microsoft/DeveloperTools`.
     pub fn wait(mut self) -> (ExitStatus, String) {
         let status = wait_timeout(&mut self.child, REPLY_TIMEOUT);
+        let left = files_under(self.home.path());
+        assert!(left.is_empty(), "the worker wrote to its HOME: {left:#?}");
         let stderr = self
             .stderr
             .take()
@@ -216,6 +237,23 @@ impl Drop for Worker {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Every file below `dir`, recursively.
+pub fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).expect("read dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files
 }
 
 /// Waits for `child` up to `timeout`; panics when it is still running.
