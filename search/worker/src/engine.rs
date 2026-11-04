@@ -60,6 +60,9 @@ struct NoteEntry {
     text_hash: [u8; 32],
     /// `None` until the note has embeddings for its current text.
     chunks: Option<Vec<ChunkVec>>,
+    /// Computing the embeddings of this revision failed: the note no longer waits for them
+    /// (it is not counted as queued) until the next upsert replaces the entry.
+    embedding_failed: bool,
 }
 
 /// A line of a note: its search form and where it lies in the name (line 0) or `info`.
@@ -161,6 +164,7 @@ impl Engine {
                 lines,
                 text_hash: hash,
                 chunks,
+                embedding_failed: false,
             },
         );
         Some(upserted)
@@ -220,12 +224,23 @@ impl Engine {
         Some(bytes)
     }
 
+    /// Marks that computing the embeddings of note `id` at revision `rev` failed: until the next
+    /// upsert of the note it is no longer queued (see [`counts`](Self::counts)) nor handed out
+    /// again. Nothing happens if the note is gone or has another revision.
+    pub fn embedding_failed(&mut self, id: &str, rev: u64) {
+        if let Some(entry) = self.keys.get(id).and_then(|k| self.notes.get_mut(k))
+            && entry.rev == rev
+        {
+            entry.embedding_failed = true;
+        }
+    }
+
     /// Revision, name and lines of `info` of a note that still needs embeddings; `None` if the
-    /// note is gone or already has them.
+    /// note is gone, already has them or failed to get them at its revision.
     #[must_use]
     pub fn note_for_embedding(&self, id: &str) -> Option<(u64, String, Vec<String>)> {
         let entry = self.keys.get(id).and_then(|k| self.notes.get(k))?;
-        if entry.chunks.is_some() {
+        if entry.chunks.is_some() || entry.embedding_failed {
             return None;
         }
         let lines = entry.info.split('\n').map(str::to_owned).collect();
@@ -268,10 +283,15 @@ impl Engine {
             .collect()
     }
 
-    /// Number of notes and of notes without embeddings.
+    /// Number of notes and of notes waiting for embeddings: without them and not failed at
+    /// their revision.
     #[must_use]
     pub fn counts(&self) -> (u32, u32) {
-        let pending = self.notes.values().filter(|n| n.chunks.is_none()).count();
+        let pending = self
+            .notes
+            .values()
+            .filter(|n| n.chunks.is_none() && !n.embedding_failed)
+            .count();
         (saturate(self.notes.len()), saturate(pending))
     }
 
@@ -691,6 +711,21 @@ mod tests {
         assert_eq!(rec.text, text_hash("name", "one\ntwo"));
         assert_eq!(rec.chunks, vec![chunk(1, 2, &axis(0))]);
         assert_eq!(e.counts(), (1, 0));
+    }
+
+    #[test]
+    fn failed_embedding_not_queued_until_next_upsert() {
+        let mut e = engine(vec![note("a", 4, "name", "one"), note("b", 5, "name", "two")]);
+        assert_eq!(e.counts(), (2, 2));
+        e.embedding_failed("a", 3);
+        assert_eq!(e.counts(), (2, 2), "an older revision changes nothing");
+        e.embedding_failed("a", 4);
+        assert_eq!(e.counts(), (2, 1), "a failed note no longer waits");
+        assert_eq!(e.note_for_embedding("a"), None);
+
+        assert!(e.upsert(note("a", 6, "name", "one more")).is_some());
+        assert_eq!(e.counts(), (2, 2), "the next upsert queues it again");
+        assert!(e.note_for_embedding("a").is_some());
     }
 
     #[test]

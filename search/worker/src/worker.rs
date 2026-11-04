@@ -381,8 +381,8 @@ enum IndexMsg {
     Model(State),
     /// Embeddings of the note handed to the embed thread.
     Chunks(NoteChunks),
-    /// The note handed to the embed thread could not be embedded.
-    ChunksFailed,
+    /// The note handed to the embed thread could not be embedded at revision `rev`.
+    ChunksFailed { id: String, rev: u64 },
     /// The reader stopped: the index thread stops after the current request.
     Shutdown,
 }
@@ -495,8 +495,11 @@ impl IndexThread {
                 }
                 self.dispatch();
             }
-            IndexMsg::ChunksFailed => {
+            IndexMsg::ChunksFailed { id, rev } => {
                 self.embedding = false;
+                // It no longer counts as queued, so `Indexing N of M` can end.
+                self.engine.embedding_failed(&id, rev);
+                self.send_status();
                 self.dispatch();
             }
             IndexMsg::Shutdown => return false,
@@ -713,8 +716,13 @@ fn embed_loop(
                     }
                     Err(err) => {
                         eprintln!("note embedding failed: {err}");
-                        work = None;
-                        if index.send(IndexMsg::ChunksFailed).is_err() {
+                        let failed = work.take().map(|w| IndexMsg::ChunksFailed {
+                            id: w.job.id,
+                            rev: w.job.rev,
+                        });
+                        if let Some(msg) = failed
+                            && index.send(msg).is_err()
+                        {
                             return;
                         }
                     }
