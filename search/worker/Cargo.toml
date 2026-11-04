@@ -35,6 +35,15 @@ ciborium = "0.2.2"
 serde_bytes = "0.11.19"
 thiserror = "2.0.21"
 unicode-normalization = "0.1.26"
+# ONNX Runtime is the official Microsoft build pinned in ort.lock.json, loaded at run time after
+# its SHA-256 check (spec §6.1, §6.9); nothing is downloaded or linked at build time.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
+kitoken = { version = "0.11.1", default-features = false, features = ["std", "serialization", "normalization"] }
+sha2 = "0.11.1"
+serde_json = "1.0.154"
+
+[build-dependencies]
+serde_json = "1.0.154"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"

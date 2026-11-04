@@ -1,0 +1,69 @@
+[
+  {
+    "kind": "passage",
+    "name": "Рецепт блинов",
+    "body": "2 яйца, 500 мл молока, 250 г муки, щепотка соли.\nСмешать, дать постоять 20 минут, жарить на горячей сковороде."
+  },
+  {
+    "kind": "passage",
+    "name": "Pancakes",
+    "body": "Whisk eggs with milk, add flour and a pinch of salt.\nRest the batter for 20 minutes, then fry in a hot pan."
+  },
+  {
+    "kind": "passage",
+    "name": "Менеджер паролей",
+    "body": "Хранить пароли в зашифрованном хранилище, мастер-пароль нигде не записывать.\nPassword manager: use a long passphrase and enable two-factor authentication."
+  },
+  {
+    "kind": "passage",
+    "name": "condition.c",
+    "body": "if (a && b || !c) { x[i] = y->z; }"
+  },
+  {
+    "kind": "passage",
+    "name": "regex.js",
+    "body": "let re = /^[a-z]{3,}$/u;"
+  },
+  {
+    "kind": "passage",
+    "name": "Store.Get",
+    "body": "func (s *Store) Get(ctx context.Context, id uuid.UUID) (*Note, error) {\n\treturn s.db.Get(ctx, id)\n}"
+  },
+  {
+    "kind": "passage",
+    "name": "Деплой",
+    "body": "Смешанный текст: deploy в prod после code review, см. PR #42 → master."
+  },
+  {
+    "kind": "passage",
+    "name": "Ёжик в тумане",
+    "body": "Мультфильм 1975 года, режиссёр Юрий Норштейн."
+  },
+  {
+    "kind": "passage",
+    "name": "Цены",
+    "body": "Цена 1 999,50 ₽ ≈ $25 ± 5 %; температура −5 °C; ✓ готово ✗ отменено 🚀"
+  },
+  {
+    "kind": "passage",
+    "name": "Покупки",
+    "body": ""
+  },
+  {
+    "kind": "passage",
+    "name": "Long note",
+    "body": "Line 1: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 2: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 3: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 4: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 5: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 6: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 7: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 8: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 9: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 10: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 11: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 12: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 13: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 14: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 15: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 16: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 17: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 18: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 19: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 20: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 21: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 22: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 23: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 24: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 25: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 26: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 27: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 28: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 29: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 30: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 31: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 32: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 33: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 34: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 35: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 36: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 37: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 38: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 39: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 40: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 41: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 42: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 43: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 44: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 45: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 46: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 47: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 48: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 49: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 50: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 51: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 52: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 53: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 54: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 55: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 56: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 57: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 58: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 59: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 60: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 61: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 62: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 63: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 64: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 65: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 66: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 67: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 68: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 69: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 70: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 71: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 72: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 73: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 74: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 75: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 76: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 77: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 78: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 79: the quick brown fox jumps over the lazy dog, then rests in the shade.\nLine 80: the quick brown fox jumps over the lazy dog, then rests in the shade."
+  },
+  {
+    "kind": "query",
+    "text": "рецепт блинов"
+  },
+  {
+    "kind": "query",
+    "text": "how to store passwords safely"
+  },
+  {
+    "kind": "query",
+    "text": "deploy в prod"
+  }
+]

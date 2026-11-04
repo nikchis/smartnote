@@ -30,5 +30,14 @@ Output in `build/model/`: `model.onnx` (~138 MiB), `tokenizer.kit` (~2.7 MB), `t
   `model-e5s-1`) into `build/model/` and checks their SHA-256. `MODEL_BASE_URL` overrides the
   release URL for local work, e.g. `MODEL_BASE_URL=file:///path/to/model/ task model:fetch`.
 
+- `reference.py` — reference embeddings for the worker's model test: the texts of
+  `search/testdata/embed/texts.json` embedded by the original fp32 model and HF tokenizer
+  (NFC, special tokens, truncation to 512, mean pooling, L2), written to
+  `search/testdata/embed/ref.json`:
+  `uv run --project tools/model --locked python tools/model/reference.py --sources build/model-src
+  --texts search/testdata/embed/texts.json --out search/testdata/embed/ref.json`.
+  The test (`cargo test -p worker --test embed -- --ignored` in `search/`) needs
+  `SMARTNOTE_MODEL_DIR` and `SMARTNOTE_ORT_LIB` (the library from `task ort:fetch`).
+
 After a new build is published, update `model.lock.json` with the digests from `manifest.json`
 and the SHA-256 of `manifest.json` itself.
