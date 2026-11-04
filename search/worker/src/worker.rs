@@ -16,6 +16,12 @@
 //! - the **writer** thread owns `output` and writes the replies of all threads.
 //!
 //! Nothing here prints messages, notes or queries: stderr gets codes, counts and timings only.
+//!
+//! Smartnote logs a stderr line only when it matches one of the worker's forms, listed in
+//! `internal/adapter/searchworker/stderr.go`; any other line it logs with its length only. A
+//! new `eprintln!` needs its form there (the Go test `TestStderrFormsCoverWorker` checks every
+//! format of this crate's sources), and a new `msg` of an error reply needs its text in
+//! `knownErrorTexts` of `internal/adapter/searchworker/protocol.go`.
 
 use std::collections::{HashSet, VecDeque};
 use std::hint::black_box;
@@ -136,6 +142,7 @@ fn refuse(output: &mut impl Write, bad: BadRequest) -> ExitCode {
     ExitCode::from(EXIT_BAD_REQUEST)
 }
 
+/// `msg` is a fixed text: Smartnote shows only the texts listed in its `knownErrorTexts`.
 fn error_reply(code: ErrorCode, msg: &str) -> Reply {
     Reply::Error {
         req: None,

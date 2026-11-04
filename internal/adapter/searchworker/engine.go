@@ -67,15 +67,12 @@ type Config struct {
 	Path, OrtLib, ModelDir string
 	Threads                int
 	// Log receives the failures of the worker at level Error, so the error log
-	// keeps them, and its stderr lines (with source=search-worker) at the
-	// level StderrLevel gives.
-	Log *slog.Logger
-	// StderrLevel gives the log level of a stderr line of the worker; nil
-	// takes the default: Info for the timing of the model load, which the
-	// error log drops, and Error for everything else the worker writes there
-	// (panics, sandbox and model problems).
-	StderrLevel func(line string) slog.Level
-	Timeouts    Timeouts
+	// keeps them, and its stderr lines (with source=search-worker) that match
+	// the worker's own forms, at level Info for the timing of the model load
+	// and Error for the rest (panics, sandbox and model problems); other
+	// lines only with their length (stderr.go).
+	Log      *slog.Logger
+	Timeouts Timeouts
 	// Backoff are the pauses before restarts; nil takes 1, 2, 4, 8, 16 s.
 	Backoff []time.Duration
 	// Now and After are the clock of the restart policy, for the tests; nil
@@ -107,6 +104,9 @@ type ReadyInfo struct {
 type Engine struct {
 	cfg      Config
 	extraEnv []string // added to the parent's environment: a seam for the tests
+	// stderrForms are the stderr lines logged as they are: the worker's,
+	// and the fake worker's in the tests.
+	stderrForms []stderrForm
 
 	events chan usecase.SearchEvent
 	queue  *eventQueue
@@ -157,19 +157,16 @@ func New(cfg Config) (*Engine, error) {
 		cfg.After = time.After
 	}
 
-	if cfg.StderrLevel == nil {
-		cfg.StderrLevel = defaultStderrLevel
-	}
-
 	life, cancel := context.WithCancel(context.Background())
 
 	return &Engine{
-		cfg:     cfg,
-		events:  make(chan usecase.SearchEvent),
-		queue:   newEventQueue(),
-		life:    life,
-		cancel:  cancel,
-		settled: make(chan struct{}),
+		cfg:         cfg,
+		stderrForms: workerStderrForms,
+		events:      make(chan usecase.SearchEvent),
+		queue:       newEventQueue(),
+		life:        life,
+		cancel:      cancel,
+		settled:     make(chan struct{}),
 	}, nil
 }
 
@@ -283,7 +280,7 @@ func (e *Engine) command(ctx context.Context, msg func(req uint64) any) error {
 	case *okMsg:
 		return nil
 	case *errorMsg:
-		return fmt.Errorf("search worker: %s: %s", r.Code, r.Msg)
+		return fmt.Errorf("search worker: %s", r)
 	default:
 		err := fmt.Errorf("%w: %T answers a command", errProtocol, reply)
 		g.kill(err)
@@ -335,7 +332,7 @@ func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase
 
 		return hits, nil
 	case *errorMsg:
-		return nil, fmt.Errorf("search worker: %s: %s", r.Code, r.Msg)
+		return nil, fmt.Errorf("search worker: %s", r)
 	default:
 		err := fmt.Errorf("%w: %T answers a search", errProtocol, reply)
 		g.kill(err)
@@ -492,7 +489,7 @@ func (e *Engine) launch() (*generation, error) {
 
 	env := workerEnv(append(os.Environ(), e.extraEnv...))
 
-	g, err := startGeneration(n, e.cfg.Path, env, &e.cfg, e.queue)
+	g, err := startGeneration(n, e.cfg.Path, env, &e.cfg, e.queue, e.stderrForms)
 	if err != nil {
 		return nil, err
 	}

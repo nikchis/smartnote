@@ -4,6 +4,8 @@ use std::io::{self, Write};
 use std::panic::Location;
 
 /// Replaces the panic hook: stderr gets `panic at <file>:<line>:<col>` and nothing else.
+/// Smartnote logs one such line per process (a form in
+/// `internal/adapter/searchworker/stderr.go`; keep the two in step).
 ///
 /// The payload is left out on purpose: messages of the standard library (for example a
 /// string slice off a char boundary) quote the data they failed on, which may be note text.

@@ -257,3 +257,34 @@ func TestFrameRoundTrip(t *testing.T) {
 		t.Fatalf("truncated body: %v", err)
 	}
 }
+
+// The text of an error reply is shown only when it is one of the worker's
+// own fixed texts: the worker never puts note text there, and a compromised
+// one must not get it into the log (spec §7.2, §10.2).
+func TestErrorTextOnlyKnown(t *testing.T) {
+	for msg, want := range map[string]string{
+		"unexpected hello":     "bad_request: unexpected hello",
+		"unsupported protocol": "bad_request: unsupported protocol",
+		"note text " + marker:  "bad_request",
+		"":                     "bad_request",
+	} {
+		body, err := encodeMessage(&errorMsg{T: tError, Code: "bad_request", Msg: msg})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		reply, err := decodeReply(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		e, ok := reply.(*errorMsg)
+		if !ok || e.String() != want {
+			t.Errorf("error with msg %q decoded as %#v, want %q", msg, reply, want)
+		}
+
+		if got := (&workerError{msg: e}).Error(); got != "worker error "+want {
+			t.Errorf("worker error with msg %q = %q", msg, got)
+		}
+	}
+}

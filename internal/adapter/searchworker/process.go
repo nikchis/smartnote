@@ -41,16 +41,16 @@ var (
 // workerError is an error message of the worker without a request: the worker
 // failed as a whole and exits.
 type workerError struct {
-	code, msg string
+	msg *errorMsg
 }
 
-func (e *workerError) Error() string { return fmt.Sprintf("worker error %s: %s", e.code, e.msg) }
+func (e *workerError) Error() string { return "worker error " + e.msg.String() }
 
 // permanent reports whether a restart cannot help: the worker file cannot be
 // run, or it speaks another protocol version.
 func permanent(err error) bool {
 	if we, ok := errors.AsType[*workerError](err); ok {
-		return we.code == codeUnsupportedProto
+		return we.msg.Code == codeUnsupportedProto
 	}
 
 	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission)
@@ -92,10 +92,10 @@ func workerEnv(environ []string) []string {
 //   - write is the only writer of stdin;
 //   - logStderr logs stderr line by line.
 type generation struct {
-	n           uint64
-	log         *slog.Logger
-	stderrLevel func(line string) slog.Level
-	queue       *eventQueue
+	n      uint64
+	log    *slog.Logger
+	stderr *stderrFilter // owned by logStderr
+	queue  *eventQueue
 
 	cmd    *exec.Cmd
 	writes chan writeReq
@@ -134,18 +134,18 @@ type writeReq struct {
 // leave some), which os/exec cannot prevent: the worker closes all above 2
 // itself first thing (spec §10.2 p. 1). On Windows Go passes only the listed
 // handles.
-func startGeneration(n uint64, path string, env []string, cfg *Config, queue *eventQueue) (*generation, error) {
+func startGeneration(n uint64, path string, env []string, cfg *Config, queue *eventQueue, forms []stderrForm) (*generation, error) {
 	g := &generation{
-		n:           n,
-		log:         cfg.Log,
-		stderrLevel: cfg.StderrLevel,
-		queue:       queue,
-		writes:      make(chan writeReq),
-		ready:       make(chan *readyMsg, 1),
-		pending:     map[uint64]chan any{},
-		dead:        make(chan struct{}),
-		exited:      make(chan struct{}),
-		stopping:    make(chan struct{}),
+		n:        n,
+		log:      cfg.Log,
+		stderr:   newStderrFilter(forms),
+		queue:    queue,
+		writes:   make(chan writeReq),
+		ready:    make(chan *readyMsg, 1),
+		pending:  map[uint64]chan any{},
+		dead:     make(chan struct{}),
+		exited:   make(chan struct{}),
+		stopping: make(chan struct{}),
 	}
 
 	pipes, err := newPipes()
@@ -330,7 +330,7 @@ func (g *generation) route(msg any) error {
 		g.deliver(m.Req, m)
 	case *errorMsg:
 		if m.Req == nil {
-			return &workerError{code: m.Code, msg: m.Msg}
+			return &workerError{msg: m}
 		}
 
 		g.deliver(*m.Req, m)
@@ -527,7 +527,8 @@ func (g *generation) call(ctx context.Context, req uint64, msg any, timeout time
 }
 
 // logStderr logs the lines of stderr until EOF. The worker writes codes,
-// counts and timings there, never note text (spec §6.2).
+// counts and timings there, never note text (spec §6.2); the lines that match
+// none of its forms are logged with their length only (stderr.go).
 func (g *generation) logStderr(stderr *os.File) {
 	defer func() { _ = stderr.Close() }()
 
@@ -552,14 +553,22 @@ func (g *generation) logStderr(stderr *os.File) {
 func (g *generation) logLine(index int, line []byte, cut bool) {
 	switch {
 	case index < maxStderrLines:
-		text := strings.TrimRight(string(line), "\r\n")
-		attrs := []slog.Attr{slog.String("source", stderrSource), slog.Uint64("gen", g.n), slog.String("line", text)}
+		raw := strings.TrimRight(string(line), "\r\n")
+		attrs := []slog.Attr{slog.String("source", stderrSource), slog.Uint64("gen", g.n)}
 
-		if cut {
-			attrs = append(attrs, slog.Bool("cut", true))
+		text, level, ok := g.stderr.filter(raw)
+		if cut || !ok {
+			attrs = append(attrs, slog.Int("len", len(raw)))
+			if cut {
+				attrs = append(attrs, slog.Bool("cut", true))
+			}
+
+			g.log.LogAttrs(context.Background(), slog.LevelError, "search worker stderr: unrecognized line", attrs...)
+
+			return
 		}
 
-		g.log.LogAttrs(context.Background(), g.stderrLevel(text), "search worker stderr", attrs...)
+		g.log.LogAttrs(context.Background(), level, "search worker stderr", append(attrs, slog.String("line", text))...)
 	case index == maxStderrLines:
 		g.log.Error("search worker stderr: further lines dropped", slog.String("source", stderrSource), slog.Uint64("gen", g.n))
 	}
@@ -577,20 +586,4 @@ func (g *generation) exitStatus() string {
 // logFailure logs why generation g stopped.
 func (g *generation) logFailure() {
 	g.log.Error("search worker failed", slog.Uint64("gen", g.n), applog.Err(g.failure()), slog.String("exit", g.exitStatus()))
-}
-
-// modelLoadedPrefix starts the one informational stderr line of the worker:
-// "model loaded in N ms" (search/worker/src/worker.rs).
-const modelLoadedPrefix = "model loaded in "
-
-// defaultStderrLevel is the level of a stderr line when Config.StderrLevel is
-// nil: the worker writes there what the error log must keep (panics, sandbox
-// below full, open descriptors, model and ONNX Runtime failures), except the
-// timing of the model load, which is Info.
-func defaultStderrLevel(line string) slog.Level {
-	if strings.HasPrefix(line, modelLoadedPrefix) {
-		return slog.LevelInfo
-	}
-
-	return slog.LevelError
 }

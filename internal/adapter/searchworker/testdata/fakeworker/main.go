@@ -14,7 +14,10 @@
 //   - exit-after-n: exits with code 1, without answering, at request number
 //     FAKE_N after hello (default 1);
 //   - ignore-search: like ok, but answers no search except the query
-//     "answered".
+//     "answered";
+//   - leak: writes FAKE_MARKER to stderr beside a line of the worker's own,
+//     answers reset with an error whose msg carries FAKE_MARKER and upsert
+//     with such an error without req.
 //
 // ready.worker describes the hello it received and the ORT_*, LD_* and DYLD_*
 // variables it sees, for the tests to check.
@@ -103,6 +106,13 @@ type embedded struct {
 	Emb []byte `cbor:"emb"`
 }
 
+type errorReply struct {
+	T    string  `cbor:"t"`
+	Req  *uint64 `cbor:"req,omitempty"`
+	Code string  `cbor:"code"`
+	Msg  string  `cbor:"msg"`
+}
+
 type status struct {
 	T        string `cbor:"t"`
 	Notes    uint32 `cbor:"notes"`
@@ -122,6 +132,10 @@ type fake struct {
 func main() {
 	mode := os.Getenv("FAKE_MODE")
 	fmt.Fprintf(os.Stderr, "fake: started mode=%s\n", mode)
+
+	if mode == "leak" {
+		fmt.Fprintf(os.Stderr, "leaked: %s\nsandbox partial: landlock_net\n", os.Getenv("FAKE_MARKER"))
+	}
 
 	enc, err := cbor.EncOptions{NilContainers: cbor.NilContainerAsEmpty}.EncMode()
 	if err != nil {
@@ -182,6 +196,17 @@ func (f *fake) run() {
 }
 
 func (f *fake) handle(req request) {
+	if f.mode == "leak" {
+		switch req.T {
+		case "reset":
+			f.send(errorReply{T: "error", Req: &req.Req, Code: "internal", Msg: "leaked " + os.Getenv("FAKE_MARKER")})
+			return
+		case "upsert":
+			f.send(errorReply{T: "error", Code: "internal", Msg: "leaked " + os.Getenv("FAKE_MARKER")})
+			return
+		}
+	}
+
 	switch req.T {
 	case "reset":
 		clear(f.notes)
