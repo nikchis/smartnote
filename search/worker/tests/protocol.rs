@@ -140,6 +140,24 @@ fn reply_samples() -> Vec<(&'static str, Message)> {
             }),
         ),
         (
+            "result_f16",
+            Message::Reply(Reply::Result {
+                req: 10,
+                hits: vec![Hit {
+                    note: NOTE_B.into(),
+                    line: 1,
+                    start: 6,
+                    end: 8,
+                    text: "==".into(),
+                    snippet: "if (a == b)".into(),
+                    marks: vec![[6, 8]],
+                    sources: vec![Source::Substring],
+                    // Exact in f16, so written as a 2-byte float: 0xf9 0x38 0x00.
+                    score: 0.5,
+                }],
+            }),
+        ),
+        (
             "embedded",
             Message::Reply(Reply::Embedded {
                 id: NOTE_A.into(),
@@ -162,6 +180,14 @@ fn reply_samples() -> Vec<(&'static str, Message)> {
                 req: Some(9),
                 code: ErrorCode::BadRequest,
                 msg: "limit out of range".into(),
+            }),
+        ),
+        (
+            "error_no_req",
+            Message::Reply(Reply::Error {
+                req: None,
+                code: ErrorCode::BadRequest,
+                msg: "malformed frame".into(),
             }),
         ),
     ]
@@ -222,6 +248,14 @@ fn golden_layout_tag_first_absent_options_omitted() {
     })
     .expect("encode");
     assert_eq!(error, b"\xa3\x61t\x65error\x64code\x68internal\x63msg\x60");
+
+    // `score` 0.5 is exact in f16: the shortest lossless float, 0xf9 0x3800.
+    let f16 = fs::read(golden_path("result_f16")).expect("sample");
+    assert!(f16.ends_with(b"\x65score\xf9\x38\x00"), "{f16:x?}");
+    // Absent `req`: a map of 3 pairs without the key.
+    let no_req = fs::read(golden_path("error_no_req")).expect("sample");
+    assert_eq!(&no_req[..9], b"\xa3\x61t\x65error");
+    assert!(!no_req.windows(4).any(|w| w == b"\x63req"));
 }
 
 #[test]
