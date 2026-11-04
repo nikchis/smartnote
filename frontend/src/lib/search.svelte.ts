@@ -1,6 +1,7 @@
 // The search bar of the Main screen (search spec §9.1): the query, the hits
 // of the last answer and the status line under them.
 import type { SearchHitDTO, SearchStatusDTO } from "./api";
+import { parseError } from "./errors";
 
 /** SearchApi is the part of SearchService the search bar uses. */
 export type SearchApi = { Search(q: string): Promise<SearchHitDTO[] | null> };
@@ -23,6 +24,8 @@ export class SearchBox {
   /** answered is the query the hits answer, undefined while the answer is pending. */
   private answered: string | undefined = $state();
   private failed = $state(false);
+  /** unavailable tells that the last search failed because the worker could not run it. */
+  private unavailable = false;
   private seq = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -71,11 +74,13 @@ export class SearchBox {
   /**
    * follow takes a status from the search:status event. When the word search
    * is back (ready after loading or unavailable, or any ready status after a
-   * failed search), it searches the current query again: the last answer
-   * came from no worker or from an empty index (search spec §9.1, §11).
+   * search the worker could not run, code search_unavailable), it searches
+   * the current query again: the last answer came from no worker or from an
+   * index still being rebuilt (search spec §9.1, §11). Other failures are not
+   * repeated.
    */
   follow(s: SearchStatusDTO): void {
-    const back = s.lexical === "ready" && (this.status?.lexical !== "ready" || this.failed);
+    const back = s.lexical === "ready" && (this.status?.lexical !== "ready" || this.unavailable);
     this.status = s;
     if (back && this.query.trim() !== "") void this.again();
   }
@@ -110,17 +115,23 @@ export class SearchBox {
   private async run(q: string, n: number): Promise<SearchHitDTO[]> {
     let hits: SearchHitDTO[] = [];
     let failed = false;
+    let unavailable = false;
     try {
       hits = ((await this.api.Search(q)) ?? []).slice(0, MAX_HITS);
-    } catch {
+    } catch (e) {
       // Go logs the reason; the status line says the search failed.
       failed = true;
+      unavailable = parseError(e).code === "search_unavailable";
     }
-    if (n === this.seq) this.show(q, hits, failed);
+    if (n === this.seq) {
+      this.show(q, hits, failed);
+      this.unavailable = unavailable;
+    }
     return hits;
   }
 
   private show(q: string, hits: SearchHitDTO[], failed: boolean): void {
+    this.unavailable = false;
     this.answered = q;
     this.hits = hits;
     this.failed = failed;

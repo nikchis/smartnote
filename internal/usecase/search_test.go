@@ -563,6 +563,72 @@ func TestSearchStatusWaitsForRebuild(t *testing.T) {
 	}
 }
 
+// The marker of an older rebuild, popped by the sender before a newer rebuild
+// replaced the queue, does not end the hold of the newer one.
+func TestSearchStatusHoldEndsWithItsOwnRebuild(t *testing.T) {
+	f := newSearchFixture(t)
+	s := f.search
+
+	older := s.enqueueRebuild(nil, nil, rebuildAtStart)
+	newer := s.enqueueRebuild(nil, nil, rebuildAfterRestart)
+
+	ready := SearchStatus{Lexical: SearchReady, Semantic: SearchReady}
+	s.publish(ready)
+
+	s.rebuilt(older)
+
+	if n := f.statusCount(); n != 0 {
+		t.Fatalf("%d statuses after the older rebuild's marker, want them held", n)
+	}
+
+	s.rebuilt(newer)
+
+	if n := f.statusCount(); n != 1 {
+		t.Fatalf("%d statuses after the newer rebuild's marker, want the held one", n)
+	}
+}
+
+// While the rebuild after a restart is not applied, the new worker's index is
+// incomplete: Query reports the search unavailable instead of finding too
+// little. The rebuild at the start of Run keeps answering from the part
+// already indexed.
+func TestSearchQueryUnavailableUntilRestartRebuilt(t *testing.T) {
+	f := newSearchFixture(t, note(1, "a", "x"))
+	gate, entered := make(chan struct{}), make(chan struct{})
+	f.engine.gate, f.engine.entered = gate, entered
+	f.run(t)
+
+	receive(t, entered, "the first rebuild's Upsert")
+
+	if _, err := f.search.Query(context.Background(), "x", 10); err != nil {
+		t.Fatalf("Query during the first rebuild: %v, want an answer", err)
+	}
+
+	close(gate)
+
+	gate, entered = make(chan struct{}), make(chan struct{})
+
+	f.engine.mu.Lock()
+	f.engine.gate, f.engine.entered = gate, entered
+	f.engine.mu.Unlock()
+
+	f.send(t, SearchEvent{Restarted: true})
+	receive(t, entered, "the restart's Upsert")
+
+	if _, err := f.search.Query(context.Background(), "x", 10); !errors.Is(err, ErrSearchUnavailable) {
+		t.Fatalf("Query during the restart's rebuild: %v, want ErrSearchUnavailable", err)
+	}
+
+	ready := SearchStatus{Notes: 1, Lexical: SearchReady, Semantic: SearchReady}
+	f.send(t, SearchEvent{Status: &ready})
+	close(gate)
+	waitUntil(t, &f.reported, "the status after the restart's rebuild", func() bool { return f.statusCount() > 0 })
+
+	if _, err := f.search.Query(context.Background(), "x", 10); err != nil {
+		t.Fatalf("Query after the restart's rebuild: %v", err)
+	}
+}
+
 func TestSearchQuery(t *testing.T) {
 	f := newSearchFixture(t)
 	f.engine.hits = []SearchHit{{NoteID: testID(1), Line: 2, Text: "x"}}

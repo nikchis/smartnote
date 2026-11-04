@@ -184,9 +184,10 @@ describe("SearchBox", () => {
       expect(box.hits.map((h) => h.noteId)).toEqual(["a"]);
     });
 
-    it("after a failed search even when the unavailable status was not seen", async () => {
+    it("after a search the worker could not run, even when the unavailable status was not seen", async () => {
       box.follow(ready);
       api.fail = true;
+      api.code = "search_unavailable";
       box.input("word");
       await vi.advanceTimersByTimeAsync(150);
 
@@ -195,6 +196,19 @@ describe("SearchBox", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(api.calls).toEqual(["word", "word"]);
       expect(box.statusLine()).toBe("No matches");
+    });
+
+    it("not after a search that failed for another reason", async () => {
+      box.follow(ready);
+      api.fail = true;
+      api.code = "internal";
+      box.input("word");
+      await vi.advanceTimersByTimeAsync(150);
+
+      box.follow({ ...ready, queued: 3 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.calls).toEqual(["word"]);
+      expect(box.statusLine()).toBe("Search unavailable");
     });
 
     it("not while it stays ready, nor without a query", async () => {

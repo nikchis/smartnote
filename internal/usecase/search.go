@@ -165,12 +165,25 @@ type Search struct {
 
 	// statusMu orders the calls of OnStatus. While a rebuild is queued and
 	// not yet applied, statuses are held (the latest one in held) and passed
-	// on when its cmdRebuilt is reached: the interface searches again when
-	// the search turns ready, and the index must be filled by then.
-	statusMu   sync.Mutex
-	rebuilding bool
-	held       *SearchStatus
+	// on when the cmdRebuilt of the latest rebuild is reached: the interface
+	// searches again when the search turns ready, and the index must be
+	// filled by then. While the rebuild after a restart is pending, Query
+	// reports the search unavailable: the new worker's index is incomplete.
+	statusMu       sync.Mutex
+	rebuilding     bool
+	held           *SearchStatus
+	rebuildSeq     uint64 // the number of the latest rebuild
+	restartPending bool   // a rebuild after Restarted is not applied yet
 }
+
+// rebuildCause tells why the index is rebuilt.
+type rebuildCause int
+
+const (
+	rebuildAtStart      rebuildCause = iota // the first rebuild of Run
+	rebuildAfterRestart                     // a new worker with an empty index
+	rebuildAfterRestore                     // a Restore replaced the notes
+)
 
 // NewSearch returns a Search over d.
 func NewSearch(d SearchDeps) (*Search, error) {
@@ -208,7 +221,7 @@ func (s *Search) Run(ctx context.Context) error {
 
 	defer s.stop()
 
-	if err := s.rebuild(ctx, true); err != nil {
+	if err := s.rebuild(ctx, rebuildAtStart); err != nil {
 		s.warn(ctx, err)
 	}
 
@@ -236,13 +249,24 @@ func (s *Search) stop() {
 	})
 
 	s.statusMu.Lock()
-	s.rebuilding, s.held = false, nil
+	s.rebuilding, s.held, s.restartPending = false, nil, false
 	s.statusMu.Unlock()
 }
 
 // Query searches the index, bypassing the queue of index commands (spec
-// §3.3 rule 7).
+// §3.3 rule 7). While the rebuild after a restart of the worker is not
+// applied, it fails with ErrSearchUnavailable: the answer of an incomplete
+// index would look like "No matches". During the rebuild at the start of Run
+// it answers from the part already indexed (spec §11).
 func (s *Search) Query(ctx context.Context, query string, limit int) ([]SearchHit, error) {
+	s.statusMu.Lock()
+	pending := s.restartPending
+	s.statusMu.Unlock()
+
+	if pending {
+		return nil, fmt.Errorf("search: index rebuilt after a restart: %w", ErrSearchUnavailable)
+	}
+
 	hits, err := s.d.Engine.Search(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
@@ -286,24 +310,24 @@ func (s *Search) NoteDeleted(id uuid.UUID) {
 // the rebuild does not stop when ctx is canceled.
 func (s *Search) NotesReplaced(ctx context.Context) {
 	ctx = context.WithoutCancel(ctx)
-	if err := s.rebuildLocked(ctx); err != nil {
+	if err := s.rebuildLocked(ctx, rebuildAfterRestore); err != nil {
 		s.warn(ctx, err)
 	}
 }
 
 // rebuild takes the edit lock and rebuilds the index (spec §3.3 rule 4). The
 // rebuild is not an edit, so the change flag of synchronization stays as it
-// is. start makes Search keep commands from now on, as the first rebuild of
-// Run does.
-func (s *Search) rebuild(ctx context.Context, start bool) error {
+// is. The first rebuild of Run (rebuildAtStart) makes Search keep commands
+// from now on.
+func (s *Search) rebuild(ctx context.Context, cause rebuildCause) error {
 	return s.d.Changes.Edit(func() (bool, error) {
-		if start {
+		if cause == rebuildAtStart {
 			s.mu.Lock()
 			s.active = true
 			s.mu.Unlock()
 		}
 
-		return false, s.rebuildLocked(ctx)
+		return false, s.rebuildLocked(ctx, cause)
 	})
 }
 
@@ -313,7 +337,7 @@ func (s *Search) rebuild(ctx context.Context, start bool) error {
 // If the notes cannot be listed, only the reset is enqueued: the index then
 // holds only the notes saved after it, a partial index, until the next
 // rebuild (the next unlock, Restore or worker restart).
-func (s *Search) rebuildLocked(ctx context.Context) error {
+func (s *Search) rebuildLocked(ctx context.Context, cause rebuildCause) error {
 	s.mu.Lock()
 	active := s.active
 	s.mu.Unlock()
@@ -326,11 +350,11 @@ func (s *Search) rebuildLocked(ctx context.Context) error {
 
 	notes, err := s.d.Notes.ListNotes(ctx)
 	if err != nil {
-		s.enqueueRebuild(nil, nil)
+		s.enqueueRebuild(nil, nil, cause)
 		return fmt.Errorf("search: rebuild: %w", err)
 	}
 
-	s.enqueueRebuild(notes, s.readableEmbeddings(ctx))
+	s.enqueueRebuild(notes, s.readableEmbeddings(ctx), cause)
 
 	return nil
 }
@@ -358,11 +382,15 @@ func (s *Search) readableEmbeddings(ctx context.Context) map[uuid.UUID][]byte {
 }
 
 // enqueueRebuild enqueues a reset and upserts of notes in batches, each note
-// with a new change number, and cmdRebuilt after them; statuses are held until
-// the sender reaches it.
-func (s *Search) enqueueRebuild(notes []domain.Note, embeddings map[uuid.UUID][]byte) {
+// with a new change number, and cmdRebuilt with the number of this rebuild
+// after them, which it returns; statuses are held until the sender reaches
+// it, and Query is unavailable meanwhile when cause is a restart.
+func (s *Search) enqueueRebuild(notes []domain.Note, embeddings map[uuid.UUID][]byte, cause rebuildCause) uint64 {
 	s.statusMu.Lock()
+	s.rebuildSeq++
+	seq := s.rebuildSeq
 	s.rebuilding = true
+	s.restartPending = s.restartPending || cause == rebuildAfterRestart
 	s.statusMu.Unlock()
 
 	s.mu.Lock()
@@ -384,7 +412,9 @@ func (s *Search) enqueueRebuild(notes []domain.Note, embeddings map[uuid.UUID][]
 		cmds = append(cmds, indexCommand{kind: cmdUpsert, notes: indexed})
 	}
 
-	s.queue.push(append(cmds, indexCommand{kind: cmdRebuilt})...)
+	s.queue.push(append(cmds, indexCommand{kind: cmdRebuilt, rebuild: seq})...)
+
+	return seq
 }
 
 func (s *Search) nextRevLocked() uint64 {
@@ -423,7 +453,7 @@ func (s *Search) apply(ctx context.Context, cmd indexCommand) error {
 	case cmdRemove:
 		return s.d.Engine.Remove(ctx, cmd.removals)
 	case cmdRebuilt:
-		s.rebuilt()
+		s.rebuilt(cmd.rebuild)
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", cmd.kind)
@@ -459,7 +489,7 @@ func (s *Search) handleEvent(ctx context.Context, ev SearchEvent) {
 		s.publish(*ev.Status)
 	case ev.Restarted:
 		// The new worker's index is empty and the old one's commands are gone.
-		if err := s.rebuild(ctx, false); err != nil {
+		if err := s.rebuild(ctx, rebuildAfterRestart); err != nil {
 			s.warn(ctx, err)
 		}
 	}
@@ -480,15 +510,21 @@ func (s *Search) publish(st SearchStatus) {
 	}
 }
 
-// rebuilt ends the hold of the statuses once the rebuild's commands are
-// applied, and passes on the latest status held. A newer rebuild in the queue
-// replaced this one's cmdRebuilt, so the hold ends with the last rebuild.
-func (s *Search) rebuilt() {
+// rebuilt ends the hold of the statuses and the unavailability after a
+// restart once the commands of rebuild number seq are applied, and passes on
+// the latest status held. Only the latest rebuild ends them: the marker of an
+// older one that the sender took before a newer rebuild replaced the queue
+// does nothing.
+func (s *Search) rebuilt(seq uint64) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
 
+	if seq != s.rebuildSeq {
+		return
+	}
+
 	held := s.held
-	s.rebuilding, s.held = false, nil
+	s.rebuilding, s.held, s.restartPending = false, nil, false
 
 	if held != nil && s.d.OnStatus != nil {
 		s.d.OnStatus(*held)

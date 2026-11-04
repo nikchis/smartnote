@@ -15,11 +15,13 @@ const (
 )
 
 // indexCommand is one command for the engine: notes for cmdUpsert, removals
-// for cmdRemove, nothing for cmdReset and cmdRebuilt.
+// for cmdRemove, the number of its rebuild for cmdRebuilt, nothing for
+// cmdReset.
 type indexCommand struct {
 	kind     commandKind
 	notes    []IndexedNote
 	removals []IndexedRemoval
+	rebuild  uint64
 }
 
 // indexQueue is the unbounded, ordered queue of index commands (spec §3.3
