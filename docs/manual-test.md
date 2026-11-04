@@ -55,19 +55,19 @@ The worker is the process `smartnote-search`; kill it with `kill -9 $(pidof smar
 
 | # | Scenario | Steps | Expected | .deb | AppImage |
 |---|---|---|---|---|---|
-| 21 | Words, Russian morphology | `Ctrl+F`, type `встреча клиент`. | **Встречи** `line 1` («Встречи с клиентами переносятся на четверг.») first, then **Встречи** `name`: other word forms of both words match. One range is highlighted per hit (the first word found). | pass | pass |
+| 21 | Words, Russian morphology | `Ctrl+F`, type `встреча клиент`. | **Встречи** `line 1` («Встречи с клиентами переносятся на четверг.») first, then **Встречи** `name`: other word forms of both words match. Every matching word of a line is highlighted: «Встречи» and «клиентами» in `line 1`. | pass (rerun 2026-11-04 after the fix wave: both words highlighted, the jump selects «Встречи») | pass (rerun 2026-11-04, the same) |
 | 22 | Words, English morphology | Search `running`. | **Running log** `name` and **Running log** `line 1` with `runs` highlighted. | pass | pass |
-| 23 | Phrase | Search `"quarterly sales report"`, then the same words without quotes. | With quotes: only **Running log** `line 2`, the phrase highlighted. Without quotes: also `line 3` («The report on sales…»). | not run | pass |
+| 23 | Phrase | Search `"quarterly sales report"`, then the same words without quotes. | With quotes: only **Running log** `line 2`, the phrase highlighted. Without quotes: also `line 3` («The report on sales…»). | not run: the `.deb` run covered the core subset (21, 22, 24, 26–30, 33); the scenario does not depend on the package | pass |
 | 24 | Substring in an identifier and in code | Search `ryBack`, then `<< attempt`. | `ryBack`: **Retry code** `line 1`, highlighted inside `retryBackoff`. `<< attempt`: **Retry code** `line 5` first with `<< attempt` highlighted; lines with the word `attempt` follow. Up to 3 lines found only by meaning may follow them (rev 4 allows it; here lines of **Journal**). | pass (`ryBack`, `==` with the model on) | pass |
-| 25 | Operators with the model off | Turn the model off (see above), start and unlock. Search `==`, `(`, then `meeting with customers`. | The status line says `Semantic search unavailable`. `==`: **Retry code** `line 2`. `(`: **Retry code** `line 1` and `line 6`, the bracket highlighted. `meeting with customers`: `No matches`. `smartnote.log` has `semantic search unavailable: model files: …`. | not run | pass |
+| 25 | Operators with the model off | Turn the model off (see above), start and unlock. Search `==`, `(`, then `meeting with customers`. | The status line says `Semantic search unavailable`. `==`: **Retry code** `line 2`. `(`: **Retry code** `line 1` and `line 6`, the bracket highlighted. `meeting with customers`: `No matches`. `smartnote.log` has `semantic search unavailable: model files: …`. | not run: the `.deb` run covered the core subset (21, 22, 24, 26–30, 33); the scenario does not depend on the package | pass |
 | 26 | Cross-lingual meaning | Model on. Search `meeting with customers`, press Enter. Then search `полив рассады помидоров в теплице` and `pancake recipe`. | `meeting with customers`: **Встречи** `line 1` without highlighted words (found by meaning only); Enter selects the whole fragment. Under spec rev 4 a line found only by meaning is shown when its score is at least 0.84, so most cross-lingual queries show `No matches`: on the reference set only 1 of 18 is found, and the other two queries here show `No matches`. That is the expected result, not a failure. | pass (`meeting with customers`) | pass |
 | 27 | No matches | Search `qwertyzxcv`. | `No matches` under the field, no hits. | pass | pass |
-| 28 | Jump to a line and to the name | Select **Garden** in the list. Search `lighthouse`, press Enter. Then search `Garden`, press Enter. | `lighthouse`: **Journal** opens and its text scrolls so that line 91 is visible; `lighthouse` is selected and the text has the focus. `Garden`: the note opens with `Garden` selected in the Name field. | pass (line; name not run) | pass |
+| 28 | Jump to a line and to the name | Select **Garden** in the list. Search `lighthouse`, press Enter. Then search `Garden`, press Enter. | `lighthouse`: **Journal** opens and its text scrolls so that line 91 is visible; `lighthouse` is selected and the text has the focus. `Garden`: the note opens with `Garden` selected in the Name field. | pass (line; the jump to the name not run: the same frontend code, checked from the AppImage) | pass |
 | 29 | Draft and a hit in the same note | Open **Garden**, add text to it, do not apply. Search `greenhouse`, press Enter; press Enter in the question. Open the hit again and press **Discard**. | `Discard unsaved changes?` with **Discard** and **Cancel** also for the note already open. Cancel has the focus: Enter keeps the draft and nothing moves. Discard shows the saved text with `greenhouse` selected. | pass | pass |
 | 30 | New note with text, then a hit | **New**, type a name and a text, click another note in the list. Search `lighthouse`, press Enter; press Enter in the question. Open the hit again and press **Discard**. | During New the list is inactive and the click does nothing. The hit asks `Discard unsaved changes?`; **Cancel** has the focus, a deliberate deviation from v1, whose questions focus Yes (the other questions of Smartnote still do): Enter keeps the new note being written, with its name and text. Discard opens **Journal** with `lighthouse` selected. | pass | pass |
-| 31 | Text before the match changed after the search | Search `lighthouse`, press Escape. Open **Journal**, insert two empty lines at the top, **Apply changes**. `Ctrl+F` (the old hit still says `line 91`), Enter. Then replace `lighthouse` in the text with another word, apply, open the old hit again. | The text of the hit is no longer at its place, so the search runs again: `lighthouse` on line 93 is selected and the hit now says `line 93`. When the word is gone, **Journal** opens at the top without a selection and the hits show `No matches`. | not run | pass (both variants) |
-| 32 | Restore | Connect to the server (Settings → OK; the first Backup runs). Then change `greenhouse` to `glasshouse` in **Garden** and add a note with `zeppelin`, apply both. Search both words. Settings → OK (connect check), **Restore** → **Yes**. Search `glasshouse`, `zeppelin`, `greenhouse`, `meeting with customers`. | Before Restore both words are found. "Would you like to restore data from remote storage?" with "Restore will delete 1 local notes."; "Data successfully restored.". After it `glasshouse` and `zeppelin` show `No matches`, `greenhouse` finds **Garden** `line 2` and the cross-lingual hit is back: the index follows the restored notes. | not run (server part from the AppImage only) | pass |
-| 33 | Worker crash | Kill the worker (see above) and search at once; search again after 2 s. Kill it and save a note change at once, then search the new text. Kill each new worker as soon as it starts until Smartnote gives up; then search and edit a note. | Notes, the list and Apply keep working; a save does not wait for the worker. While no worker runs (from 1 s up to 16 s) a query shows `No matches` and is not repeated by itself. After the restart the search works again, including the change saved meanwhile. The restarts come after 1, 2, 4, 8 and 16 s; the sixth failure within 10 minutes gives up: `Search unavailable`, `smartnote.log` says the search is unavailable until the next start, notes still work. | pass (all steps) | pass (recovery; save and give-up not run) |
+| 31 | Text before the match changed after the search | Search `lighthouse`, press Escape. Open **Journal**, insert two empty lines at the top, **Apply changes**. `Ctrl+F` (the old hit still says `line 91`), Enter. Then replace `lighthouse` in the text with another word, apply, open the old hit again. | The text of the hit is no longer at its place, so the search runs again: `lighthouse` on line 93 is selected and the hit now says `line 93`. When the word is gone, **Journal** opens at the top without a selection and the hits show `No matches`. | not run: the `.deb` run covered the core subset (21, 22, 24, 26–30, 33); the scenario does not depend on the package | pass (both variants) |
+| 32 | Restore | Connect to the empty server of this section's header as in scenarios 10–11: **Settings**, SSH host and port of the OpenSSH container (`22`), user `tester`, password `testpass`; database host `127.0.0.1`, port `5432`, database `smartnote`, user and password of the `postgres:17-alpine` container (`POSTGRES_USER`, `POSTGRES_PASSWORD`); a sync phrase of 16 or more characters; **Test connection**, trust the key, **OK**: the first Backup runs. Then change `greenhouse` to `glasshouse` in **Garden** and add a note with `zeppelin`, apply both. Search both words. Open **Settings** and press **OK** without changes (the connect check; it makes **Restore** active), then **Restore** → **Yes**. Search `glasshouse`, `zeppelin`, `greenhouse`, `meeting with customers`. | Before Restore both words are found. "Would you like to restore data from remote storage?" with "Restore will delete 1 local notes."; "Data successfully restored.". After it `glasshouse` and `zeppelin` show `No matches`, `greenhouse` finds **Garden** `line 2` and the cross-lingual hit is back: the index follows the restored notes. | not run: the server part ran from the AppImage only, as the plan of task 17b set; the index code is the same in both packages | pass |
+| 33 | Worker crash | Kill the worker (see above) and search at once; search again after 2 s. Kill it and save a note change at once, then search the new text. Kill each new worker as soon as it starts until Smartnote gives up; then search and edit a note. | Notes, the list and Apply keep working; a save does not wait for the worker. While no worker runs (from 1 s up to 16 s) the status line shows `Search unavailable` and a query shows no hits, never `No matches`. When the worker is back, the current query runs again by itself and shows its hits, including the change saved meanwhile. The restarts come after 1, 2, 4, 8 and 16 s; after 5 failed restarts within 10 minutes (the sixth failure) Smartnote gives up: `Search unavailable`, `smartnote.log` says the search is unavailable until the next start, notes still work. | pass (rerun 2026-11-04 after the fix wave, all steps: `Search unavailable` while down, the query came back by itself 4 times of 4, the change saved meanwhile found, gave up at the sixth failure) | pass (rerun 2026-11-04, all steps; 3 of 3 kills recovered by themselves) |
 
 ## Results
 
@@ -79,10 +79,11 @@ network namespace. The `.deb` was installed in a clean `ubuntu:26.04` container 
 scenario 1 only. Scenario 20 was not run; the break during Backup
 is covered by the integration test `TestBackupCommitAckLost` and the use case tests (Review Focus 3).
 
-Failures and notes:
-- No failures.
+Defects found and fixed:
 - Closing with a failed Backup showed the raw host key mismatch text; fixed so that it shows both
   fingerprints as the connect check does.
+
+Notes:
 - The trust question shows the key the server offers first, with OpenSSH defaults the ECDSA key;
   README now says to compare with every host key.
 - WebKitGTK keeps its own `storage` and `mediakeys` directories in the data directory
@@ -108,12 +109,31 @@ ran from the AppImage; from the `.deb` the core subset (21, 22, 24, 26–30, 33)
 the OpenSSH test image and `postgres:17-alpine` sharing its network namespace, from the AppImage only.
 `smartnote.log` of both runs holds no note text and no query.
 
-Failures and notes:
-- No failures.
-- While the worker restarts (scenario 33) a query shows `No matches` rather than a status, and the
-  query is not repeated when the worker is back; the user has to type again.
-- A hit highlights one range: the first word found (scenario 21), not every query word in the line.
-  A line found only by meaning has no highlight in the list; the jump selects its whole fragment.
+Defects found (fixed in the final fix wave, rechecked below):
+- While the worker restarts (scenario 33) a query showed `No matches` rather than a status, and the
+  query was not repeated when the worker was back; the user had to type again. Fixed: searches
+  without a worker fail with `Search unavailable`, the status line says so during the restart, and
+  the search bar runs the query again when the worker is ready
+  (`fix(search): report unavailable search instead of no matches`).
+- A hit highlighted one range, the first word found (scenario 21), not every query word in the line.
+  Fixed: every word, phrase and substring match of the line is marked
+  (`fix(search): highlight every match in a hit`).
+
+Rerun of scenarios 21 and 33 after the final fix wave: Claude Code (scripted run), 2026-11-04, branch
+`search-17-quality` at `164aa31`, `smartnote.deb` 2.0.1-1 and `smartnote-x86_64.AppImage` built by
+`task package:linux`, each on a new storage in its own `ubuntu:26.04` container, stand as above. 21:
+both query words are highlighted in `line 1`, Enter selects the first one. 33: right after the kill
+the status line says `Search unavailable` with no hits; 1–7 s later the same query shows its hits
+without typing again; a note saved while the worker was down is found after the restart; the kills
+at +0, +4, +12 and +28 s (after the two of the earlier steps) end with "given up" in `smartnote.log`
+at the sixth failure, `Search unavailable`, and the next Apply works. The worker after a restart has
+`NoNewPrivs: 1` and `Seccomp: 2`. `smartnote.log` of both runs: failures and the given-up line only,
+no note text, no query, no stderr line of the worker. The first rerun from the `.deb` found that the
+query repeated on ready could still show `No matches` while the new worker's index was being
+rebuilt; fixed (`fix(search): hold the search status until a rebuild is applied`) before this run.
+
+Notes:
+- A line found only by meaning has no highlight in the list; the jump selects its whole fragment.
 - Lines found only by meaning still come up for some code queries (`<< attempt` and `attempt` show
   up to 3 lines of the repetitive **Journal** below the real hits), within the rev 4 limit of 3.
 - Cross-lingual search finds `meeting with customers` → **Встречи**; `полив рассады помидоров в
