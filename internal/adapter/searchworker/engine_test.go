@@ -23,6 +23,9 @@ import (
 // fakePath is the fake worker built by TestMain.
 var fakePath string
 
+// fakeAnswered is the one query the fake answers in mode ignore-search.
+const fakeAnswered = "answered"
+
 // hangGuard bounds every wait of a test that would otherwise hang.
 const hangGuard = 20 * time.Second
 
@@ -427,8 +430,13 @@ func TestEngineSearchTimeout(t *testing.T) {
 	e.start(t)
 
 	hits, err := e.Search(t.Context(), "query", 10)
-	if err != nil || len(hits) != 0 {
-		t.Fatalf("Search: %v, %v; want no hits and no error", hits, err)
+	if !errors.Is(err, usecase.ErrSearchUnavailable) || len(hits) != 0 {
+		t.Fatalf("Search: %v, %v; want no hits and ErrSearchUnavailable", hits, err)
+	}
+
+	// A timeout is reported to the caller, not logged as an error for each query.
+	if got := e.log.levels("search timed out"); slices.Contains(got, slog.LevelError) {
+		t.Fatalf("levels of the timeout record = %v, want none at ERROR", got)
 	}
 
 	// The worker is the same one and still answers.
@@ -438,6 +446,143 @@ func TestEngineSearchTimeout(t *testing.T) {
 
 	if gen := e.liveGen.Load(); gen != 1 {
 		t.Fatalf("generation %d, want 1", gen)
+	}
+}
+
+// Three searches in a row that time out mean a hung worker: it is killed and
+// restarted, as after a command timeout. An answered search starts the count
+// again.
+func TestEngineSearchTimeoutsRestart(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "ignore-search", func(c *Config) { c.Timeouts.Search = 100 * time.Millisecond })
+	e.start(t)
+
+	search := func(query string) error {
+		_, err := e.Search(t.Context(), query, 10)
+		return err
+	}
+
+	for _, q := range []string{"lost", "lost", fakeAnswered, "lost", "lost"} {
+		err := search(q)
+		if q == fakeAnswered && err != nil {
+			t.Fatalf("Search %q: %v", q, err)
+		}
+
+		if q != fakeAnswered && !errors.Is(err, usecase.ErrSearchUnavailable) {
+			t.Fatalf("Search %q: %v, want ErrSearchUnavailable", q, err)
+		}
+	}
+
+	if gen := e.liveGen.Load(); gen != 1 {
+		t.Fatalf("generation %d after two timeouts in a row, want 1", gen)
+	}
+
+	if err := search("lost"); !errors.Is(err, usecase.ErrSearchUnavailable) {
+		t.Fatalf("third timeout: %v, want ErrSearchUnavailable", err)
+	}
+
+	e.waitEvent(t, "Restarted", isRestarted)
+
+	if gen := e.liveGen.Load(); gen != 2 {
+		t.Fatalf("generation %d after three timeouts in a row, want 2", gen)
+	}
+}
+
+// Between the loss of a worker and the ready of the next one the engine
+// reports the search unavailable, and searches fail with
+// ErrSearchUnavailable instead of finding nothing (spec §9.1, §11).
+func TestEngineNoWorkerReportsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	after := newManualAfter()
+	e := newTestEngine(t, "exit-after-n", func(c *Config) { c.After = after.After }, "FAKE_N=2")
+	e.start(t)
+
+	if _, err := e.Search(t.Context(), "x", 10); err != nil {
+		t.Fatalf("Search on the ready worker: %v", err)
+	}
+
+	if err := e.Reset(t.Context()); err == nil {
+		t.Fatal("Reset succeeded")
+	}
+
+	e.waitEvent(t, "unavailable status", func(ev usecase.SearchEvent) bool {
+		return ev.Status != nil && ev.Status.Lexical == usecase.SearchUnavailable
+	})
+
+	var pause afterCall
+
+	select {
+	case pause = <-after.calls:
+	case <-time.After(hangGuard):
+		t.Fatal("no pause after the failure")
+	}
+
+	if _, err := e.Search(t.Context(), "x", 10); !errors.Is(err, usecase.ErrSearchUnavailable) {
+		t.Fatalf("Search without a worker: %v, want ErrSearchUnavailable", err)
+	}
+
+	pause.fire <- time.Now()
+
+	e.waitEvent(t, "Restarted", isRestarted)
+	e.waitEvent(t, "ready status", func(ev usecase.SearchEvent) bool {
+		return ev.Status != nil && ev.Status.Lexical == usecase.SearchReady
+	})
+
+	if _, err := e.Search(t.Context(), "x", 10); err != nil {
+		t.Fatalf("Search after the restart: %v", err)
+	}
+}
+
+// Until the first worker is ready the search is unavailable too.
+func TestEngineUnavailableBeforeFirstReady(t *testing.T) {
+	t.Parallel()
+
+	after := newManualAfter()
+	e := newTestEngine(t, "crash-on-hello", func(c *Config) { c.After = after.After })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() { _ = e.Start(ctx) }()
+
+	select {
+	case <-after.calls:
+	case <-time.After(hangGuard):
+		t.Fatal("no pause after the failed start")
+	}
+
+	if _, err := e.Search(t.Context(), "x", 10); !errors.Is(err, usecase.ErrSearchUnavailable) {
+		t.Fatalf("Search before the first ready: %v, want ErrSearchUnavailable", err)
+	}
+
+	ev := e.waitEvent(t, "status", func(ev usecase.SearchEvent) bool { return ev.Status != nil })
+	if ev.Status.Lexical != usecase.SearchUnavailable {
+		t.Fatalf("status %+v, want lexical unavailable", ev.Status)
+	}
+}
+
+// Close is no failure: it reports no unavailable status.
+func TestEngineCloseReportsNoUnavailable(t *testing.T) {
+	t.Parallel()
+
+	e := newTestEngine(t, "ok", nil)
+	e.start(t)
+
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for {
+		item, ok := e.queue.pop()
+		if !ok {
+			break
+		}
+
+		if s := item.ev.Status; s != nil && s.Lexical == usecase.SearchUnavailable {
+			t.Fatalf("status %+v of generation %d after Close", s, item.gen)
+		}
 	}
 }
 
@@ -487,13 +632,13 @@ func TestEngineCrashBackoffAndGiveUp(t *testing.T) {
 		t.Fatalf("%d starts, want 6 (the first and 5 restarts)", n)
 	}
 
-	// Off for good: commands do nothing, searches find nothing.
+	// Off for good: commands do nothing, searches are unavailable.
 	if err := e.Upsert(t.Context(), []usecase.IndexedNote{testNote("x")}); err != nil {
 		t.Fatalf("Upsert after giving up: %v", err)
 	}
 
-	if hits, err := e.Search(t.Context(), "x", 10); err != nil || len(hits) != 0 {
-		t.Fatalf("Search after giving up: %v, %v", hits, err)
+	if hits, err := e.Search(t.Context(), "x", 10); !errors.Is(err, usecase.ErrSearchUnavailable) || len(hits) != 0 {
+		t.Fatalf("Search after giving up: %v, %v; want ErrSearchUnavailable", hits, err)
 	}
 
 	if err := e.Start(t.Context()); err != nil {
@@ -760,5 +905,39 @@ func TestDefaultStderrLevel(t *testing.T) {
 		if got := defaultStderrLevel(tc.line); got != tc.want {
 			t.Errorf("defaultStderrLevel(%q) = %v, want %v", tc.line, got, tc.want)
 		}
+	}
+}
+
+// The status of a new worker waits until its Restarted is queued, so the
+// consumer rebuilds the index before it learns that the search is ready.
+func TestEventQueueHoldsStatusOfUnannouncedGeneration(t *testing.T) {
+	t.Parallel()
+
+	q := newEventQueue()
+	q.open(1)
+
+	ready := usecase.SearchStatus{Lexical: usecase.SearchReady, Semantic: usecase.SearchReady}
+	q.setStatus(2, ready)
+
+	if item, ok := q.pop(); ok {
+		t.Fatalf("popped %+v before generation 2 was announced", item)
+	}
+
+	q.push(2, usecase.SearchEvent{Restarted: true})
+	q.open(2)
+
+	if item, ok := q.pop(); !ok || !item.ev.Restarted {
+		t.Fatalf("first %+v, %v; want Restarted", item, ok)
+	}
+
+	if item, ok := q.pop(); !ok || item.ev.Status == nil || *item.ev.Status != ready {
+		t.Fatalf("second %+v, %v; want the ready status", item, ok)
+	}
+
+	// The engine's own status is never held.
+	q.setStatus(0, unavailableStatus)
+
+	if item, ok := q.pop(); !ok || item.gen != 0 {
+		t.Fatalf("%+v, %v; want the status of generation 0", item, ok)
 	}
 }

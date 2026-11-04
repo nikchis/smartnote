@@ -130,6 +130,12 @@ type SearchDeps struct {
 	Warn       func(error)
 }
 
+// ErrSearchUnavailable means the engine cannot answer a search now: no
+// worker is ready (it is starting, restarting or was given up) or the worker
+// did not answer in time. It is not an empty result: the interface shows
+// "Search unavailable", not "No matches" (spec §9.1, §11).
+var ErrSearchUnavailable = errors.New("search unavailable")
+
 // upsertBatch is the most notes one Upsert carries (spec §3.2, §7.2).
 const upsertBatch = 100
 

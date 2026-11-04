@@ -80,7 +80,9 @@ func NewSearchService(env Env, s *usecase.Search, status *SearchStatusFeed) *Sea
 }
 
 // Search returns at most 10 places that match query, best first; none is an
-// empty list. The search bypasses the queue of index changes (spec §3.3 rule 7).
+// empty list. A search the worker cannot run now fails with the code
+// search_unavailable and is not logged: the status events tell why. The search
+// bypasses the queue of index changes (spec §3.3 rule 7).
 func (s *SearchService) Search(query string) ([]SearchHitDTO, error) {
 	hits, err := s.search.Query(s.env.Ctx, query, searchLimit)
 	if err != nil {

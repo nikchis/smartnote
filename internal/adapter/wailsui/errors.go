@@ -11,6 +11,7 @@ import (
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
 	"github.com/nikchis/smartnote/internal/applog"
 	"github.com/nikchis/smartnote/internal/domain"
+	"github.com/nikchis/smartnote/internal/usecase"
 )
 
 // UIError is an error as the interface sees it: a code from spec §3.5, the
@@ -58,6 +59,9 @@ const (
 	codeSSH                   = "ssh"
 	codeDatabase              = "database"
 	codeInternal              = "internal"
+	// codeSearchUnavailable is a search the engine could not run (search
+	// spec §9.1, §11); the interface shows its message in the status line.
+	codeSearchUnavailable = "search_unavailable"
 )
 
 // Messages of the codes whose text the spec does not fix.
@@ -71,7 +75,7 @@ const (
 	msgCanceled              = "The operation was canceled."
 )
 
-// sentinels maps domain errors to their code and text, in the order they are checked.
+// sentinels maps domain and use case errors to their code and text, in the order they are checked.
 var sentinels = []struct {
 	err           error
 	code, message string
@@ -86,6 +90,7 @@ var sentinels = []struct {
 	{domain.ErrKeyMissing, codeKeyMissing, "There is no SSH key. Generate or import a key first."},
 	{domain.ErrKeyPassphraseRequired, codeKeyPassphraseRequired, msgKeyPassphraseRequired},
 	{domain.ErrBusy, codeBusy, msgBusy},
+	{usecase.ErrSearchUnavailable, codeSearchUnavailable, "Search unavailable"},
 }
 
 // ToUIError converts err into a *UIError by the table of spec §3.5; nil stays

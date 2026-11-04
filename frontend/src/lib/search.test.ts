@@ -11,12 +11,14 @@ class FakeSearch implements SearchApi {
   calls: string[] = [];
   results: Record<string, SearchHitDTO[] | null> = {};
   fail = false;
+  /** code is the UIError code of a failed search. */
+  code = "internal";
   pending: { query: string; resolve: (hits: SearchHitDTO[]) => void }[] = [];
   hold = false;
 
   Search(q: string): Promise<SearchHitDTO[] | null> {
     this.calls.push(q);
-    if (this.fail) return Promise.reject(new Error('{"code":"internal","message":"search failed"}'));
+    if (this.fail) return Promise.reject(new Error(JSON.stringify({ code: this.code, message: "search failed" })));
     if (this.hold) return new Promise((resolve) => this.pending.push({ query: q, resolve }));
     return Promise.resolve(this.results[q] ?? []);
   }
@@ -135,6 +137,80 @@ describe("SearchBox", () => {
     await expect(box.again()).resolves.toEqual([]);
     expect(box.hits).toEqual([]);
     expect(box.statusLine()).toBe("Search unavailable");
+  });
+
+  it("a search the worker cannot run says Search unavailable, not No matches", async () => {
+    box.follow(ready);
+    api.fail = true;
+    api.code = "search_unavailable";
+    box.input("word");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(box.hits).toEqual([]);
+    expect(box.statusLine()).toBe("Search unavailable");
+  });
+
+  describe("search again when the word search is back", () => {
+    const down: SearchStatusDTO = { ...ready, lexical: "unavailable", semantic: "unavailable" };
+
+    it("after a restart", async () => {
+      box.follow(ready);
+      box.follow(down);
+      api.fail = true;
+      api.code = "search_unavailable";
+      box.input("word");
+      await vi.advanceTimersByTimeAsync(150);
+      expect(box.statusLine()).toBe("Search unavailable");
+
+      api.fail = false;
+      api.results.word = [hit("a", 1)];
+      box.follow(ready);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.calls).toEqual(["word", "word"]);
+      expect(box.hits.map((h) => h.noteId)).toEqual(["a"]);
+      expect(box.statusLine()).toBe("");
+    });
+
+    it("after the first start", async () => {
+      box.seed({ notes: 0, queued: 0, lexical: "loading", semantic: "loading" });
+      api.fail = true;
+      box.input("word");
+      await vi.advanceTimersByTimeAsync(150);
+
+      api.fail = false;
+      api.results.word = [hit("a", 1)];
+      box.follow({ ...ready, semantic: "loading" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.calls).toEqual(["word", "word"]);
+      expect(box.hits.map((h) => h.noteId)).toEqual(["a"]);
+    });
+
+    it("after a failed search even when the unavailable status was not seen", async () => {
+      box.follow(ready);
+      api.fail = true;
+      box.input("word");
+      await vi.advanceTimersByTimeAsync(150);
+
+      api.fail = false;
+      box.follow({ ...ready, notes: 501 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.calls).toEqual(["word", "word"]);
+      expect(box.statusLine()).toBe("No matches");
+    });
+
+    it("not while it stays ready, nor without a query", async () => {
+      box.follow(ready);
+      box.input("word");
+      await vi.advanceTimersByTimeAsync(150);
+      box.follow({ ...ready, queued: 3 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.calls).toEqual(["word"]);
+
+      box.input("");
+      box.follow(down);
+      box.follow(ready);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.calls).toEqual(["word"]);
+    });
   });
 
   it("status from Status() does not replace a newer event", () => {

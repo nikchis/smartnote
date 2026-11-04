@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -149,6 +150,30 @@ func TestSearchServiceError(t *testing.T) {
 
 	if code, _ := uiCode(t, err); code != codeInternal {
 		t.Errorf("code = %q, want %q", code, codeInternal)
+	}
+}
+
+// A search the engine cannot run is "Search unavailable" for the interface,
+// not an empty list, and is not logged for every query.
+func TestSearchServiceUnavailable(t *testing.T) {
+	var buf bytes.Buffer
+
+	env := Env{Ctx: t.Context(), Log: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	engine := &hitsEngine{err: fmt.Errorf("search worker: search timed out: %w", usecase.ErrSearchUnavailable)}
+	svc := NewSearchService(env, newTestSearch(t, engine), NewSearchStatusFeed(usecase.SearchStatus{}, nil))
+
+	hits, err := svc.Search("x")
+	if hits != nil {
+		t.Errorf("hits = %v, want nil with an error", hits)
+	}
+
+	var ui *UIError
+	if !errors.As(err, &ui) || ui.Code != codeSearchUnavailable || ui.Message != "Search unavailable" {
+		t.Fatalf("error = %v, want code %q with message %q", err, codeSearchUnavailable, "Search unavailable")
+	}
+
+	if buf.Len() != 0 {
+		t.Errorf("log = %q, want nothing", buf.String())
 	}
 }
 

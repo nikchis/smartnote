@@ -34,13 +34,19 @@ const (
 	closeGrace = 2 * time.Second
 	// maxUpsert is the most notes one upsert carries (spec §7.2).
 	maxUpsert = 100
+	// maxSearchTimeouts is how many searches in a row may time out before
+	// the worker counts as hung and is restarted, as after a command
+	// timeout. The reader of a worker whose index thread hangs keeps reading
+	// stdin, so only the searches notice it.
+	maxSearchTimeouts = 3
 )
 
 var (
 	errClosed = errors.New("search worker: engine closed")
-	// errNoWorker means no worker is ready: the last one failed and the next
-	// one has not started yet. Its commands are not needed: the next worker
-	// reports Restarted and gets the whole index again.
+	// errNoWorker means no worker is ready: the first one is starting, or the
+	// last one failed and the next one has not started yet. Its commands are
+	// not needed: the next worker reports Restarted and gets the whole index
+	// again; its searches are unavailable.
 	errNoWorker = errors.New("search worker: restarting")
 	// errTimeout means the worker did not answer in time.
 	errTimeout = errors.New("search worker: no answer in time")
@@ -87,14 +93,17 @@ type ReadyInfo struct {
 
 // Engine runs the worker and passes requests and events (spec §8.1). One
 // supervisor goroutine starts the worker, restarts it with pauses after a
-// failure and gives up after too many; a forwarder goroutine passes the events
-// to Events. A failure is a failed start, an exit, a protocol violation or a
-// command that timed out; a search that times out finds nothing and is no
-// failure. Each process is a generation: replies and events of earlier ones
-// are dropped.
+// failure and gives up after 5 failed restarts within 10 minutes (the sixth
+// failure); a forwarder goroutine passes the events to Events. A failure is a
+// failed start, an exit, a protocol violation, a command that timed out or
+// the third search in a row that timed out. Each process is a generation:
+// replies and events of earlier ones are dropped.
 //
-// After giving up, the engine is off until the application restarts:
-// commands do nothing and searches find nothing, as without a worker.
+// While no worker is ready after a failure, the engine reports both searches
+// unavailable (a status of generation 0, which the ready worker's status
+// replaces), and searches fail with usecase.ErrSearchUnavailable, as does a
+// search that times out. After giving up, the engine is off until the
+// application restarts: commands do nothing and searches are unavailable.
 type Engine struct {
 	cfg      Config
 	extraEnv []string // added to the parent's environment: a seam for the tests
@@ -284,16 +293,21 @@ func (e *Engine) command(ctx context.Context, msg func(req uint64) any) error {
 }
 
 // Search searches the index for at most limit hits. Without a ready worker,
-// or when the worker does not answer within the search timeout, it finds
-// nothing: the status events tell why.
+// or when the worker does not answer within the search timeout, it fails
+// with usecase.ErrSearchUnavailable: the search could not run, which is not
+// an empty result. The third timeout in a row restarts the worker.
 func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase.SearchHit, error) {
 	g, err := e.current()
-	if g == nil || limit <= 0 {
-		if errors.Is(err, errNoWorker) {
-			err = nil
+	if g == nil {
+		if err == nil || errors.Is(err, errNoWorker) {
+			err = usecase.ErrSearchUnavailable // restarting or given up
 		}
 
-		return nil, err
+		return nil, fmt.Errorf("search worker: %w", err)
+	}
+
+	if limit <= 0 {
+		return nil, nil
 	}
 
 	req := e.req.Add(1)
@@ -301,13 +315,15 @@ func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase
 
 	reply, err := g.call(ctx, req, msg, e.cfg.Timeouts.Search)
 	if errors.Is(err, errTimeout) {
-		e.cfg.Log.Error("search worker: search timed out", slog.Uint64("gen", g.n))
-		return nil, nil
+		e.searchTimedOut(g)
+		return nil, fmt.Errorf("search worker: search timed out: %w", usecase.ErrSearchUnavailable)
 	}
 
 	if err != nil {
 		return nil, e.callErr(err)
 	}
+
+	g.searchTimeouts.Store(0)
 
 	switch r := reply.(type) {
 	case *resultMsg:
@@ -326,6 +342,19 @@ func (e *Engine) Search(ctx context.Context, query string, limit int) ([]usecase
 
 		return nil, fmt.Errorf("search worker: %w", err)
 	}
+}
+
+// searchTimedOut counts a search of g that timed out; the third in a row
+// kills g, which the supervisor then restarts. A single timeout is logged
+// below Error: the interface shows it and the error log keeps failures only.
+func (e *Engine) searchTimedOut(g *generation) {
+	n := g.searchTimeouts.Add(1)
+	if n < maxSearchTimeouts {
+		e.cfg.Log.Warn("search worker: search timed out", slog.Uint64("gen", g.n), slog.Int64("in_a_row", int64(n)))
+		return
+	}
+
+	g.kill(fmt.Errorf("%d searches in a row: %w", n, errTimeout))
 }
 
 func searchHits(in []hitMsg) ([]usecase.SearchHit, error) {
@@ -360,7 +389,7 @@ func (e *Engine) callErr(err error) error {
 	return fmt.Errorf("search worker: %w", err)
 }
 
-// current returns the ready worker, or nil and errClosed, errNoWorker or nil
+// current returns the ready worker, or nil and errClosed, errNoWorker, or nil
 // after giving up.
 func (e *Engine) current() (*generation, error) {
 	e.mu.Lock()
@@ -443,6 +472,11 @@ func (e *Engine) supervise() {
 			return
 		}
 
+		// No worker is ready until the next one is: generation 0, as every
+		// goroutine of the lost one has stopped and cannot overwrite it; the
+		// ready status of the next worker replaces it.
+		e.queue.setStatus(0, unavailableStatus)
+
 		select {
 		case <-e.cfg.After(pause):
 		case <-e.life.Done():
@@ -493,11 +527,14 @@ func (e *Engine) launch() (*generation, error) {
 
 // serve reports the ready worker g and waits until it fails or the engine
 // closes; then g is gone. After an earlier ready worker the index is empty
-// again: Restarted comes first.
+// again: Restarted comes first, before any status of g, so the consumer
+// rebuilds the index before it learns that the search is ready.
 func (e *Engine) serve(g *generation, restarted bool) {
 	if restarted {
 		e.queue.push(g.n, usecase.SearchEvent{Restarted: true})
 	}
+
+	e.queue.open(g.n)
 
 	e.settle()
 
@@ -527,9 +564,12 @@ func (e *Engine) giveUp() {
 
 	e.cfg.Log.Error("search worker: given up, search is unavailable until the next start of the application")
 	// Generation 0: the status of the engine itself, never dropped.
-	e.queue.setStatus(0, usecase.SearchStatus{Lexical: usecase.SearchUnavailable, Semantic: usecase.SearchUnavailable})
+	e.queue.setStatus(0, unavailableStatus)
 	e.settle()
 }
+
+// unavailableStatus is the status of the engine while no worker is ready.
+var unavailableStatus = usecase.SearchStatus{Lexical: usecase.SearchUnavailable, Semantic: usecase.SearchUnavailable}
 
 func (e *Engine) settle() { e.settleOnce.Do(func() { close(e.settled) }) }
 
@@ -562,11 +602,13 @@ type queued struct {
 
 // eventQueue holds the events between the reader and the forwarder: the
 // other events in order, without a limit, and the latest status. Adding never
-// waits.
+// waits. A status of a generation above the open one is held until that
+// generation opens.
 type eventQueue struct {
 	mu     sync.Mutex
 	items  []queued
 	status *queued
+	opened uint64        // the newest generation whose statuses may pass
 	wake   chan struct{} // capacity 1
 }
 
@@ -588,6 +630,14 @@ func (q *eventQueue) setStatus(gen uint64, s usecase.SearchStatus) {
 	q.signal()
 }
 
+// open lets the statuses of generation gen and earlier pass.
+func (q *eventQueue) open(gen uint64) {
+	q.mu.Lock()
+	q.opened = max(q.opened, gen)
+	q.mu.Unlock()
+	q.signal()
+}
+
 func (q *eventQueue) signal() {
 	select {
 	case q.wake <- struct{}{}:
@@ -595,8 +645,8 @@ func (q *eventQueue) signal() {
 	}
 }
 
-// next returns the first event, then the status, waiting for one until done
-// closes.
+// next returns the first event, then the status unless it is held, waiting
+// for one until done closes.
 func (q *eventQueue) next(done <-chan struct{}) (queued, bool) {
 	for {
 		if item, ok := q.pop(); ok {
@@ -627,7 +677,7 @@ func (q *eventQueue) pop() (queued, bool) {
 		return item, true
 	}
 
-	if q.status != nil {
+	if q.status != nil && q.status.gen <= q.opened {
 		item := *q.status
 		q.status = nil
 

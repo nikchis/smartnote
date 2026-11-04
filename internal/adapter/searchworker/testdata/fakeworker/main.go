@@ -13,7 +13,8 @@
 //     declaring 4 GiB;
 //   - exit-after-n: exits with code 1, without answering, at request number
 //     FAKE_N after hello (default 1);
-//   - ignore-search: like ok, but never answers a search.
+//   - ignore-search: like ok, but answers no search except the query
+//     "answered".
 //
 // ready.worker describes the hello it received and the ORT_*, LD_* and DYLD_*
 // variables it sees, for the tests to check.
@@ -194,7 +195,7 @@ func (f *fake) handle(req request) {
 
 		f.send(ok{T: "ok", Req: req.Req})
 	case "search":
-		if f.mode != "ignore-search" {
+		if f.mode != "ignore-search" || req.Query == "answered" {
 			f.send(result{T: "result", Req: req.Req, Hits: f.search(req.Query, int(req.Limit))})
 		}
 	default:

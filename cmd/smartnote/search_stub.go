@@ -7,7 +7,8 @@ import (
 )
 
 // unavailableEngine is the search engine when there is no worker: it reports
-// both searches unavailable, finds nothing and accepts every index command.
+// both searches unavailable, fails every search with
+// usecase.ErrSearchUnavailable and accepts every index command.
 type unavailableEngine struct {
 	events chan usecase.SearchEvent
 }
@@ -35,7 +36,7 @@ func (e *unavailableEngine) Upsert(context.Context, []usecase.IndexedNote) error
 func (e *unavailableEngine) Remove(context.Context, []usecase.IndexedRemoval) error { return nil }
 
 func (e *unavailableEngine) Search(context.Context, string, int) ([]usecase.SearchHit, error) {
-	return nil, nil
+	return nil, usecase.ErrSearchUnavailable
 }
 
 func (e *unavailableEngine) Events() <-chan usecase.SearchEvent { return e.events }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -32,8 +33,8 @@ func TestUnavailableEngine(t *testing.T) {
 	}
 
 	hits, err := e.Search(ctx, "x", 10)
-	if err != nil || len(hits) != 0 {
-		t.Errorf("Search = %v, %v, want an empty result", hits, err)
+	if !errors.Is(err, usecase.ErrSearchUnavailable) || len(hits) != 0 {
+		t.Errorf("Search = %v, %v, want no hits and ErrSearchUnavailable", hits, err)
 	}
 
 	for name, err := range map[string]error{

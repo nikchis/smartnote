@@ -68,9 +68,16 @@ export class SearchBox {
     return this.hits[this.selected];
   }
 
-  /** follow takes a status from the search:status event. */
+  /**
+   * follow takes a status from the search:status event. When the word search
+   * is back (ready after loading or unavailable, or any ready status after a
+   * failed search), it searches the current query again: the last answer
+   * came from no worker or from an empty index (search spec §9.1, §11).
+   */
   follow(s: SearchStatusDTO): void {
+    const back = s.lexical === "ready" && (this.status?.lexical !== "ready" || this.failed);
     this.status = s;
+    if (back && this.query.trim() !== "") void this.again();
   }
 
   /**

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -113,6 +114,8 @@ type generation struct {
 
 	stopping chan struct{} // closed to close stdin: the graceful stop
 	stopOnce sync.Once
+
+	searchTimeouts atomic.Int32 // searches in a row that timed out
 
 	wg sync.WaitGroup
 }
