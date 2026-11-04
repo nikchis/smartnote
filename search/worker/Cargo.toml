@@ -30,6 +30,10 @@ test-probes = ["dep:tantivy"]
 zalloc = { path = "../zalloc" }
 tantivy = { version = "0.27.0", default-features = false, optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
+ciborium = "0.2.2"
+serde_bytes = "0.11.19"
+thiserror = "2.0.21"
+unicode-normalization = "0.1.26"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"

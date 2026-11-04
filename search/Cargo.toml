@@ -1,5 +1,7 @@
 [workspace]
 members = ["model-tool", "zalloc", "worker"]
+# Fuzz targets build with nightly through cargo-fuzz, outside the stable workspace.
+exclude = ["fuzz"]
 resolver = "3"
 
 [workspace.package]

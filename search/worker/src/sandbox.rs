@@ -3,10 +3,10 @@
 //! scope (spec §14).
 #![allow(unsafe_code, reason = "prctl through libc; every block is commented")]
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// How much of the sandbox the kernel enforces; reported in `ready.sandbox` (spec §7.2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SandboxLevel {
     /// Landlock restricts every file-system change and TCP, seccomp denies new sockets.

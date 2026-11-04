@@ -1,0 +1,39 @@
+# Fuzz targets of the worker (spec §12.1), run locally with nightly, not in CI:
+#   cd search/fuzz && RUSTUP_TOOLCHAIN=nightly cargo fuzz run frame -- -max_total_time=60
+# Kept out of the stable workspace (`exclude` in search/Cargo.toml).
+[package]
+name = "worker-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.10"
+worker = { path = "../worker" }
+serde = "1.0.229"
+unicode-normalization = "0.1.26"
+
+[[bin]]
+name = "frame"
+path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request"
+path = "fuzz_targets/request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "form"
+path = "fuzz_targets/form.rs"
+test = false
+doc = false
+bench = false
