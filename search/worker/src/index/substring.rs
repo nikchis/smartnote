@@ -36,7 +36,7 @@ pub fn find_substring<'a>(
                     note,
                     line,
                     score,
-                    first,
+                    first: Some(first),
                 },
             ))
         })
@@ -76,7 +76,7 @@ mod tests {
         for (needle, at) in [("==", 6), ("(", 3), ("->", 15), ("{", 12)] {
             let hits = find_substring(lines(&[(1, text)]).into_iter(), needle, 3, 50);
             assert_eq!(hits.len(), 1, "needle {needle}");
-            assert_eq!(hits[0].first, at, "needle {needle}");
+            assert_eq!(hits[0].first, Some(at), "needle {needle}");
         }
     }
 
@@ -94,7 +94,7 @@ mod tests {
     fn substring_offsets_in_long_line() {
         let text = format!("{}needle", "a".repeat(8000));
         let hits = find_substring(lines(&[(1, &text)]).into_iter(), "needle", 3, 50);
-        assert_eq!(hits[0].first, 8000);
+        assert_eq!(hits[0].first, Some(8000));
     }
 
     #[test]

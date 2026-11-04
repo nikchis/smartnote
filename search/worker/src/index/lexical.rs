@@ -125,8 +125,9 @@ impl LexicalIndex {
     /// lines with at most `per_note` per note, the cap applied while walking the best
     /// [`MAX_DOCS`] documents in rank order.
     ///
-    /// `first` of the hits is 0: the index does not hold the text. Callers that have the line
-    /// get the offset from [`first_match`](Self::first_match).
+    /// `first` of the hits is `None`: the index does not hold the text. The engine gets the
+    /// offset from [`first_match`](Self::first_match) with the form of the line, only for
+    /// displayed hits.
     ///
     /// # Errors
     ///
@@ -179,14 +180,15 @@ impl LexicalIndex {
                     note,
                     line: u32::try_from(line).unwrap_or(u32::MAX),
                     score,
-                    first: 0,
+                    first: None,
                 });
             }
         }
         Ok(hits)
     }
 
-    /// Byte offset in `form` of the first match of `q`: the first token whose analyzed term is
+    /// Byte offset in `form` of the first match of `q` (the `first` of a word hit, which
+    /// [`search`](Self::search) leaves `None`): the first token whose analyzed term is
     /// a term of a word of `q`, or the start of a phrase of `q` (consecutive tokens).
     #[must_use]
     pub fn first_match(&self, form: &str, q: &Query) -> Option<usize> {
@@ -298,6 +300,7 @@ mod tests {
         let hits = index.search(&parse_query("пароль"), 3, 50).expect("search");
         let count = |n| hits.iter().filter(|h| h.note == n).count();
         assert_eq!((count(1), count(2), count(3)), (3, 1, 1));
+        assert!(hits.iter().all(|h| h.first.is_none()));
     }
 
     #[test]

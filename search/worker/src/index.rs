@@ -18,6 +18,9 @@ pub struct LineHit {
     pub line: u32,
     /// Rank of the line within its kind of search; larger is better.
     pub score: f32,
-    /// Byte offset of the first match in the search form of the line.
-    pub first: usize,
+    /// Byte offset of the first match in the search form of the line. `Some` for substring
+    /// hits; `None` for word hits, whose offset comes from
+    /// [`LexicalIndex::first_match`] with the line's form, called by the engine only for
+    /// displayed hits.
+    pub first: Option<usize>,
 }
