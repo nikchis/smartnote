@@ -659,6 +659,43 @@ func TestEngineNoWorkerReportsUnavailable(t *testing.T) {
 	}
 }
 
+// Index commands while no worker is ready are not needed: the next worker
+// reports Restarted and gets the whole index again. They succeed instead of
+// filling the error log with one line each.
+func TestEngineCommandsWhileRestartingSucceed(t *testing.T) {
+	t.Parallel()
+
+	after := newManualAfter()
+	e := newTestEngine(t, "exit-after-n", func(c *Config) { c.After = after.After })
+	e.start(t)
+
+	if err := e.Reset(t.Context()); err == nil {
+		t.Fatal("Reset succeeded")
+	}
+
+	var pause afterCall
+
+	select {
+	case pause = <-after.calls:
+	case <-time.After(hangGuard):
+		t.Fatal("no pause after the failure")
+	}
+
+	defer func() { pause.fire <- time.Now() }()
+
+	if err := e.Reset(t.Context()); err != nil {
+		t.Errorf("Reset while restarting: %v", err)
+	}
+
+	if err := e.Upsert(t.Context(), []usecase.IndexedNote{testNote("x")}); err != nil {
+		t.Errorf("Upsert while restarting: %v", err)
+	}
+
+	if err := e.Remove(t.Context(), []usecase.IndexedRemoval{{ID: uuid.New(), Rev: 2}}); err != nil {
+		t.Errorf("Remove while restarting: %v", err)
+	}
+}
+
 // Until the first worker is ready the search is unavailable too.
 func TestEngineUnavailableBeforeFirstReady(t *testing.T) {
 	t.Parallel()

@@ -45,9 +45,11 @@ const (
 var (
 	errClosed = errors.New("search worker: engine closed")
 	// errNoWorker means no worker is ready: the first one is starting, or the
-	// last one failed and the next one has not started yet. Its commands are
-	// not needed: the next worker reports Restarted and gets the whole index
-	// again; its searches are unavailable.
+	// last one failed and the next one has not started yet. Index commands
+	// meanwhile succeed without being sent: the next worker reports Restarted
+	// and gets the whole index again. (usecase.Search sends none before the
+	// first worker is ready: its Run starts with Engine.Start, which waits for
+	// that.) Searches meanwhile are unavailable.
 	errNoWorker = errors.New("search worker: restarting")
 	// errTimeout means the worker did not answer in time.
 	errTimeout = errors.New("search worker: no answer in time")
@@ -310,11 +312,16 @@ func (e *Engine) Remove(ctx context.Context, ids []usecase.IndexedRemoval) error
 
 // command sends an index command and waits for its ok; it returns the worker
 // that answered ok. A timeout kills the worker, which the supervisor then
-// restarts.
+// restarts. Without a worker, while restarting or after giving up, it does
+// nothing and returns nil.
 func (e *Engine) command(ctx context.Context, msg func(req uint64) any) (*generation, error) {
 	g, err := e.current()
 	if g == nil {
-		return nil, err // nil after giving up: the engine is off
+		if errors.Is(err, errNoWorker) {
+			err = nil // the next worker gets the whole index
+		}
+
+		return nil, err // nil after giving up too: the engine is off
 	}
 
 	req := e.req.Add(1)
