@@ -23,7 +23,7 @@ var testKDF = sealbox.KDFParams{Time: 1, MemoryKiB: 19456, Threads: 1}
 
 const testPhrase = "sixteen chars ok"
 
-func testMeta(t *testing.T) (remotecrypto.Meta, []byte) {
+func testMeta(t *testing.T) (meta remotecrypto.Meta, key []byte) {
 	t.Helper()
 
 	m, key, err := remotecrypto.NewMeta(testPhrase, testKDF)
@@ -90,7 +90,25 @@ func TestParseHeaderOrder(t *testing.T) {
 		{"version 2 not a header", goodFile(hdr(`{"format_version":2}`), nil), domain.ErrUnsupportedFormat},
 		{"version 0", goodFile(full(`"format_version":0,`, "", ""), nil), domain.ErrRemoteDamaged},
 		{"version string", goodFile(full(`"format_version":"1",`, "", ""), nil), domain.ErrRemoteDamaged},
-		{"version fraction", goodFile(full(`"format_version":1.5,`, "", ""), nil), domain.ErrRemoteDamaged},
+		{"version 1.5", goodFile(full(`"format_version":1.5,`, "", ""), nil), domain.ErrUnsupportedFormat},
+		{"version 1.0 not canonical", goodFile(full(`"format_version":1.0,`, "", ""), nil), domain.ErrRemoteDamaged},
+		{"version 2e0", goodFile(full(`"format_version":2e0,`, "", ""), nil), domain.ErrUnsupportedFormat},
+		{"version 0.5", goodFile(full(`"format_version":0.5,`, "", ""), nil), domain.ErrRemoteDamaged},
+		{"version -3", goodFile(full(`"format_version":-3,`, "", ""), nil), domain.ErrRemoteDamaged},
+		{"version 1.0000000001", goodFile(full(`"format_version":1.0000000001,`, "", ""), nil), domain.ErrUnsupportedFormat},
+		{"version beyond int64", goodFile(full(`"format_version":99999999999999999999999,`, "", ""), nil), domain.ErrUnsupportedFormat},
+		{"version huge exponent", goodFile(full(`"format_version":1e999999999999,`, "", ""), nil), domain.ErrUnsupportedFormat},
+		{"version tiny exponent", goodFile(full(`"format_version":1e-999999999999,`, "", ""), nil), domain.ErrRemoteDamaged},
+		{"version null", goodFile(full(`"format_version":null,`, "", ""), nil), domain.ErrRemoteDamaged},
+		{"version true", goodFile(full(`"format_version":true,`, "", ""), nil), domain.ErrRemoteDamaged},
+		{"case-variant key", goodFile(hdr(strings.Replace(string(full(`"format_version":1,`, "", "")), "server_uuid", "Server_UUID", 1)), nil), domain.ErrRemoteDamaged},
+		{"duplicate key", goodFile(full(`"format_version":1,"format_version":1,`, "", ""), nil), domain.ErrRemoteDamaged},
+		{"whitespace", goodFile(hdr(strings.Replace(string(full(`"format_version":1,`, "", "")), ",", ", ", 1)), nil), domain.ErrRemoteDamaged},
+		{"missing kdf_params", goodFile(hdr(fmt.Sprintf(`{"format_version":1,"server_uuid":%q,"kdf_salt":%q,"key_check":%q}`, id, salt, check)), nil), domain.ErrRemoteDamaged},
+		{"uppercase uuid", goodFile(hdr(strings.Replace(string(full(`"format_version":1,`, "", "")), id, strings.ToUpper(id), 1)), nil), domain.ErrRemoteDamaged},
+		{"nil uuid", goodFile(hdr(strings.Replace(string(full(`"format_version":1,`, "", "")), id, uuid.Nil.String(), 1)), nil), domain.ErrRemoteDamaged},
+		{"braced uuid", goodFile(hdr(strings.Replace(string(full(`"format_version":1,`, "", "")), id, "{"+id+"}", 1)), nil), domain.ErrRemoteDamaged},
+		{"oversized file", append(goodFile(header, nil), make([]byte, maxFile)...), domain.ErrRemoteDamaged},
 		{"version missing", goodFile(full("", "", ""), nil), domain.ErrRemoteDamaged},
 		{"header not JSON", goodFile(hdr(`not json`), nil), domain.ErrRemoteDamaged},
 		{"unknown field v1", goodFile(full(`"format_version":1,`, `,"new":1`, ""), nil), domain.ErrRemoteDamaged},
@@ -122,7 +140,7 @@ func TestParseHeaderOrder(t *testing.T) {
 			}
 
 			other := domain.ErrUnsupportedFormat
-			if tc.want == domain.ErrUnsupportedFormat {
+			if errors.Is(tc.want, domain.ErrUnsupportedFormat) {
 				other = domain.ErrRemoteDamaged
 			}
 
@@ -303,10 +321,6 @@ func TestBodyAADBinding(t *testing.T) {
 	reordered := []byte(fmt.Sprintf(`{"server_uuid":%s,"format_version":%s,"kdf_params":%s,"kdf_salt":%s,"key_check":%s}`,
 		fields["server_uuid"], fields["format_version"], fields["kdf_params"], fields["kdf_salt"], fields["key_check"]))
 
-	if _, _, _, err := parseHeader(goodFile(reordered, nil)); err != nil {
-		t.Fatalf("reordered header must still parse: %v", err)
-	}
-
 	tests := []struct {
 		name   string
 		header []byte
@@ -366,7 +380,17 @@ func TestBodyStrictJSON(t *testing.T) {
 		{"trailing data", fmt.Sprintf(`{"revision":1,"server_uuid":%q,"notes":[]} {}`, id), false},
 		{"trailing garbage", fmt.Sprintf(`{"revision":1,"server_uuid":%q,"notes":[]}x`, id), false},
 		{"revision -1", fmt.Sprintf(`{"revision":-1,"server_uuid":%q,"notes":[]}`, id), false},
-		{"revision missing", fmt.Sprintf(`{"server_uuid":%q,"notes":[]}`, id), true}, // zero value is a valid revision
+		{"revision missing", fmt.Sprintf(`{"server_uuid":%q,"notes":[]}`, id), false},
+		{"notes missing", fmt.Sprintf(`{"revision":1,"server_uuid":%q}`, id), false},
+		{"notes null", fmt.Sprintf(`{"revision":1,"server_uuid":%q,"notes":null}`, id), false},
+		{"note field missing", fmt.Sprintf(`{"revision":1,"server_uuid":%q,"notes":[{"id":%q,"updated":5,"name":"n"}]}`, id, nid), false},
+		{"case-variant key", fmt.Sprintf(`{"Revision":1,"server_uuid":%q,"notes":[]}`, id), false},
+		{"duplicate key", fmt.Sprintf(`{"revision":1,"revision":1,"server_uuid":%q,"notes":[]}`, id), false},
+		{"whitespace", fmt.Sprintf(`{"revision":1, "server_uuid":%q,"notes":[]}`, id), false},
+		{"field order", fmt.Sprintf(`{"server_uuid":%q,"revision":1,"notes":[]}`, id), false},
+		{"uppercase server_uuid", fmt.Sprintf(`{"revision":1,"server_uuid":%q,"notes":[]}`, strings.ToUpper(id)), false},
+		{"uppercase note id", fmt.Sprintf(`{"revision":1,"server_uuid":%q,"notes":[{"id":%q,"updated":5,"name":"n","info":"i"}]}`, id, strings.ToUpper(nid)), false},
+		{"nil note id", fmt.Sprintf(`{"revision":1,"server_uuid":%q,"notes":[{"id":%q,"updated":5,"name":"n","info":"i"}]}`, id, uuid.Nil), false},
 		{"other server_uuid", fmt.Sprintf(`{"revision":1,"server_uuid":%q,"notes":[]}`, uuid.New()), false},
 		{"bad server_uuid", `{"revision":1,"server_uuid":"x","notes":[]}`, false},
 		{"bad note id", fmt.Sprintf(`{"revision":1,"server_uuid":%q,"notes":[{"id":"x","updated":5,"name":"n","info":"i"}]}`, id), false},
@@ -458,8 +482,6 @@ func TestLargestValidContainer(t *testing.T) {
 	if err != nil || gotRev != rev || len(notes) != 1 || len(notes[0].Info) != fit {
 		t.Fatalf("round trip: rev=%d notes=%d err=%v", gotRev, len(notes), err)
 	}
-
-	file, body, notes = nil, nil, nil
 
 	big, err := sealBody(key, header, m.ServerID, rev, []domain.Note{note(1, strings.Repeat("a", over))})
 	if err != nil {

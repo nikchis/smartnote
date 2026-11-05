@@ -11,6 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,15 +33,6 @@ const (
 	layoutVersion = '1'
 	fixedPart     = len(prefix) + 1 + 4 // prefix, layout, header_len
 )
-
-// container is a parsed remote storage: the header bytes exactly as stored,
-// its meta, and the decrypted body.
-type container struct {
-	header   []byte
-	meta     remotecrypto.Meta
-	revision int64
-	notes    []domain.Note
-}
 
 // headerJSON is the header; the field order is the order newHeader writes.
 type headerJSON struct {
@@ -91,6 +85,10 @@ func newHeader(m remotecrypto.Meta) ([]byte, error) {
 // parseHeader does steps 1-6 of spec §4.2. The returned header and body alias
 // file. The salt size and the key check are left to Meta.Unlock.
 func parseHeader(file []byte) (header []byte, m remotecrypto.Meta, body []byte, err error) {
+	if len(file) > maxFile {
+		return nil, m, nil, damaged("container file too large")
+	}
+
 	if len(file) < fixedPart || string(file[:len(prefix)]) != prefix {
 		return nil, m, nil, damaged("container prefix")
 	}
@@ -119,9 +117,13 @@ func parseHeader(file []byte) (header []byte, m remotecrypto.Meta, body []byte, 
 		return nil, m, nil, damaged("container header")
 	}
 
-	id, err := uuid.Parse(h.ServerUUID)
-	if err != nil {
+	id, ok := canonicalUUID(h.ServerUUID)
+	if !ok {
 		return nil, m, nil, damaged("container server_uuid")
+	}
+
+	if again, err := json.Marshal(h); err != nil || !bytes.Equal(again, header) {
+		return nil, m, nil, damaged("container header is not canonical")
 	}
 
 	if err := h.KDF.Validate(); err != nil {
@@ -134,7 +136,9 @@ func parseHeader(file []byte) (header []byte, m remotecrypto.Meta, body []byte, 
 }
 
 // checkFormatVersion reads format_version alone (spec §4.2 step 4): a newer
-// header may carry fields this version does not know.
+// header may carry fields this version does not know. Any number above 1,
+// whatever its form, is newer; a number below 1, null, a missing field or a
+// non-number is damage.
 func checkFormatVersion(header []byte) error {
 	var probe struct {
 		FormatVersion json.RawMessage `json:"format_version"`
@@ -144,19 +148,77 @@ func checkFormatVersion(header []byte) error {
 		return damaged("container header")
 	}
 
-	var v int64
-	if len(probe.FormatVersion) == 0 || json.Unmarshal(probe.FormatVersion, &v) != nil {
+	switch cmp, ok := compareToOne(probe.FormatVersion); {
+	case !ok || cmp < 0:
 		return damaged("container format_version")
-	}
-
-	switch {
-	case v > remotecrypto.FormatVersion:
-		return fmt.Errorf("container format_version %d: %w", v, domain.ErrUnsupportedFormat)
-	case v < remotecrypto.FormatVersion:
-		return damaged("container format_version")
+	case cmp > 0:
+		return fmt.Errorf("container format_version: %w", domain.ErrUnsupportedFormat)
 	}
 
 	return nil
+}
+
+// compareToOne compares a JSON number literal with 1,
+// returning -1, 0 or 1. ok is false when lit is not a number. It works on the
+// decimal digits, so no form of the number can overflow.
+func compareToOne(lit json.RawMessage) (cmp int, ok bool) {
+	if len(lit) == 0 || !json.Valid(lit) || (lit[0] != '-' && (lit[0] < '0' || lit[0] > '9')) {
+		return 0, false
+	}
+
+	s := string(lit)
+	if s[0] == '-' {
+		return -1, true
+	}
+
+	mant, expText, _ := strings.Cut(strings.ToLower(s), "e")
+	intPart, frac, _ := strings.Cut(mant, ".")
+
+	exp := 0
+
+	if expText != "" {
+		neg := expText[0] == '-'
+		digits := strings.TrimLeft(expText, "+-")
+
+		if len(digits) > 9 {
+			digits = "999999999"
+		}
+
+		exp, _ = strconv.Atoi(digits)
+		if neg {
+			exp = -exp
+		}
+	}
+
+	// value = 0.<digits> * 10^pos
+	all := intPart + frac
+	pos := len(intPart) + exp
+	trimmed := strings.TrimLeft(all, "0")
+	pos -= len(all) - len(trimmed)
+	trimmed = strings.TrimRight(trimmed, "0")
+
+	switch {
+	case trimmed == "":
+		return -1, true
+	case pos > 1:
+		return 1, true
+	case pos < 1:
+		return -1, true
+	case trimmed == "1":
+		return 0, true
+	default:
+		return 1, true
+	}
+}
+
+// canonicalUUID parses the lowercase hyphenated form of a non-nil UUID.
+func canonicalUUID(s string) (uuid.UUID, bool) {
+	id, err := uuid.Parse(s)
+	if err != nil || id == uuid.Nil || id.String() != s {
+		return uuid.Nil, false
+	}
+
+	return id, true
 }
 
 // decodeStrict decodes one JSON value into v, refusing unknown fields and
@@ -212,15 +274,17 @@ func sealBody(key, header []byte, serverID uuid.UUID, revision int64, notes []do
 
 	defer sealbox.Wipe(js)
 
-	if int64(len(js)) > int64(^uint32(0)) {
-		return nil, errors.New("container body too large")
+	jsonLen, err := lengthU32(len(js))
+	if err != nil {
+		return nil, err
 	}
 
 	size := (4 + len(js) + padBlock - 1) / padBlock * padBlock
+
 	plain := make([]byte, size)
 	defer sealbox.Wipe(plain)
 
-	binary.BigEndian.PutUint32(plain, uint32(len(js)))
+	binary.BigEndian.PutUint32(plain, jsonLen)
 	copy(plain[4:], js)
 
 	return sealbox.Seal(key, plain, bodyAAD(header, serverID))
@@ -255,19 +319,27 @@ func openBody(key, header []byte, serverID uuid.UUID, body []byte) (revision int
 		return 0, nil, damaged("container body JSON")
 	}
 
+	if b.Notes == nil {
+		return 0, nil, damaged("container notes")
+	}
+
+	if again, err := json.Marshal(b); err != nil || !bytes.Equal(again, plain[4:end]) {
+		return 0, nil, damaged("container body is not canonical")
+	}
+
 	if b.Revision < 0 {
 		return 0, nil, damaged("container revision")
 	}
 
-	if id, err := uuid.Parse(b.ServerUUID); err != nil || id != serverID {
+	if id, ok := canonicalUUID(b.ServerUUID); !ok || id != serverID {
 		return 0, nil, damaged("container body server_uuid")
 	}
 
 	notes = make([]domain.Note, len(b.Notes))
 
 	for i, n := range b.Notes {
-		id, err := uuid.Parse(n.ID)
-		if err != nil {
+		id, ok := canonicalUUID(n.ID)
+		if !ok {
 			return 0, nil, damaged("container note id")
 		}
 
@@ -277,10 +349,24 @@ func openBody(key, header []byte, serverID uuid.UUID, body []byte) (revision int
 	return b.Revision, notes, nil
 }
 
+// lengthU32 converts a length to the uint32 of the layout.
+func lengthU32(n int) (uint32, error) {
+	if n < 0 || n > math.MaxUint32 {
+		return 0, errors.New("container length does not fit uint32")
+	}
+
+	return uint32(n), nil
+}
+
 // assemble builds the container file. The result must not exceed maxFile.
 func assemble(header, body []byte) ([]byte, error) {
 	if len(header) < 1 || len(header) > maxHeader {
 		return nil, fmt.Errorf("container header of %d bytes", len(header))
+	}
+
+	headerLen, err := lengthU32(len(header))
+	if err != nil {
+		return nil, err
 	}
 
 	if int64(fixedPart)+int64(len(header))+int64(len(body)) > maxFile {
@@ -290,7 +376,7 @@ func assemble(header, body []byte) ([]byte, error) {
 	file := make([]byte, 0, fixedPart+len(header)+len(body))
 	file = append(file, prefix...)
 	file = append(file, layoutVersion)
-	file = binary.BigEndian.AppendUint32(file, uint32(len(header)))
+	file = binary.BigEndian.AppendUint32(file, headerLen)
 	file = append(file, header...)
 	file = append(file, body...)
 
