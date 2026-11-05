@@ -54,8 +54,9 @@ they are. Changing the client ID signs you out.
 
 Open your Yandex ID account, the page of data access (Data access, "Доступы" in Russian), and
 revoke the access of the application. The next time Smartnote talks to the Disk it shows
-"Sign in to Yandex Disk again."; press **Sign in with Yandex** and sign in once more. The notes in
-the Disk and on the device are untouched.
+"Sign in to Yandex Disk again."; after Connect it opens **Settings** by itself. In **Settings**
+press **Sign in again**, sign in once more and press **OK**. The notes in the Disk and on the
+device are untouched.
 
 ## When the storage is older than the device
 

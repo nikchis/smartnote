@@ -22,7 +22,7 @@ export type SyncApi = {
 
 /** ConnectHooks are what the connect check may ask of the screen. */
 export type ConnectHooks = {
-  /** openSettings opens the settings after a wrong sync phrase. */
+  /** openSettings opens the settings after a wrong sync phrase or a refused Yandex sign-in. */
   openSettings?: () => void;
   /** restored runs after a Restore, to read the notes again. */
   restored?: () => void | Promise<void>;
@@ -87,7 +87,7 @@ export async function connectFlow(api: SyncApi, d: Dialogs, hooks: ConnectHooks 
   } catch (e) {
     const err = parseError(e);
     await report(d, err);
-    if (err.code === "wrong_sync_phrase") hooks.openSettings?.();
+    if (err.code === "wrong_sync_phrase" || err.code === "reauth_required") hooks.openSettings?.();
     return;
   }
 

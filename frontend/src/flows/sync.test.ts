@@ -162,6 +162,14 @@ describe("connectFlow", () => {
     expect(opened).toBe(1);
   });
 
+  it("reauth_required shows the error and then opens the settings", async () => {
+    api.connectResults = [uiError("reauth_required", "Sign in to Yandex Disk again.")];
+
+    await connectFlow(api, d, { openSettings: () => void d.log.push("open settings") });
+
+    expect(d.log).toEqual(["error: Sign in to Yandex Disk again.", "open settings"]);
+  });
+
   it("host_key_mismatch shows both fingerprints", async () => {
     api.connectResults = [uiError("host_key_mismatch", "m", { expected: "SHA256:old", got: "SHA256:new" })];
 

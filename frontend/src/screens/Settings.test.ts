@@ -144,6 +144,36 @@ describe("Settings Yandex account", () => {
     expect(button("Sign out")).toBeDefined();
   });
 
+  it("signs in again over a saved account", async () => {
+    await open({ yandexSignedIn: true, yandexAccount: "ivan.petrov" });
+    const signIn = pending<string>();
+    go.signIn.mockReturnValue(signIn.promise);
+    await press("Sign in again");
+
+    expect(go.signIn).toHaveBeenCalledWith(expect.objectContaining({ kind: "yandex_disk" }));
+    expect(has("Waiting for the browser…")).toBe(true);
+    expect(button("OK")!.disabled).toBe(true);
+
+    signIn.resolve("ivan.new");
+    await settle();
+    expect(has("Signed in as ivan.new")).toBe(true);
+    go.save.mockResolvedValue(undefined);
+    await press("OK");
+    expect(go.save).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the saved account when signing in again is canceled", async () => {
+    await open({ yandexSignedIn: true, yandexAccount: "ivan.petrov" });
+    const signIn = pending<string>();
+    go.signIn.mockReturnValue(signIn.promise);
+    await press("Sign in again");
+    await press("Cancel");
+    signIn.reject(uiError("canceled"));
+    await settle();
+    expect(has("Signed in as ivan.petrov")).toBe(true);
+    expect(go.error).not.toHaveBeenCalled();
+  });
+
   it("shows plain Signed in when the login is empty", async () => {
     await open({ yandexSignedIn: true });
     expect(target.textContent).toContain("Signed in");
@@ -180,6 +210,17 @@ describe("Settings Yandex account", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await press("Sign in with Yandex");
     expect(go.signIn).toHaveBeenCalledWith(expect.objectContaining({ yandexClientId: "my-id" }));
+  });
+
+  it("shows Not signed in after the own client ID changes", async () => {
+    await open({ yandexSignedIn: true, yandexAccount: "ivan.petrov" });
+    const input = target.querySelector<HTMLInputElement>('input[aria-label="Own client ID"]')!;
+    input.value = "my-id";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    expect(has("Signed in as")).toBe(false);
+    expect(has("Not signed in")).toBe(true);
+    expect(button("Sign in with Yandex")).toBeDefined();
   });
 
   it("goes straight to the code field when the loopback is unavailable", async () => {

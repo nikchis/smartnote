@@ -84,6 +84,12 @@
     });
   }
 
+  /** clientIdChanged shows the account as signed out: a token belongs to its client ID (spec §6.1). */
+  function clientIdChanged() {
+    form.yandexSignedIn = false;
+    form.yandexAccount = "";
+  }
+
   function resetTrust() {
     form.trustedFingerprint = "";
   }
@@ -164,7 +170,7 @@
           <summary>Advanced</summary>
           <label class="wide">
             Own client ID:
-            <input aria-label="Own client ID" bind:value={form.yandexClientId} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
+            <input aria-label="Own client ID" bind:value={form.yandexClientId} oninput={clientIdChanged} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
           </label>
           <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>How to register</a>
           <p class="muted">Data of another client ID is a separate, empty storage.</p>

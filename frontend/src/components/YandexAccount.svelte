@@ -120,6 +120,8 @@
   {:else if form.yandexSignedIn}
     <span>{form.yandexAccount ? `Signed in as ${form.yandexAccount}` : "Signed in"}</span>
     <span class="spacer"></span>
+    <!-- A new sign-in replaces the saved token on OK, e.g. after its access was revoked. -->
+    <button type="button" onclick={signIn} {disabled}>Sign in again</button>
     <button type="button" onclick={signOut} {disabled}>Sign out</button>
   {:else}
     <span class="muted">Not signed in</span>
