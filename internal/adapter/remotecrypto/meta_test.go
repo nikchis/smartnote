@@ -41,7 +41,12 @@ func TestNewMetaOpensWithSamePhrase(t *testing.T) {
 }
 
 func TestUnlockNFCAndNFD(t *testing.T) {
-	nfc, nfd := "passéword phrase", "passéword phrase"
+	// Escapes keep the two forms distinct whatever an editor normalizes.
+	nfc, nfd := "pass\u00e9word phrase", "passe\u0301word phrase"
+
+	if nfc == nfd {
+		t.Fatal("the NFC and NFD forms are the same byte string")
+	}
 
 	m, _, err := NewMeta(nfc, testKDF)
 	if err != nil {
