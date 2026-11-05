@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/nikchis/smartnote/internal/adapter/remotetest"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
@@ -866,4 +867,19 @@ func TestContextAbortsTransport(t *testing.T) {
 	if !aborted.Load() {
 		t.Error("canceling the context did not call Abort")
 	}
+}
+
+func TestSessionContract(t *testing.T) {
+	remotetest.RunSessionContract(t, func(t *testing.T) remotetest.Opener {
+		cfg := newDatabase(t)
+
+		return func(phrase string, mode usecase.OpenMode) (usecase.RemoteSession, error) {
+			s, err := open(t, cfg, mode, phrase)
+			if err != nil {
+				return nil, err
+			}
+
+			return s, nil
+		}
+	})
 }
