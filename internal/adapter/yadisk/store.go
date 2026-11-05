@@ -38,9 +38,8 @@ const (
 	movePath      = "/v1/disk/resources/move"
 	tokenPath     = "/token"
 
-	refreshMargin = time.Minute      // a token expiring sooner is refreshed first
-	maxExpiresIn  = 10 * 365 * 86400 // seconds; a larger expires_in is capped
-	fenceTimeout  = 5 * time.Second  // each step of the fence (spec §5.5)
+	refreshMargin = time.Minute     // a token expiring sooner is refreshed first
+	fenceTimeout  = 5 * time.Second // each step of the fence (spec §5.5)
 	pollFirst     = 500 * time.Millisecond
 	pollMax       = 2 * time.Second
 	tempMaxAge    = time.Hour // older temporary files are left by failed Backups
@@ -60,11 +59,10 @@ const (
 )
 
 var (
-	errNoPendingStore   = errors.New("yandex disk store without a pending store")
-	errBadPendingName   = errors.New("pending temporary file name is not valid")
-	errChecksum         = errors.New("uploaded file differs from the data")
-	errOperationFailed  = errors.New("disk operation failed")
-	errNoAccessInAnswer = errors.New("token answer without access_token")
+	errNoPendingStore  = errors.New("yandex disk store without a pending store")
+	errBadPendingName  = errors.New("pending temporary file name is not valid")
+	errChecksum        = errors.New("uploaded file differs from the data")
+	errOperationFailed = errors.New("disk operation failed")
 )
 
 // PendingStore keeps the name of the temporary file whose move has an
@@ -791,28 +789,10 @@ func (s *Store) refresh(ctx context.Context, cur usecase.CloudToken) (usecase.Cl
 		return usecase.CloudToken{}, domain.ErrReauthRequired
 	}
 
-	form := url.Values{"grant_type": {grantRefresh}, grantRefresh: {cur.Refresh}, "client_id": {s.clientID}}
+	form := url.Values{paramGrantType: {grantRefresh}, grantRefresh: {cur.Refresh}, paramClientID: {s.clientID}}
 
-	link, err := secureLink(s.oauth)
+	answer, err := postToken(ctx, s.api.http, s.oauth, form)
 	if err != nil {
-		return usecase.CloudToken{}, fmt.Errorf("refresh token: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, link, strings.NewReader(form.Encode()))
-	if err != nil {
-		return usecase.CloudToken{}, fmt.Errorf("refresh token: %w", errBadLink)
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-
-	var answer struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int64  `json:"expires_in"`
-	}
-
-	if _, err := roundTrip(s.api.http, req, &answer); err != nil {
 		if ce, ok := errors.AsType[CloudError](err); ok && refusedGrant(ce.Code) {
 			return usecase.CloudToken{}, domain.ErrReauthRequired
 		}
@@ -820,16 +800,10 @@ func (s *Store) refresh(ctx context.Context, cur usecase.CloudToken) (usecase.Cl
 		return usecase.CloudToken{}, fmt.Errorf("refresh token: %w", err)
 	}
 
-	if answer.AccessToken == "" {
-		return usecase.CloudToken{}, fmt.Errorf("refresh token: %w", CloudError{Status: http.StatusOK, Code: codeOther, err: errNoAccessInAnswer})
-	}
-
 	next := usecase.CloudToken{
 		Provider: cur.Provider, ClientID: cur.ClientID, Account: cur.Account,
 		Access: answer.AccessToken, Refresh: cmp.Or(answer.RefreshToken, cur.Refresh),
-	}
-	if answer.ExpiresIn > 0 {
-		next.Expiry = s.now().Add(time.Duration(min(answer.ExpiresIn, maxExpiresIn)) * time.Second)
+		Expiry: answer.expiry(s.now()),
 	}
 
 	if err := s.tokens.Update(ctx, next); err != nil {

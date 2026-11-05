@@ -12,7 +12,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Endpoints are the base URLs of the Disk API and of Yandex OAuth.
@@ -33,6 +35,13 @@ const (
 	maxRedirects = 10
 
 	schemeHTTPS = "https"
+
+	maxExpiresIn = 10 * 365 * 86400 // seconds; a larger expires_in is capped
+
+	// Parameters of the OAuth requests.
+	paramGrantType = "grant_type"
+	paramClientID  = "client_id"
+	paramCode      = "code"
 
 	// OAuth errors of a refresh that mean a new sign-in.
 	codeInvalidGrant       = "invalid_grant"
@@ -61,6 +70,10 @@ var knownCodes = map[string]bool{
 	"unsupported_grant_type":         true,
 	"invalid_scope":                  true,
 	"access_denied":                  true,
+	"bad_verification_code":          true,
+	"unsupported_response_type":      true,
+	"server_error":                   true,
+	"temporarily_unavailable":        true,
 }
 
 var (
@@ -69,6 +82,7 @@ var (
 	errBadLink      = errors.New("link cannot be parsed")
 	errRedirects    = errors.New("too many redirects")
 	errTooLarge     = errors.New("object exceeds the size limit")
+	errNoAccess     = errors.New("token answer without access_token")
 )
 
 // CloudError is an error answer of Yandex Disk or OAuth (Status is the HTTP
@@ -324,4 +338,50 @@ func (c hrefClient) put(ctx context.Context, href string, data []byte) error {
 	_, err = roundTrip(c.http, req, nil)
 
 	return err
+}
+
+// tokenAnswer is a successful answer of the OAuth token endpoint.
+type tokenAnswer struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int64  `json:"expires_in"`
+}
+
+// expiry is the end of the token's life counted from now; zero when the
+// answer gives none.
+func (a tokenAnswer) expiry(now time.Time) time.Time {
+	if a.ExpiresIn <= 0 {
+		return time.Time{}
+	}
+
+	return now.Add(time.Duration(min(a.ExpiresIn, maxExpiresIn)) * time.Second)
+}
+
+// postToken sends form to the OAuth token endpoint, only over https, with hc,
+// which must not follow redirects. An error answer is a CloudError with the
+// OAuth error name; so is an answer without access_token.
+func postToken(ctx context.Context, hc *http.Client, endpoint string, form url.Values) (tokenAnswer, error) {
+	link, err := secureLink(endpoint)
+	if err != nil {
+		return tokenAnswer{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, link, strings.NewReader(form.Encode()))
+	if err != nil {
+		return tokenAnswer{}, CloudError{Code: codeOther, err: errBadLink}
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	var answer tokenAnswer
+	if _, err := roundTrip(hc, req, &answer); err != nil {
+		return tokenAnswer{}, err
+	}
+
+	if answer.AccessToken == "" {
+		return tokenAnswer{}, CloudError{Status: http.StatusOK, Code: codeOther, err: errNoAccess}
+	}
+
+	return answer, nil
 }

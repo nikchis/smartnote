@@ -1177,7 +1177,7 @@ func TestRefreshRejected(t *testing.T) {
 			}
 
 			if !tc.reauth {
-				if ce := cloudError(t, err); ce.Status != tc.status || ce.Code != codeOther {
+				if ce := cloudError(t, err); ce.Status != tc.status || ce.Code != tc.code {
 					t.Errorf("CloudError = %+v", ce)
 				}
 			}
