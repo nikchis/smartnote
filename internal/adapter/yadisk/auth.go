@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -38,9 +39,6 @@ const (
 	grantAuthorizationCode = "authorization_code"
 	responseTypeCode       = "code" // the authorize page redirects with a code
 	errorAccessDenied      = "access_denied"
-
-	closePage = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Smartnote</title></head>" +
-		"<body><p>You can close this tab.</p></body></html>\n"
 )
 
 // AuthOptions are the seams of an Authorizer; zero values take the defaults.
@@ -386,35 +384,33 @@ func (l *loopbackLogin) stop() {
 // on, so another page cannot end the sign-in (spec §6.2, §10). The first
 // right callback with a code or an error ends it and closes the listener.
 func (l *loopbackLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h := w.Header()
-	h.Set("Cache-Control", "no-store")
-	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-	h.Set("X-Content-Type-Options", "nosniff")
-
 	if r.Method != http.MethodGet || r.URL.Path != callbackPath {
-		http.Error(w, "Not found", http.StatusNotFound)
+		pageNotFound.write(w, false)
 		return
 	}
 
 	q := r.URL.Query()
 	if subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(l.state)) != 1 {
-		http.Error(w, "Bad request", http.StatusBadRequest)
+		pageExpired.write(w, false)
 		return
 	}
 
 	cb, ok := callbackOf(q)
 	if !ok || !l.answered.CompareAndSwap(false, true) {
-		http.Error(w, "Bad request", http.StatusBadRequest)
+		pageExpired.write(w, false)
 		return
 	}
 
 	l.result <- cb
 
-	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Connection", "close")
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, closePage) // the browser may be gone; the result is taken
+	switch {
+	case cb.err == nil:
+		pageSignedIn.write(w, true)
+	case errors.Is(cb.err, context.Canceled):
+		pageCancelled.write(w, true)
+	default:
+		pageFailed.write(w, true)
+	}
 
 	_ = l.ln.Close() // no more connections; stop ends the open ones
 }
