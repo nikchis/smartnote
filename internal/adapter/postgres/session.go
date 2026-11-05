@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/nikchis/smartnote/internal/adapter/remotecrypto"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/sealbox"
 	"github.com/nikchis/smartnote/internal/usecase"
@@ -84,7 +85,7 @@ func (s *Session) open(ctx context.Context, o Options) error {
 			return nil
 		}
 
-		s.key, err = m.unlock(o.Phrase)
+		s.key, err = m.Unlock(o.Phrase)
 
 		return err
 	}
@@ -99,7 +100,7 @@ func (s *Session) open(ctx context.Context, o Options) error {
 		return nil
 	}
 
-	s.key, err = m.unlock(o.Phrase)
+	s.key, err = m.Unlock(o.Phrase)
 
 	return err
 }
@@ -107,7 +108,7 @@ func (s *Session) open(ctx context.Context, o Options) error {
 // ensureStorage creates the schema, the tables and the meta row where they
 // are missing, under the advisory lock, so that two devices connecting at
 // once share one meta row. When it creates meta it also returns the key.
-func (s *Session) ensureStorage(ctx context.Context, o Options) (m meta, key []byte, created bool, err error) {
+func (s *Session) ensureStorage(ctx context.Context, o Options) (m remotecrypto.Meta, key []byte, created bool, err error) {
 	err = inTx(ctx, s.conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", schemaLockKey); err != nil {
 			return fmt.Errorf("lock schema: %w", err)
@@ -149,7 +150,7 @@ func (s *Session) ensureStorage(ctx context.Context, o Options) (m meta, key []b
 			return err
 		}
 
-		m, key, err = newMeta(o.Phrase, o.KDF)
+		m, key, err = remotecrypto.NewMeta(o.Phrase, o.KDF)
 		if err != nil {
 			return err
 		}
@@ -170,7 +171,7 @@ func (s *Session) ensureStorage(ctx context.Context, o Options) (m meta, key []b
 	})
 	if err != nil {
 		sealbox.Wipe(key)
-		return meta{}, nil, false, err
+		return remotecrypto.Meta{}, nil, false, err
 	}
 
 	return m, key, created, nil
@@ -193,14 +194,14 @@ func missingTables(ctx context.Context, tx pgx.Tx) ([]string, error) {
 
 // readMetaIfAny reads meta without creating anything; a missing schema,
 // table or row is not an error.
-func (s *Session) readMetaIfAny(ctx context.Context) (meta, bool, error) {
+func (s *Session) readMetaIfAny(ctx context.Context) (remotecrypto.Meta, bool, error) {
 	var exists bool
 	if err := s.conn.QueryRow(ctx, "SELECT to_regclass('smartnote.meta') IS NOT NULL").Scan(&exists); err != nil {
-		return meta{}, false, fmt.Errorf("check tables: %w", err)
+		return remotecrypto.Meta{}, false, fmt.Errorf("check tables: %w", err)
 	}
 
 	if !exists {
-		return meta{}, false, nil
+		return remotecrypto.Meta{}, false, nil
 	}
 
 	return readMeta(ctx, s.conn)
@@ -211,9 +212,9 @@ type queryRower interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-func readMeta(ctx context.Context, q queryRower) (meta, bool, error) {
+func readMeta(ctx context.Context, q queryRower) (remotecrypto.Meta, bool, error) {
 	var (
-		m        meta
+		m        remotecrypto.Meta
 		serverID string
 		kdf      []byte
 	)
@@ -221,19 +222,19 @@ func readMeta(ctx context.Context, q queryRower) (meta, bool, error) {
 	err := q.QueryRow(ctx, `SELECT server_uuid::text, format_version, kdf_params::text, kdf_salt, key_check
 		FROM smartnote.meta WHERE meta_id = 1`).Scan(&serverID, &m.FormatVersion, &kdf, &m.Salt, &m.KeyCheck)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return meta{}, false, nil
+		return remotecrypto.Meta{}, false, nil
 	}
 
 	if err != nil {
-		return meta{}, false, fmt.Errorf("read meta: %w", err)
+		return remotecrypto.Meta{}, false, fmt.Errorf("read meta: %w", err)
 	}
 
 	if m.ServerID, err = uuid.Parse(serverID); err != nil {
-		return meta{}, false, fmt.Errorf("%w: server id %q", domain.ErrUnsupportedFormat, serverID)
+		return remotecrypto.Meta{}, false, fmt.Errorf("%w: server id %q", domain.ErrUnsupportedFormat, serverID)
 	}
 
 	if m.KDF, err = parseKDF(kdf); err != nil {
-		return meta{}, false, err
+		return remotecrypto.Meta{}, false, err
 	}
 
 	return m, true, nil

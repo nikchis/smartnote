@@ -14,9 +14,6 @@ import (
 	"github.com/nikchis/smartnote/internal/sealbox"
 )
 
-// formatVersion is the remote format this version reads and writes.
-const formatVersion = 1
-
 // schemaLockKey names the advisory lock that serializes schema creation.
 const schemaLockKey = "smartnote.schema"
 
@@ -46,91 +43,8 @@ CREATE TABLE IF NOT EXISTS smartnote.sync_state (
 );
 INSERT INTO smartnote.sync_state (sync_state_id, revision, updated_at) VALUES (1, 0, now()) ON CONFLICT DO NOTHING;`
 
-// Key derivation and the key check (spec §5.3).
-const (
-	encKeyInfo    = "smartnote/v2/enc"
-	keyCheckPlain = "smartnote-key-check"
-)
-
-func aadKeyCheck() sealbox.AAD { return sealbox.AAD{Table: "meta", Column: "key_check", RowID: "1"} }
-
 func aadNote(column, id string) sealbox.AAD {
 	return sealbox.AAD{Table: "note", Column: column, RowID: id}
-}
-
-// meta is the row of smartnote.meta.
-type meta struct {
-	ServerID      uuid.UUID
-	FormatVersion int
-	KDF           sealbox.KDFParams
-	Salt          []byte
-	KeyCheck      []byte
-}
-
-// newMeta returns the meta row of a new remote storage and its encryption key.
-func newMeta(phrase string, p sealbox.KDFParams) (meta, []byte, error) {
-	salt, err := sealbox.NewSalt()
-	if err != nil {
-		return meta{}, nil, err
-	}
-
-	key, err := deriveEncKey(phrase, salt, p)
-	if err != nil {
-		return meta{}, nil, err
-	}
-
-	check, err := sealbox.Seal(key, []byte(keyCheckPlain), aadKeyCheck())
-	if err != nil {
-		sealbox.Wipe(key)
-		return meta{}, nil, err
-	}
-
-	return meta{ServerID: uuid.New(), FormatVersion: formatVersion, KDF: p, Salt: salt, KeyCheck: check}, key, nil
-}
-
-// unlock checks the format and the KDF parameters before running Argon2id,
-// then derives the key from phrase and opens the key check. A newer format or
-// parameters out of bounds return domain.ErrUnsupportedFormat, a wrong phrase
-// domain.ErrWrongSyncPhrase.
-func (m meta) unlock(phrase string) ([]byte, error) {
-	if m.FormatVersion != formatVersion {
-		return nil, fmt.Errorf("%w: remote format version %d", domain.ErrUnsupportedFormat, m.FormatVersion)
-	}
-
-	if err := m.KDF.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %w", domain.ErrUnsupportedFormat, err)
-	}
-
-	if len(m.Salt) != sealbox.SaltSize {
-		return nil, fmt.Errorf("%w: salt of %d bytes", domain.ErrUnsupportedFormat, len(m.Salt))
-	}
-
-	key, err := deriveEncKey(phrase, m.Salt, m.KDF)
-	if err != nil {
-		return nil, err
-	}
-
-	check, err := sealbox.Open(key, m.KeyCheck, aadKeyCheck())
-	if err != nil || string(check) != keyCheckPlain {
-		sealbox.Wipe(key)
-		return nil, domain.ErrWrongSyncPhrase
-	}
-
-	return key, nil
-}
-
-// deriveEncKey is HKDF(Argon2id(NFC(phrase))); the master key is wiped.
-func deriveEncKey(phrase string, salt []byte, p sealbox.KDFParams) ([]byte, error) {
-	secret := []byte(domain.NormalizeSecret(phrase))
-	defer sealbox.Wipe(secret)
-
-	master, err := sealbox.DeriveKey(secret, salt, p)
-	if err != nil {
-		return nil, err
-	}
-	defer sealbox.Wipe(master)
-
-	return sealbox.SubKey(master, encKeyInfo)
 }
 
 // parseKDF reads meta.kdf_params; anything unreadable is a format this

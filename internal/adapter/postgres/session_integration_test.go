@@ -731,6 +731,8 @@ func TestNoPlaintextInTables(t *testing.T) {
 	var meta string
 	adminQueryRow(t, cfg, []any{&meta}, `SELECT encode(key_check, 'escape') FROM smartnote.meta`)
 
+	const keyCheckPlain = "smartnote-key-check" // the plaintext of remotecrypto's key check
+
 	for _, secret := range []string{"PLAINNAME-xyz", "PLAININFO-xyz", testPhrase, keyCheckPlain} {
 		if strings.Contains(dump+meta, secret) {
 			t.Errorf("tables contain %q", secret)
