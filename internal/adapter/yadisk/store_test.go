@@ -68,13 +68,34 @@ func newHarnessWith(t *testing.T, edit func(*usecase.CloudToken)) *harness {
 
 // store returns a new Store of the device, as after a restart.
 func (h *harness) store() *Store {
-	return NewStore(h.disk.endpoints(), h.tokens, fakeClientID, h.pending, StoreOptions{
+	return NewStore(h.disk.endpoints(), h.tokens, fakeClientID, h.pending, h.options())
+}
+
+func (h *harness) options() StoreOptions {
+	return StoreOptions{
 		HTTP:  h.disk.api.Client(),
 		Href:  h.disk.href.Client(),
 		Now:   func() time.Time { return testNow },
 		Sleep: h.sleep,
 		NewID: h.newID,
-	})
+	}
+}
+
+// factory returns a factory of the device's stores over the emulator.
+func (h *harness) factory() blobremote.StoreFactory {
+	return newStoreFactory(h.disk.endpoints(), fakeClientID, h.pending, h.options())
+}
+
+// fromFactory opens a store with f for the device's token.
+func (h *harness) fromFactory(f blobremote.StoreFactory) blobremote.ObjectStore {
+	h.t.Helper()
+
+	s, err := f(usecase.RemoteTarget{Token: h.tokens})
+	if err != nil {
+		h.t.Fatalf("factory: %v", err)
+	}
+
+	return s
 }
 
 func (h *harness) sleep(ctx context.Context, d time.Duration) error {
@@ -586,6 +607,148 @@ func TestFenceAfterCancel(t *testing.T) {
 
 	wantNoTemps(t, h.disk)
 	wantContainer(t, h.disk, []byte("old"))
+}
+
+// TestMoveUnparsedAnswerIsFenced: a 2xx answer to move whose body cannot be
+// read says the move was accepted, so its outcome is settled by the fence.
+func TestMoveUnparsedAnswerIsFenced(t *testing.T) {
+	h := newHarness(t)
+	old := h.disk.put(container, []byte("old"), testNow)
+	h.disk.set(func(d *fakeDisk) { d.moveBadBody = true })
+
+	if err := h.store().Write(t.Context(), container, []byte("new"), old); err != nil {
+		t.Fatalf("Write: %v, want the applied move found by the fence", err)
+	}
+
+	tmp := tempName(1)
+	want := []string{"save " + tmp, "DELETE app:/" + tmp + " permanently=true", "clear"}
+
+	if got := h.disk.eventLog(); !slices.Equal(got[:min(len(got), 3)], want) {
+		t.Errorf("events = %v, want %v first", got, want)
+	}
+
+	wantContainer(t, h.disk, []byte("new"))
+}
+
+// TestFenceRetriedOnSameStore: after a failed fence in Write, the same Store
+// fences again before its next request.
+func TestFenceRetriedOnSameStore(t *testing.T) {
+	h := newHarness(t)
+	old := h.disk.put(container, []byte("old"), testNow)
+	h.disk.set(func(d *fakeDisk) { d.deferMove, d.dropPollAfter, d.deleteFail = true, 1, true })
+
+	s := h.store()
+
+	if err := s.Write(t.Context(), container, []byte("new"), old); !errors.Is(err, blobremote.ErrOutcomeUnknown) {
+		t.Fatalf("Write: err = %v, want ErrOutcomeUnknown", err)
+	}
+
+	h.disk.set(func(d *fakeDisk) { d.deleteFail, d.requests = false, nil })
+
+	if data, _, _ := mustRead(t, s); string(data) != "old" {
+		t.Errorf("Read = %q", data)
+	}
+
+	reqs := h.disk.reqs()
+	if len(reqs) == 0 || reqs[0].method != http.MethodDelete || reqs[0].query.Get("path") != "app:/"+tempName(1) {
+		t.Fatalf("first request after the failed fence = %+v, want the DELETE of the temporary file", reqs)
+	}
+
+	if _, found := h.pending.state(); found {
+		t.Error("cloud_pending kept after the second fence")
+	}
+}
+
+// TestFenceRememberedWithoutRecord: when neither the pending record nor the
+// DELETE succeeds, the stores of the same factory still fence the file.
+func TestFenceRememberedWithoutRecord(t *testing.T) {
+	h := newHarness(t)
+	old := h.disk.put(container, []byte("old"), testNow)
+	h.disk.set(func(d *fakeDisk) { d.deferMove, d.dropPollAfter, d.deleteFail = true, 1, true })
+	h.pending.saveErr = errors.New("disk I/O error")
+
+	f := h.factory()
+
+	if err := h.fromFactory(f).Write(t.Context(), container, []byte("new"), old); !errors.Is(err, blobremote.ErrOutcomeUnknown) {
+		t.Fatalf("Write: err = %v, want ErrOutcomeUnknown", err)
+	}
+
+	if _, found := h.pending.state(); found {
+		t.Fatal("the failing pending store kept a record")
+	}
+
+	h.disk.set(func(d *fakeDisk) { d.deleteFail, d.requests = false, nil })
+
+	if _, _, _, err := h.fromFactory(f).Read(t.Context(), container); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	reqs := h.disk.reqs()
+	if len(reqs) == 0 || reqs[0].method != http.MethodDelete || reqs[0].query.Get("path") != "app:/"+tempName(1) {
+		t.Fatalf("first request of the next store = %+v, want the DELETE of the temporary file", reqs)
+	}
+
+	wantNoTemps(t, h.disk)
+
+	// Settled: the next store does not fence again.
+	h.disk.set(func(d *fakeDisk) { d.requests = nil })
+
+	if _, _, _, err := h.fromFactory(f).Read(t.Context(), container); err != nil {
+		t.Fatalf("third Read: %v", err)
+	}
+
+	for _, r := range h.disk.reqs() {
+		if r.method == http.MethodDelete {
+			t.Errorf("the settled file was fenced again: %v", r.query)
+		}
+	}
+}
+
+// TestFenceReauthRequired: a refused token during the fence asks for a new
+// sign-in and keeps the record for the fence after it.
+func TestFenceReauthRequired(t *testing.T) {
+	refuse := func(d *fakeDisk) { d.access, d.oauthError = "acc-0", "invalid_grant" }
+
+	t.Run("on restart", func(t *testing.T) {
+		h := newHarness(t)
+		tmp := tempName(9)
+
+		h.disk.put(container, []byte("container"), testNow)
+		h.disk.put(tmp, []byte("pending"), testNow)
+		h.disk.set(refuse)
+
+		h.pending.name, h.pending.found = tmp, true
+
+		err := readErr(t, h.store())
+		if !errors.Is(err, domain.ErrReauthRequired) || errors.Is(err, blobremote.ErrOutcomeUnknown) {
+			t.Fatalf("Read: err = %v, want ErrReauthRequired", err)
+		}
+
+		if name, found := h.pending.state(); !found || name != tmp {
+			t.Errorf("cloud_pending = %q, %v; want %q kept", name, found, tmp)
+		}
+
+		if n := h.disk.count("api", http.MethodGet, "/v1/disk/resources"); n != 0 {
+			t.Errorf("container metadata read %d times before the fence", n)
+		}
+	})
+
+	t.Run("inside Write", func(t *testing.T) {
+		h := newHarness(t)
+		old := h.disk.put(container, []byte("old"), testNow)
+		h.disk.set(func(d *fakeDisk) { d.deferMove = true })
+		// The token is revoked while the move is in progress.
+		h.onSleep = func() { h.disk.set(refuse) }
+
+		err := h.store().Write(t.Context(), container, []byte("new"), old)
+		if !errors.Is(err, domain.ErrReauthRequired) || errors.Is(err, blobremote.ErrOutcomeUnknown) {
+			t.Fatalf("Write: err = %v, want ErrReauthRequired", err)
+		}
+
+		if name, found := h.pending.state(); !found || name != tempName(1) {
+			t.Errorf("cloud_pending = %q, %v; want %q kept", name, found, tempName(1))
+		}
+	})
 }
 
 func TestFenceOnRestart(t *testing.T) {

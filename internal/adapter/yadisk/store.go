@@ -10,8 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -100,6 +102,8 @@ type Store struct {
 	newID    func() uuid.UUID
 	log      *slog.Logger
 
+	memory *pendingMemory // temporary files to fence that pending could not record
+
 	settled bool // no temporary file of an earlier Write waits for its fence
 	reauth  bool // the token was refused for good; no more requests
 }
@@ -119,6 +123,7 @@ func NewStore(e Endpoints, tokens usecase.CloudTokenSource, clientID string, pen
 		sleep:    opts.Sleep,
 		newID:    opts.NewID,
 		log:      cmp.Or(opts.Log, slog.New(slog.DiscardHandler)),
+		memory:   &pendingMemory{},
 	}
 
 	if s.now == nil {
@@ -139,6 +144,14 @@ func NewStore(e Endpoints, tokens usecase.CloudTokenSource, clientID string, pen
 // NewStoreFactory builds a Store per operation over the target's token, with
 // the target's client ID or builtinClientID.
 func NewStoreFactory(e Endpoints, builtinClientID string, pending PendingStore) blobremote.StoreFactory {
+	return newStoreFactory(e, builtinClientID, pending, StoreOptions{})
+}
+
+// newStoreFactory is NewStoreFactory with the seams of the stores. Its
+// stores share one pendingMemory.
+func newStoreFactory(e Endpoints, builtinClientID string, pending PendingStore, opts StoreOptions) blobremote.StoreFactory {
+	memory := &pendingMemory{}
+
 	return func(t usecase.RemoteTarget) (blobremote.ObjectStore, error) {
 		if t.Token == nil {
 			return nil, domain.ErrReauthRequired
@@ -148,8 +161,42 @@ func NewStoreFactory(e Endpoints, builtinClientID string, pending PendingStore) 
 			return nil, errNoPendingStore
 		}
 
-		return NewStore(e, t.Token, usecase.EffectiveClientID(t.Settings, builtinClientID), pending, StoreOptions{}), nil
+		s := NewStore(e, t.Token, usecase.EffectiveClientID(t.Settings, builtinClientID), pending, opts)
+		s.memory = memory
+
+		return s, nil
 	}
+}
+
+// pendingMemory keeps, for the life of the process, the temporary files
+// whose pending record could not be saved, so that a later store fences them
+// when both the record and the DELETE failed (spec §5.5).
+type pendingMemory struct {
+	mu    sync.Mutex
+	names []string
+}
+
+func (m *pendingMemory) add(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !slices.Contains(m.names, name) {
+		m.names = append(m.names, name)
+	}
+}
+
+func (m *pendingMemory) remove(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.names = slices.DeleteFunc(m.names, func(n string) bool { return n == name })
+}
+
+func (m *pendingMemory) list() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return slices.Clone(m.names)
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -401,11 +448,14 @@ func (s *Store) move(ctx context.Context, tmp, path string, create bool) (moveRe
 }
 
 // mayBeApplied reports whether a failed request may still take effect: it
-// got no answer, or the server failed while handling it. Other answers and
-// failures before sending (token, refresh, 401) are known to change nothing.
+// got no answer, the server failed while handling it, or it was accepted
+// with a body that could not be read. Other answers and failures before
+// sending (token, refresh, 401) are known to change nothing.
 func mayBeApplied(err error) bool {
 	ce, ok := errors.AsType[CloudError](err)
-	return ok && (ce.Status == 0 || ce.Status >= http.StatusInternalServerError)
+	accepted := ce.Status >= http.StatusOK && ce.Status < http.StatusMultipleChoices
+
+	return ok && (ce.Status == 0 || accepted || ce.Status >= http.StatusInternalServerError)
 }
 
 // waitOperation polls the operation link of a 202 answer until the operation
@@ -447,13 +497,17 @@ func (s *Store) fence(ctx context.Context, tmpName, path, sum string, cause erro
 	base := context.WithoutCancel(ctx)
 
 	if err := s.withDeadline(base, func(ctx context.Context) error { return s.pending.SavePendingTemp(ctx, tmpName) }); err != nil {
+		// Without the record, the stores of this factory still fence it.
+		s.memory.add(tmpName)
 		s.log.Error("yandex disk: pending temporary file not recorded", applog.Err(err))
 	}
 
-	if !s.deleteTemp(base, appRoot+tmpName) {
+	if err := s.fenceTemp(base, tmpName); err != nil {
 		s.settled = false // the record stays: the next Read or Write fences again
-		return fmt.Errorf("fence the temporary file: %w", blobremote.ErrOutcomeUnknown)
+		return err
 	}
+
+	s.memory.remove(tmpName)
 
 	// A stale record only makes the next fence delete a missing file.
 	if err := s.withDeadline(base, s.pending.ClearPendingTemp); err != nil {
@@ -501,8 +555,8 @@ func (s *Store) settle(ctx context.Context) error {
 			return fmt.Errorf("load pending temporary file: %w", usecase.LocalError{Err: errBadPendingName})
 		}
 
-		if !s.deleteTemp(ctx, appRoot+name) {
-			return fmt.Errorf("fence the pending temporary file: %w", blobremote.ErrOutcomeUnknown)
+		if err := s.fenceTemp(ctx, name); err != nil {
+			return err
 		}
 
 		if err := s.pending.ClearPendingTemp(ctx); err != nil {
@@ -510,9 +564,33 @@ func (s *Store) settle(ctx context.Context) error {
 		}
 	}
 
+	for _, name := range s.memory.list() {
+		if err := s.fenceTemp(ctx, name); err != nil {
+			return err
+		}
+
+		s.memory.remove(name)
+	}
+
 	s.settled = true
 
 	return nil
+}
+
+// fenceTemp deletes the temporary file name so that no move can take it. A
+// failure leaves the outcome unknown, except a refused token, which asks for
+// a new sign-in; the caller keeps the record either way.
+func (s *Store) fenceTemp(ctx context.Context, name string) error {
+	err := s.deleteTemp(ctx, appRoot+name)
+
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, domain.ErrReauthRequired):
+		return fmt.Errorf("fence the temporary file: %w", err)
+	default:
+		return fmt.Errorf("fence the temporary file: %w", blobremote.ErrOutcomeUnknown)
+	}
 }
 
 // validTempName reports whether name is a temporary file name of Write:
@@ -528,11 +606,9 @@ func validTempName(name string) bool {
 	return err == nil
 }
 
-// deleteTemp deletes path permanently within fenceTimeout. It reports
-// whether path is gone: deleted, or missing because a move took it.
-func (s *Store) deleteTemp(ctx context.Context, path string) bool {
-	var gone bool
-
+// deleteTemp deletes path permanently within fenceTimeout. nil means path
+// is gone: deleted, or missing because a move took it.
+func (s *Store) deleteTemp(ctx context.Context, path string) error {
 	err := s.withDeadline(ctx, func(ctx context.Context) error {
 		u, err := s.api.url(resourcesPath, url.Values{qPath: {path}, "permanently": {"true"}})
 		if err != nil {
@@ -545,33 +621,31 @@ func (s *Store) deleteTemp(ctx context.Context, path string) bool {
 
 		switch {
 		case isStatus(err, http.StatusNotFound):
-			gone = true
+			return nil
 		case err != nil:
 			return err
 		case status == http.StatusAccepted:
-			gone, err = s.waitOperation(ctx, l.Href)
-			if err == nil && !gone {
+			done, err := s.waitOperation(ctx, l.Href)
+			if err == nil && !done {
 				err = CloudError{Code: codeOther, err: errOperationFailed}
 			}
 
 			return err
 		default:
-			gone = true
+			return nil
 		}
-
-		return nil
 	})
 	if err != nil {
 		s.log.Error("yandex disk: temporary file not deleted", applog.Err(err))
 	}
 
-	return gone
+	return err
 }
 
 // removeTemp deletes a temporary file that no move can take, ignoring a
 // failure: cleanup removes it later.
 func (s *Store) removeTemp(ctx context.Context, path string) {
-	s.deleteTemp(context.WithoutCancel(ctx), path)
+	_ = s.deleteTemp(context.WithoutCancel(ctx), path) // logged; cleanup retries
 }
 
 func (s *Store) withDeadline(ctx context.Context, f func(context.Context) error) error {
@@ -623,7 +697,7 @@ func (s *Store) cleanup(ctx context.Context, name string) {
 
 			deleted++
 
-			s.deleteTemp(ctx, appRoot+it.Name)
+			_ = s.deleteTemp(ctx, appRoot+it.Name) // logged; the next Write retries
 		}
 
 		if len(l.Embedded.Items) < listPageSize || offset+len(l.Embedded.Items) >= l.Embedded.Total {

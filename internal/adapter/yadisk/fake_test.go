@@ -102,6 +102,7 @@ type fakeDisk struct {
 	uploadMD5      string // md5 reported for uploads in place of the real one
 	move202        bool   // move answers 202 and is applied at once
 	moveFail       bool   // with move202: the operation fails, nothing moves
+	moveBadBody    bool   // move is applied and answers 202 with a body that is not JSON
 	deferMove      bool   // move answers 202 and waits for runDeferred
 	dropPollAfter  int    // the n-th and later operation polls drop the connection; 0 never
 	polls          int    //
@@ -454,6 +455,10 @@ func (d *fakeDisk) move(w http.ResponseWriter, q url.Values) {
 	switch {
 	case d.deferMove:
 		d.accept(w, &fakeOp{status: opStatusInProgress, from: from, to: to, deferred: true})
+	case d.moveBadBody:
+		d.moveFile(from, to)
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("accepted, not JSON"))
 	case d.move202 && d.moveFail:
 		d.accept(w, &fakeOp{status: opStatusFailed, from: from, to: to})
 	case d.move202:
