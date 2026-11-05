@@ -11,6 +11,8 @@ over SSH. Version 2 is a rewrite of the Delphi application (branch
 
 - Notes encrypted locally with a key protected by your password, with a version history.
 - Optional backup and restore through your own PostgreSQL over SSH; the server sees only ciphertext.
+- Optional backup and restore through Yandex Disk after signing in with your Yandex account; see
+  [Yandex Disk](docs/yandex-disk.md).
 - Local full-text and semantic search, in Russian and English and in code; nothing leaves the device.
 
 ## Download
@@ -32,6 +34,7 @@ All documents are in [docs/](docs/README.md), in English and Russian.
 
 - [Installation and upgrade](docs/install.md): per system, and the upgrade from 2.0.x.
 - [Server setup](docs/server-setup.md): PostgreSQL and OpenSSH for synchronization.
+- [Yandex Disk](docs/yandex-disk.md): sign-in, your own client ID, revoking access.
 - [Search](docs/search.md): how to search and what the status line means.
 - [Security](docs/security.md): the threat model and what is not protected.
 - [Limitations](docs/limitations.md): behaviour to know before relying on the server.
