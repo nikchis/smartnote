@@ -65,8 +65,9 @@ var (
 	errOperationFailed = errors.New("disk operation failed")
 )
 
-// PendingStore keeps the name of the temporary file whose move has an
-// unknown outcome until it is fenced (spec §5.5). local.db implements it.
+// PendingStore keeps the name of the temporary file whose move was sent
+// until the outcome is definite, or until a fence settles it (spec §5.5).
+// local.db implements it.
 type PendingStore interface {
 	LoadPendingTemp(ctx context.Context) (name string, found bool, err error)
 	SavePendingTemp(ctx context.Context, name string) error
@@ -405,15 +406,27 @@ const (
 )
 
 // replace moves tmp over path (step 5) and settles an unknown outcome with
-// the fence.
+// the fence. The temporary file is recorded before the move is sent, so
+// that an app killed during the move fences it on the next start, and the
+// record is cleared once the outcome is definite.
 func (s *Store) replace(ctx context.Context, tmpName, path, sum string, create bool) error {
+	// The operation's context may end at any moment; the local steps get
+	// their own deadline.
+	base := context.WithoutCancel(ctx)
+	s.recordPending(base, tmpName)
+
 	res, err := s.move(ctx, appRoot+tmpName, path, create)
 
 	switch res {
 	case moveDone:
+		s.clearPending(base, tmpName)
 		return nil
 	case moveRejected:
-		s.removeTemp(ctx, appRoot+tmpName)
+		// A temporary file left on the Disk keeps its record: the next fence
+		// deletes it.
+		if s.deleteTemp(base, appRoot+tmpName) == nil {
+			s.clearPending(base, tmpName)
+		}
 
 		if create && isStatus(err, http.StatusConflict) {
 			return fmt.Errorf("move: %w", blobremote.ErrVersionMismatch)
@@ -421,7 +434,27 @@ func (s *Store) replace(ctx context.Context, tmpName, path, sum string, create b
 
 		return fmt.Errorf("move: %w", err)
 	default:
-		return s.fence(ctx, tmpName, path, sum, err)
+		return s.fence(base, tmpName, path, sum, err)
+	}
+}
+
+// recordPending saves tmpName in the pending store within fenceTimeout.
+// Without the record, the stores of this factory remember the file instead.
+func (s *Store) recordPending(ctx context.Context, tmpName string) {
+	err := s.withDeadline(ctx, func(ctx context.Context) error { return s.pending.SavePendingTemp(ctx, tmpName) })
+	if err != nil {
+		s.memory.add(tmpName)
+		s.log.Error("yandex disk: pending temporary file not recorded", applog.Err(err))
+	}
+}
+
+// clearPending forgets tmpName once no move can take it any more. A stale
+// record only makes the next fence delete a missing file.
+func (s *Store) clearPending(ctx context.Context, tmpName string) {
+	s.memory.remove(tmpName)
+
+	if err := s.withDeadline(ctx, s.pending.ClearPendingTemp); err != nil {
+		s.log.Error("yandex disk: pending temporary file not cleared", applog.Err(err))
 	}
 }
 
@@ -501,29 +534,16 @@ func (s *Store) waitOperation(ctx context.Context, href string) (done bool, err 
 
 // fence settles a move with an unknown outcome (spec §5.5): with tmp
 // deleted the move cannot be applied later, and the md5 of path tells
-// whether it was applied. cause is the failure that left the outcome unknown.
-func (s *Store) fence(ctx context.Context, tmpName, path, sum string, cause error) error {
-	// The operation's context may be done already; each step gets its own
-	// deadline.
-	base := context.WithoutCancel(ctx)
-
-	if err := s.withDeadline(base, func(ctx context.Context) error { return s.pending.SavePendingTemp(ctx, tmpName) }); err != nil {
-		// Without the record, the stores of this factory still fence it.
-		s.memory.add(tmpName)
-		s.log.Error("yandex disk: pending temporary file not recorded", applog.Err(err))
-	}
-
+// whether it was applied. cause is the failure that left the outcome
+// unknown. replace recorded tmpName already; base is not cancelled, and
+// each step gets its own deadline.
+func (s *Store) fence(base context.Context, tmpName, path, sum string, cause error) error {
 	if err := s.fenceTemp(base, tmpName); err != nil {
 		s.settled = false // the record stays: the next Read or Write fences again
 		return err
 	}
 
-	s.memory.remove(tmpName)
-
-	// A stale record only makes the next fence delete a missing file.
-	if err := s.withDeadline(base, s.pending.ClearPendingTemp); err != nil {
-		s.log.Error("yandex disk: pending temporary file not cleared", applog.Err(err))
-	}
+	s.clearPending(base, tmpName)
 
 	var (
 		r     resource
@@ -795,8 +815,10 @@ func (s *Store) token(ctx context.Context) (usecase.CloudToken, error) {
 }
 
 // refresh exchanges the refresh token of cur for a new token and passes it
-// to the token source. A refusal of the grant or of the client means a new
-// sign-in. The client secret is not sent: the app has none (spec §6.1).
+// to the token source. Any 4xx answer of the token endpoint (invalid_grant,
+// invalid_client, a demand for a client secret...) means a new sign-in;
+// 5xx and network errors stay a CloudError. The client secret is not sent:
+// the app has none (spec §6.1).
 func (s *Store) refresh(ctx context.Context, cur usecase.CloudToken) (usecase.CloudToken, error) {
 	if cur.Refresh == "" {
 		return usecase.CloudToken{}, domain.ErrReauthRequired
@@ -806,7 +828,7 @@ func (s *Store) refresh(ctx context.Context, cur usecase.CloudToken) (usecase.Cl
 
 	answer, err := postToken(ctx, s.api.http, s.oauth, form)
 	if err != nil {
-		if ce, ok := errors.AsType[CloudError](err); ok && refusedGrant(ce.Code) {
+		if ce, ok := errors.AsType[CloudError](err); ok && refusedRefresh(ce.Status) {
 			return usecase.CloudToken{}, domain.ErrReauthRequired
 		}
 
@@ -830,13 +852,10 @@ func (s *Store) refresh(ctx context.Context, cur usecase.CloudToken) (usecase.Cl
 	return next, nil
 }
 
-func refusedGrant(code string) bool {
-	switch code {
-	case codeInvalidGrant, codeInvalidClient, codeUnauthorizedClient:
-		return true
-	}
-
-	return false
+// refusedRefresh reports whether status of a token answer is a refusal of
+// the request itself, which a retry cannot fix.
+func refusedRefresh(status int) bool {
+	return status >= http.StatusBadRequest && status < http.StatusInternalServerError
 }
 
 func md5Hex(data []byte) string {

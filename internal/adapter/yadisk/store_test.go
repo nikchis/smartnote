@@ -328,6 +328,105 @@ func TestWriteCreate(t *testing.T) {
 	}
 }
 
+// TestWriteRecordsTempBeforeMove: the temporary file is recorded before its
+// move is sent and forgotten after a definite outcome (spec §5.5, final
+// review M3).
+func TestWriteRecordsTempBeforeMove(t *testing.T) {
+	tmp := tempName(1)
+	saved := []string{"save " + tmp, "move app:/" + tmp}
+
+	tests := []struct {
+		name  string
+		mode  func(d *fakeDisk)
+		ok    bool
+		after []string // events after the move
+		kept  bool     // the record stays
+	}{
+		{name: "moved", mode: func(*fakeDisk) {}, ok: true, after: []string{"clear"}},
+		{name: "moved after 202", mode: func(d *fakeDisk) { d.move202 = true }, ok: true, after: []string{"clear"}},
+		{
+			name: "operation failed", mode: func(d *fakeDisk) { d.move202, d.moveFail = true, true },
+			after: []string{"DELETE app:/" + tmp + " permanently=true", "clear"},
+		},
+		{
+			name: "rejected, temporary file not removed",
+			mode: func(d *fakeDisk) {
+				d.fail = map[string]fakeFailure{epMove: {http.StatusForbidden, "ForbiddenError"}}
+				d.deleteFail = true
+			},
+			after: []string{"DELETE app:/" + tmp + " permanently=true"},
+			kept:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			old := h.disk.put(container, []byte("old"), testNow)
+			h.disk.set(tc.mode)
+
+			err := h.store().Write(t.Context(), container, []byte("new"), old)
+			if (err == nil) != tc.ok || errors.Is(err, blobremote.ErrOutcomeUnknown) {
+				t.Fatalf("Write: err = %v, want success %v", err, tc.ok)
+			}
+
+			if got, want := h.disk.eventLog(), append(slices.Clone(saved), tc.after...); !slices.Equal(got, want) {
+				t.Errorf("events = %v, want %v", got, want)
+			}
+
+			if name, found := h.pending.state(); found != tc.kept || tc.kept && name != tmp {
+				t.Errorf("cloud_pending = %q, %v; want kept %v", name, found, tc.kept)
+			}
+		})
+	}
+}
+
+// TestFenceAfterKilledMove: the process dies right after the move is sent.
+// The record saved before the move makes the restarted app fence the
+// temporary file before anything else, so the late move cannot apply.
+func TestFenceAfterKilledMove(t *testing.T) {
+	h := newHarness(t)
+	old := h.disk.put(container, []byte("old"), testNow)
+	tmp := tempName(1)
+
+	var (
+		restartErr error
+		firstReq   fakeRequest
+	)
+
+	// The first app is frozen while its move is on the way; the restarted
+	// app, a fresh factory over the same local.db, starts meanwhile.
+	h.disk.set(func(d *fakeDisk) {
+		d.hold = func(ep string) {
+			if ep != epMove {
+				return
+			}
+
+			h.disk.set(func(d *fakeDisk) { d.hold, d.requests = nil, nil })
+
+			_, _, _, restartErr = h.fromFactory(h.factory()).Read(context.Background(), container)
+			if reqs := h.disk.reqs(); len(reqs) > 0 {
+				firstReq = reqs[0]
+			}
+		}
+	})
+
+	if err := h.store().Write(t.Context(), container, []byte("lost"), old); err == nil {
+		t.Error("Write succeeded, want the late move refused")
+	}
+
+	if restartErr != nil {
+		t.Fatalf("Read after restart: %v", restartErr)
+	}
+
+	if firstReq.method != http.MethodDelete || firstReq.query.Get("path") != "app:/"+tmp {
+		t.Errorf("first request after restart = %+v, want the DELETE of %s", firstReq, tmp)
+	}
+
+	wantContainer(t, h.disk, []byte("old"))
+	wantNoTemps(t, h.disk)
+}
+
 func TestWriteReplace(t *testing.T) {
 	h := newHarness(t)
 	old := h.disk.put(container, []byte("old"), testNow)
@@ -494,9 +593,9 @@ func TestFencePollLostApplied(t *testing.T) {
 	}
 
 	tmp := tempName(1)
-	want := []string{"save " + tmp, "DELETE app:/" + tmp + " permanently=true", "clear"}
+	want := []string{"save " + tmp, "move app:/" + tmp, "DELETE app:/" + tmp + " permanently=true", "clear"}
 
-	if got := h.disk.eventLog(); !slices.Equal(got[:min(len(got), 3)], want) {
+	if got := h.disk.eventLog(); !slices.Equal(got[:min(len(got), len(want))], want) {
 		t.Errorf("events = %v, want %v first", got, want)
 	}
 
@@ -621,9 +720,9 @@ func TestMoveUnparsedAnswerIsFenced(t *testing.T) {
 	}
 
 	tmp := tempName(1)
-	want := []string{"save " + tmp, "DELETE app:/" + tmp + " permanently=true", "clear"}
+	want := []string{"save " + tmp, "move app:/" + tmp, "DELETE app:/" + tmp + " permanently=true", "clear"}
 
-	if got := h.disk.eventLog(); !slices.Equal(got[:min(len(got), 3)], want) {
+	if got := h.disk.eventLog(); !slices.Equal(got[:min(len(got), len(want))], want) {
 		t.Errorf("events = %v, want %v first", got, want)
 	}
 
@@ -1163,7 +1262,11 @@ func TestRefreshRejected(t *testing.T) {
 		{name: "invalid_grant", code: "invalid_grant", status: http.StatusBadRequest, reauth: true},
 		{name: "invalid_client", code: "invalid_client", status: http.StatusUnauthorized, reauth: true},
 		{name: "unauthorized_client", code: "unauthorized_client", status: http.StatusBadRequest, reauth: true},
+		// Any other 4xx of the token endpoint is a refusal too (final review M4).
+		{name: "invalid_request", code: "invalid_request", status: http.StatusBadRequest, reauth: true},
+		{name: "unknown 403", code: "forbidden", status: http.StatusForbidden, reauth: true},
 		{name: "server error", code: "server_error", status: http.StatusInternalServerError},
+		{name: "unavailable", code: "temporarily_unavailable", status: http.StatusServiceUnavailable},
 	}
 
 	for _, tc := range tests {

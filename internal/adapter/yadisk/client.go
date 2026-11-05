@@ -43,7 +43,7 @@ const (
 	paramClientID  = "client_id"
 	paramCode      = "code"
 
-	// OAuth errors of a refresh that mean a new sign-in.
+	// OAuth errors of a refused grant or client.
 	codeInvalidGrant       = "invalid_grant"
 	codeInvalidClient      = "invalid_client"
 	codeUnauthorizedClient = "unauthorized_client"

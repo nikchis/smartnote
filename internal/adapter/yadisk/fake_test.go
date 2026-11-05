@@ -85,7 +85,7 @@ type fakeDisk struct {
 	uploads  map[string]string    // upload link id -> path
 	ops      map[string]*fakeOp
 	nextID   int
-	events   []string // DELETE requests and pending-store calls, in order
+	events   []string // move and DELETE requests and pending-store calls, in order
 	requests []fakeRequest
 
 	// OAuth: the API accepts only access; the token endpoint expects refresh
@@ -99,7 +99,7 @@ type fakeDisk struct {
 	oauthStatus             int    // status of the oauthError answer
 	reject401               bool   // the API rejects every token
 	tokenForms              []url.Values
-	hold                    func(ep string) // called before a token (epToken) or account (epDisk) request is served
+	hold                    func(ep string) // called before a token (epToken), account (epDisk) or move (epMove) request is served
 
 	// Modes.
 	upload202      bool   // PUT answers 202, the md5 appears after md5Delay metadata requests
@@ -314,8 +314,11 @@ func (d *fakeDisk) record(server string, r *http.Request) {
 }
 
 func (d *fakeDisk) serveAPI(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/v1/disk" {
+	switch {
+	case r.URL.Path == "/v1/disk":
 		d.held(epDisk)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/disk/resources/move":
+		d.held(epMove)
 	}
 
 	d.mu.Lock()
@@ -449,6 +452,8 @@ func (d *fakeDisk) uploadLink(w http.ResponseWriter, q url.Values) {
 }
 
 func (d *fakeDisk) move(w http.ResponseWriter, q url.Values) {
+	d.events = append(d.events, "move "+q.Get("from"))
+
 	if d.failed(w, epMove) {
 		return
 	}
