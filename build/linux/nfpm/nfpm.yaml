@@ -24,6 +24,11 @@ contents:
   # Named after the GTK application id (linuxAppID in cmd/smartnote), so Wayland desktops match the window with it.
   - src: "./build/linux/smartnote.desktop"
     dst: "/usr/share/applications/com.nikchis.smartnote.desktop"
+  # AppStream metadata for software centres, named after the same id.
+  - src: "./build/linux/com.nikchis.smartnote.metainfo.xml"
+    dst: "/usr/share/metainfo/com.nikchis.smartnote.metainfo.xml"
+    file_info:
+      mode: 0644
   # Search (specification 8.2): the worker and ONNX Runtime beside the application's lib directory,
   # the model in its share directory. task search:files prepares them.
   - src: "./bin/smartnote-search"

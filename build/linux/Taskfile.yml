@@ -120,6 +120,9 @@ tasks:
       - task: :notices:build
       - cp "{{.APP_BINARY}}" "{{.APP_NAME}}"
       - cp ../../appicon.png "{{.APP_NAME}}.png"
+      # The desktop file is named after the application id, as in the .deb: Wayland desktops match
+      # the window with it, and appimagetool requires the AppStream file and its id to match it.
+      - cp ../{{.APP_NAME}}.desktop {{.DESKTOP_FILE}}
       - wails3 generate appimage -binary "{{.APP_NAME}}" -icon {{.ICON}} -desktopfile {{.DESKTOP_FILE}} -outputdir {{.OUTPUT_DIR}} -builddir {{.BUILD_DIR}}
       # wails3 generate appimage puts only the application into the AppDir. The search files are
       # added to the AppDir it leaves behind, at the paths of the .deb under usr/, and the AppDir is
@@ -132,6 +135,11 @@ tasks:
       - install -m 0644 "{{.ROOT_DIR}}/build/ort/libonnxruntime.so.1.31.0" "{{.APPDIR}}/usr/lib/smartnote/"
       - install -m 0644 "{{.ROOT_DIR}}/build/model/model.onnx" "{{.ROOT_DIR}}/build/model/tokenizer.kit" "{{.ROOT_DIR}}/build/model/manifest.json" "{{.APPDIR}}/usr/share/smartnote/model/"
       - install -m 0644 "{{.ROOT_DIR}}/THIRD_PARTY_NOTICES.md" "{{.APPDIR}}/usr/share/doc/smartnote/"
+      # AppStream metadata under the name appimagetool looks for (after the desktop file), and the
+      # desktop file it launches where AppStream tools look for it.
+      - install -d -m 0755 "{{.APPDIR}}/usr/share/metainfo" "{{.APPDIR}}/usr/share/applications"
+      - install -m 0644 "{{.ROOT_DIR}}/build/linux/{{.APP_ID}}.metainfo.xml" "{{.APPDIR}}/usr/share/metainfo/{{.APP_ID}}.appdata.xml"
+      - install -m 0644 {{.DESKTOP_FILE}} "{{.APPDIR}}/usr/share/applications/"
       - install -m 0644 "{{.ROOT_DIR}}/build/notices/rust-crates.txt" "{{.ROOT_DIR}}/build/notices/go-modules.txt" "{{.APPDIR}}/usr/share/doc/smartnote/licenses/"
       - install -m 0644 "{{.ROOT_DIR}}/build/ort/LICENSE" "{{.ROOT_DIR}}/build/ort/ThirdPartyNotices.txt" "{{.APPDIR}}/usr/share/doc/smartnote/licenses/onnxruntime/"
       - rm -rf "{{.BUILD_DIR}}/squashfs-root"
@@ -143,7 +151,9 @@ tasks:
       APP_NAME: '{{.APP_NAME}}'
       APP_BINARY: '../../../bin/{{.APP_NAME}}'
       ICON: '{{.APP_NAME}}.png'
-      DESKTOP_FILE: '../{{.APP_NAME}}.desktop'
+      # The application id (linuxAppID in cmd/smartnote) names the desktop file and AppStream file.
+      APP_ID: com.nikchis.smartnote
+      DESKTOP_FILE: '{{.APP_ID}}.desktop'
       OUTPUT_DIR: '../../../bin'
       BUILD_DIR: '{{.ROOT_DIR}}/build/linux/appimage/build'
       # Names wails3 generate appimage gives the AppDir, the AppImage and linuxdeploy.

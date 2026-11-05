@@ -10,23 +10,23 @@ signed, so Windows and macOS warn before the first start.
 
 ## Ubuntu (.deb)
 
-Ubuntu 26.04, amd64, file `smartnote.deb`:
+Ubuntu 26.04, amd64, file `smartnote_<version>_amd64.deb`:
 
 ```
-sudo apt install ./smartnote.deb
+sudo apt install ./smartnote_<version>_amd64.deb
 ```
 
 It pulls in GTK 4 and WebKitGTK 6.0.
 
 ## Ubuntu (AppImage)
 
-Ubuntu desktop, amd64, file `smartnote-x86_64.AppImage`: make it executable (`chmod +x`) and run
+Ubuntu desktop, amd64, file `Smartnote-<version>-x86_64.AppImage`: make it executable (`chmod +x`) and run
 it. A minimal system also needs `libegl1 libgles2 libfontconfig1 libfribidi0 libharfbuzz0b
 bubblewrap xdg-dbus-proxy`, which every Ubuntu desktop has.
 
 ## Windows
 
-Windows 10/11, file `smartnote-amd64-installer.exe`. SmartScreen shows "Windows protected your PC":
+Windows 10/11, file `Smartnote-<version>-windows-amd64-installer.exe`. SmartScreen shows "Windows protected your PC":
 choose **More info**, then **Run anyway**.
 
 Semantic search needs the Microsoft Visual C++ Redistributable (x64), which most systems have;
@@ -34,7 +34,7 @@ without it only full-text search works.
 
 ## macOS
 
-macOS 12+ on Apple Silicon (arm64), file `smartnote.dmg`. There is no package for Intel Macs: the
+macOS 12+ on Apple Silicon (arm64), file `Smartnote-<version>-macos-arm64.dmg`. There is no package for Intel Macs: the
 ONNX Runtime library of the search is pinned for Apple Silicon only ([Packaging](packaging.md)).
 
 Gatekeeper refuses an unsigned app: drag Smartnote to Applications, then either open
@@ -82,8 +82,9 @@ nothing else and is written again if deleted.
 ## Desktop integration
 
 - Only one Smartnote runs at a time: a second start brings the open window forward.
-- The application id is `com.nikchis.smartnote`, and the `.deb` and `.rpm` install
-  `com.nikchis.smartnote.desktop` under that name, so Wayland desktops show the logo for the window.
+- The application id is `com.nikchis.smartnote`, and the `.deb`, the `.rpm` and the AppImage carry
+  the desktop file `com.nikchis.smartnote.desktop` under that name, so Wayland desktops show the
+  logo for the window, and AppStream metadata for software centres.
 - The interface uses Liberation Sans (`fonts-liberation`), the notes DejaVu Sans Mono 13pt
   (`fonts-dejavu-core`); both are dependencies of the packages.
 - The colors are the dark skin of v1, whatever theme the system prefers.

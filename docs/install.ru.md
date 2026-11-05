@@ -10,23 +10,23 @@
 
 ## Ubuntu (.deb)
 
-Ubuntu 26.04, amd64, файл `smartnote.deb`:
+Ubuntu 26.04, amd64, файл `smartnote_<версия>_amd64.deb`:
 
 ```
-sudo apt install ./smartnote.deb
+sudo apt install ./smartnote_<версия>_amd64.deb
 ```
 
 Команда подтягивает GTK 4 и WebKitGTK 6.0.
 
 ## Ubuntu (AppImage)
 
-Ubuntu desktop, amd64, файл `smartnote-x86_64.AppImage`: сделайте его исполняемым (`chmod +x`) и
+Ubuntu desktop, amd64, файл `Smartnote-<версия>-x86_64.AppImage`: сделайте его исполняемым (`chmod +x`) и
 запустите. Минимальной системе нужны ещё `libegl1 libgles2 libfontconfig1 libfribidi0
 libharfbuzz0b bubblewrap xdg-dbus-proxy`; в любой настольной Ubuntu они есть.
 
 ## Windows
 
-Windows 10/11, файл `smartnote-amd64-installer.exe`. SmartScreen показывает «Windows protected your
+Windows 10/11, файл `Smartnote-<версия>-windows-amd64-installer.exe`. SmartScreen показывает «Windows protected your
 PC»: выберите **More info**, затем **Run anyway**.
 
 Семантическому поиску нужен Microsoft Visual C++ Redistributable (x64), который есть в большинстве
@@ -34,7 +34,7 @@ PC»: выберите **More info**, затем **Run anyway**.
 
 ## macOS
 
-macOS 12+ на Apple Silicon (arm64), файл `smartnote.dmg`. Пакета для Mac на Intel нет: библиотека
+macOS 12+ на Apple Silicon (arm64), файл `Smartnote-<версия>-macos-arm64.dmg`. Пакета для Mac на Intel нет: библиотека
 ONNX Runtime для поиска закреплена только для Apple Silicon ([Упаковка](packaging.ru.md)).
 
 Gatekeeper не открывает неподписанное приложение: перетащите Smartnote в Applications, затем либо
@@ -85,9 +85,9 @@ Smartnote.». Обратного преобразования нет.
 
 - Одновременно работает только один Smartnote: повторный запуск выводит открытое окно на передний
   план.
-- Идентификатор приложения — `com.nikchis.smartnote`, и пакеты `.deb` и `.rpm` устанавливают
+- Идентификатор приложения — `com.nikchis.smartnote`; `.deb`, `.rpm` и AppImage несут ярлык
   `com.nikchis.smartnote.desktop` под этим именем, поэтому рабочие столы на Wayland показывают
-  логотип у окна.
+  логотип у окна, и метаданные AppStream для центров приложений.
 - Интерфейс использует шрифт Liberation Sans (`fonts-liberation`), заметки — DejaVu Sans Mono 13pt
   (`fonts-dejavu-core`); оба — зависимости пакетов.
 - Цвета — тёмная тема v1, какую бы тему ни предпочитала система.

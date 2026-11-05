@@ -21,6 +21,14 @@
   `common:generate:icons` строит из этого PNG `windows/icon.ico` и `darwin/icons.icns`.
   `Assets.car` из Icon Composer нет: на macOS с actool 26 Wails пересобрал бы его, а вместе с ним
   и `icons.icns`, из `appicon.icon`, поэтому macOS использует `icons.icns` (`CFBundleIconFile`).
+- Интеграция с рабочим столом Linux названа по id приложения `com.nikchis.smartnote`
+  (`linuxAppID` в `cmd/smartnote`): ярлык `com.nikchis.smartnote.desktop` в `.deb` и в AppImage,
+  чтобы рабочие столы Wayland связывали с ним окно, и метаданные AppStream
+  `build/linux/com.nikchis.smartnote.metainfo.xml` (ведутся вручную; на каждую версию добавляйте
+  `<release>`). `.deb` ставит их в `/usr/share/metainfo/`; AppImage несёт их как
+  `usr/share/metainfo/com.nikchis.smartnote.appdata.xml` — под этим именем их ищет appimagetool, и
+  сборка падает, если `appstreamcli validate` находит хотя бы предупреждение. Изменение проверяйте
+  командой `appstreamcli validate --no-net build/linux/com.nikchis.smartnote.metainfo.xml`.
 
 ## Пакеты с поиском
 

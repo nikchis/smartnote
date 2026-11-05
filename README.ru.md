@@ -22,10 +22,10 @@
 
 | Система | Пакет |
 |---|---|
-| Ubuntu 26.04 (amd64) | `smartnote.deb` |
-| Ubuntu desktop (amd64) | `smartnote-x86_64.AppImage` |
-| Windows 10/11 | `smartnote-amd64-installer.exe` |
-| macOS 12+ на Apple Silicon | `smartnote.dmg` |
+| Ubuntu 26.04 (amd64) | `smartnote_<версия>_amd64.deb` |
+| Ubuntu desktop (amd64) | `Smartnote-<версия>-x86_64.AppImage` |
+| Windows 10/11 | `Smartnote-<версия>-windows-amd64-installer.exe` |
+| macOS 12+ на Apple Silicon | `Smartnote-<версия>-macos-arm64.dmg` |
 
 ## Документация
 

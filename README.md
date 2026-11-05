@@ -21,10 +21,10 @@ packages are not signed. Steps and requirements are in
 
 | System | Package |
 |---|---|
-| Ubuntu 26.04 (amd64) | `smartnote.deb` |
-| Ubuntu desktop (amd64) | `smartnote-x86_64.AppImage` |
-| Windows 10/11 | `smartnote-amd64-installer.exe` |
-| macOS 12+ on Apple Silicon | `smartnote.dmg` |
+| Ubuntu 26.04 (amd64) | `smartnote_<version>_amd64.deb` |
+| Ubuntu desktop (amd64) | `Smartnote-<version>-x86_64.AppImage` |
+| Windows 10/11 | `Smartnote-<version>-windows-amd64-installer.exe` |
+| macOS 12+ on Apple Silicon | `Smartnote-<version>-macos-arm64.dmg` |
 
 ## Documentation
 

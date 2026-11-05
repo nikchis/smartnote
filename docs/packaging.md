@@ -21,6 +21,14 @@ notices and signing on macOS. For developers who build or change the packages; t
   `common:generate:icons` builds `windows/icon.ico` and `darwin/icons.icns` from that PNG.
   There is no Icon Composer `Assets.car`: on macOS with actool 26 Wails would rebuild it, and
   `icons.icns` with it, from `appicon.icon`, so macOS uses `icons.icns` (`CFBundleIconFile`).
+- Linux desktop integration is named after the application id `com.nikchis.smartnote`
+  (`linuxAppID` in `cmd/smartnote`): the desktop file `com.nikchis.smartnote.desktop` in the `.deb`
+  and in the AppImage, so Wayland desktops match the window with it, and the AppStream metadata
+  `build/linux/com.nikchis.smartnote.metainfo.xml` (by hand; add a `<release>` for every version).
+  The `.deb` installs it in `/usr/share/metainfo/`; the AppImage carries it as
+  `usr/share/metainfo/com.nikchis.smartnote.appdata.xml`, the name appimagetool looks for, and
+  appimagetool fails the build when `appstreamcli validate` finds even a warning. Check a change
+  with `appstreamcli validate --no-net build/linux/com.nikchis.smartnote.metainfo.xml`.
 
 ## Packages with search
 
