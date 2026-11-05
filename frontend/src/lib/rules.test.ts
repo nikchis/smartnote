@@ -102,19 +102,33 @@ describe("hasDraft", () => {
 });
 
 describe("settingsButtons", () => {
+  const ssh = "ssh_postgres";
+
   it("keeps Test, OK and every key action inactive while the settings load", () => {
-    expect(settingsButtons(false, undefined)).toEqual({ test: false, save: false, generate: false, export: false, import: false });
+    expect(settingsButtons(false, undefined, ssh, false)).toEqual({ test: false, save: false, generate: false, export: false, import: false });
   });
 
   it("keeps the key actions inactive until it is known whether a key exists", () => {
-    expect(settingsButtons(true, undefined)).toEqual({ test: true, save: true, generate: false, export: false, import: false });
+    expect(settingsButtons(true, undefined, ssh, false)).toEqual({ test: true, save: true, generate: false, export: false, import: false });
   });
 
   it("allows Generate and Import without a key", () => {
-    expect(settingsButtons(true, false)).toEqual({ test: true, save: true, generate: true, export: false, import: true });
+    expect(settingsButtons(true, false, ssh, false)).toEqual({ test: true, save: true, generate: true, export: false, import: true });
   });
 
   it("allows Export with a key", () => {
-    expect(settingsButtons(true, true)).toEqual({ test: true, save: true, generate: true, export: true, import: true });
+    expect(settingsButtons(true, true, ssh, false)).toEqual({ test: true, save: true, generate: true, export: true, import: true });
+  });
+
+  it("has no Test without a storage, but keeps OK", () => {
+    expect(settingsButtons(true, true, "none", false)).toMatchObject({ test: false, save: true });
+  });
+
+  it("allows Test and OK for Yandex Disk once signed in", () => {
+    expect(settingsButtons(true, undefined, "yandex_disk", false)).toMatchObject({ test: true, save: true });
+  });
+
+  it.each(["yandex_disk", "ssh_postgres", "none"])("keeps Test and OK inactive while signing in (%s)", (kind) => {
+    expect(settingsButtons(true, true, kind, true)).toMatchObject({ test: false, save: false });
   });
 });

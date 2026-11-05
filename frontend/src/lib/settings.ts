@@ -4,11 +4,17 @@
 import type { SettingsDTO } from "./api";
 
 export const emptySettings: SettingsDTO = {
-  kind: "", yandexClientId: "", yandexAccount: "", yandexSignedIn: false,
+  kind: "none", yandexClientId: "", yandexAccount: "", yandexSignedIn: false,
   sshHost: "", sshPort: 0, sshUser: "", sshPassword: "",
   dbHost: "", dbPort: 0, dbName: "", dbUser: "", dbPassword: "",
   syncPhrase: "", trustedFingerprint: "",
 };
+
+/** StorageKind is the value of SettingsDTO.kind: where the notes are synchronized. */
+export type StorageKind = "none" | "yandex_disk" | "ssh_postgres";
+
+/** SignInPhase: idle, no sign-in; browser, waiting for the browser; manual, waiting for the code. */
+export type SignInPhase = "idle" | "browser" | "manual";
 
 export type SettingsForm = Omit<SettingsDTO, "sshPort" | "dbPort"> & { sshPort: string; dbPort: string };
 
@@ -26,7 +32,7 @@ export function portValue(s: string): number {
 }
 
 export function toForm(s: SettingsDTO): SettingsForm {
-  return { ...s, sshPort: s.sshPort ? String(s.sshPort) : "", dbPort: s.dbPort ? String(s.dbPort) : "" };
+  return { ...s, kind: s.kind || "none", sshPort: s.sshPort ? String(s.sshPort) : "", dbPort: s.dbPort ? String(s.dbPort) : "" };
 }
 
 export function fromForm(f: SettingsForm): SettingsDTO {

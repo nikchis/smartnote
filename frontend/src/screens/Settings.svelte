@@ -7,10 +7,12 @@
   import gearIcon from "../assets/icons/gear.png";
   import importIcon from "../assets/icons/import.png";
   import StrengthMeter from "../components/StrengthMeter.svelte";
+  import YandexAccount from "../components/YandexAccount.svelte";
   import { ConnectionService, KeyService } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
   import { parseError, type UIError } from "../lib/errors";
-  import { emptySettings, fromForm, toForm, type SettingsForm } from "../lib/settings";
+  import { openExternal, YANDEX_DOCS } from "../lib/external";
+  import { emptySettings, fromForm, toForm, type SettingsForm, type SignInPhase } from "../lib/settings";
   import { modal } from "../lib/modal";
   import { settingsButtons } from "../lib/rules";
   import { LIMITS, secretLen } from "../lib/text";
@@ -22,7 +24,9 @@
   /** loaded and hasKey stay unset until loaded, or when loading failed. */
   let loaded = $state(false);
   let hasKey: boolean | undefined = $state();
-  const allowed = $derived(settingsButtons(loaded, hasKey));
+  let phase: SignInPhase = $state("idle");
+  let account: ReturnType<typeof YandexAccount> | undefined = $state();
+  const allowed = $derived(settingsButtons(loaded, hasKey, form.kind, phase !== "idle"));
   let busy = $state("");
   let invalid = $state("");
   let passphrase: { value: string; retry: boolean } | undefined = $state();
@@ -129,6 +133,12 @@
     void KeyService.CancelImport();
   }
 
+  /** close abandons a running Yandex sign-in before the dialog goes away. */
+  async function close() {
+    await account?.cancel();
+    onClose();
+  }
+
   const phraseShort = $derived(form.syncPhrase !== "" && secretLen(form.syncPhrase) < LIMITS.phraseMin);
 </script>
 
@@ -136,7 +146,35 @@
   <form class="card settings" onsubmit={(e) => (e.preventDefault(), save())}>
     <h2>Settings</h2>
 
+    <fieldset class="storage">
+      <legend>Storage</legend>
+      <div class="wide row">
+        <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} />None (local only)</label>
+        <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} />Yandex Disk</label>
+        <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} />SSH + PostgreSQL</label>
+      </div>
+    </fieldset>
+
+    {#if form.kind === "yandex_disk"}
+      <fieldset class="yandex">
+        <legend>Yandex account</legend>
+        <div class="wide">
+          <YandexAccount bind:this={account} bind:form bind:phase bind:invalid disabled={!!busy} />
+        </div>
+        <details class="wide" open={invalid === "yandex_client_id" || undefined}>
+          <summary>Advanced</summary>
+          <label class="wide">
+            Own client ID:
+            <input aria-label="Own client ID" bind:value={form.yandexClientId} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
+          </label>
+          <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>How to register</a>
+          <p class="muted">Data of another client ID is a separate, empty storage.</p>
+        </details>
+      </fieldset>
+    {/if}
+
     <!-- SSH server and Database side by side, as in v1 UDlgConnection. -->
+    {#if form.kind === "ssh_postgres"}
     <div class="pair">
       <fieldset>
         <legend>SSH server</legend>
@@ -155,7 +193,9 @@
         <label>Password <input type="password" bind:value={form.dbPassword} autocomplete="off" /></label>
       </fieldset>
     </div>
+    {/if}
 
+    {#if form.kind !== "none"}
     <fieldset>
       <!-- The v1 group of the salt had the gear too. -->
       <legend><img src={gearIcon} alt="" />Sync phrase</legend>
@@ -165,7 +205,9 @@
       </label>
       <div class="wide"><StrengthMeter phrase={form.syncPhrase} /></div>
     </fieldset>
+    {/if}
 
+    {#if form.kind === "ssh_postgres"}
     <fieldset>
       <legend>Keys</legend>
       <div class="wide row">
@@ -183,6 +225,7 @@
         <button type="button" onclick={resetTrust} disabled={!!busy || !form.trustedFingerprint}>Reset</button>
       </div>
     </fieldset>
+    {/if}
 
     <!-- OK on the left, Test connection in the middle, Cancel on the right, as in v1. -->
     <div class="actions">
@@ -191,7 +234,7 @@
         <span class="muted">{busy}</span>
       </div>
       <button type="button" onclick={test} disabled={!!busy || !allowed.test}>Test connection</button>
-      <button class="cancel" type="button" onclick={onClose} disabled={!!busy}>Cancel</button>
+      <button class="cancel" type="button" onclick={close} disabled={!!busy}>Cancel</button>
     </div>
   </form>
 </div>
@@ -257,6 +300,14 @@
   }
   .muted {
     color: var(--muted);
+  }
+  .choice {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  details > :global(*) {
+    margin-top: 0.4rem;
   }
   input[aria-invalid="true"] {
     border-color: var(--danger);
