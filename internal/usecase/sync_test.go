@@ -213,6 +213,44 @@ func TestConnectCreatedButChangedSkipsBackup(t *testing.T) {
 	}
 }
 
+func TestConnectYandexWithoutTokenOffline(t *testing.T) {
+	yandex := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "own"}
+
+	tests := []struct {
+		name  string
+		store *fakeTokenStore
+	}{
+		{name: "no token", store: &fakeTokenStore{}},
+		{name: "token of another client ID", store: &fakeTokenStore{tok: CloudToken{ClientID: "other", Access: "x"}, has: true}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &fakeServer{serverID: serverA}
+			f := newSyncFixture(t, LocalSnapshot{}, srv)
+			f.sync.d.Settings = &fakeSettings{s: yandex}
+			f.sync.d.Tokens = tc.store
+
+			out, err := f.sync.Connect(context.Background())
+			if err != nil {
+				t.Fatalf("Connect: %v", err)
+			}
+
+			if out.Status != StatusOffline {
+				t.Errorf("Status = %q, want offline", out.Status)
+			}
+
+			if st := f.sync.State(); st != (State{}) {
+				t.Errorf("State = %+v, want zero", st)
+			}
+
+			if len(srv.targets) != 0 {
+				t.Errorf("Open called %d times without a token", len(srv.targets))
+			}
+		})
+	}
+}
+
 func TestConnectEmptyBothInSync(t *testing.T) {
 	srv := &fakeServer{serverID: serverA}
 	f := newSyncFixture(t, LocalSnapshot{}, srv)

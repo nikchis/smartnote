@@ -654,8 +654,9 @@ func (c *Connection) tokenPlan(ctx context.Context, s domain.ConnectionSettings)
 	case pending != nil:
 		return tokenPlan{change: TokenSet, tok: *pending, gen: gen}, nil
 	case signOut:
-		// Yandex Disk settings cannot be saved without an account.
-		return tokenPlan{}, errSignInRequired()
+		// Sign out then OK: the settings are saved and the token is deleted;
+		// the notes on the Disk stay.
+		return tokenPlan{change: TokenDelete, gen: gen}, nil
 	}
 
 	if err := c.requireStoredToken(ctx, clientID); err != nil {

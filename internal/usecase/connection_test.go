@@ -719,9 +719,6 @@ func TestSignOutThenSave(t *testing.T) {
 		t.Errorf("Account after SignOut = %q, %v, %v; want none", account, ok, err)
 	}
 
-	assertField(t, f.c.Save(context.Background(), yandexSettings("a")), "yandex_account")
-	f.assertNothingSaved(t)
-
 	if err := f.c.Save(context.Background(), completeSettings()); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -731,6 +728,26 @@ func TestSignOutThenSave(t *testing.T) {
 	if f.tokens.has {
 		t.Error("the token is still stored")
 	}
+}
+
+func TestSaveAfterSignOutDeletesToken(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+	f.withStored()
+
+	f.c.SignOut()
+
+	if err := f.c.Save(context.Background(), yandexSettings("a")); err != nil {
+		t.Fatalf("Save after Sign out: %v", err)
+	}
+
+	f.assertSaved(t, TokenDelete, CloudToken{})
+
+	if f.tokens.has {
+		t.Error("the token is still stored")
+	}
+
+	// The sign-out is consumed: a second Save has no account again.
+	assertField(t, f.c.Save(context.Background(), yandexSettings("a")), "yandex_account")
 }
 
 func TestSignOutThenDiscard(t *testing.T) {
@@ -762,8 +779,6 @@ func TestSignInThenSignOut(t *testing.T) {
 
 	f.signIn(t, yandexSettings("a"), issued)
 	f.c.SignOut()
-
-	assertField(t, f.c.Save(context.Background(), yandexSettings("a")), "yandex_account")
 
 	if _, err := f.c.Test(context.Background(), yandexSettings("a")); err == nil {
 		t.Error("Test after SignOut: nil error, want sign in required")

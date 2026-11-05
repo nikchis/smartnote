@@ -318,6 +318,16 @@ func (s *Sync) Connect(ctx context.Context) (ConnectOutcome, error) {
 		return ConnectOutcome{Status: StatusOffline}, nil
 	}
 
+	offline, err := s.noCloudToken(ctx, settings)
+	if err != nil {
+		return ConnectOutcome{}, fmt.Errorf("connect: %w", err)
+	}
+
+	if offline {
+		s.update(func() { s.connected, s.restoreAvailable = false, false })
+		return ConnectOutcome{Status: StatusOffline}, nil
+	}
+
 	out, err := s.connect(ctx, settings)
 	s.afterRemote(err)
 
@@ -326,6 +336,23 @@ func (s *Sync) Connect(ctx context.Context) (ConnectOutcome, error) {
 	}
 
 	return out, nil
+}
+
+// noCloudToken reports whether settings are Yandex Disk without any stored
+// token for their client ID, as after a deliberate Sign out: Connect then
+// stays offline instead of asking to sign in again. A token Yandex rejects
+// is not this case.
+func (s *Sync) noCloudToken(ctx context.Context, settings domain.ConnectionSettings) (bool, error) {
+	if settings.Kind() != domain.KindYandexDisk || s.d.Tokens == nil {
+		return false, nil
+	}
+
+	tok, ok, err := s.d.Tokens.LoadCloudToken(ctx)
+	if err != nil {
+		return false, fmt.Errorf("load cloud token: %w", LocalError{Err: err})
+	}
+
+	return !ok || tok.ClientID != EffectiveClientID(settings, s.d.BuiltinClientID), nil
 }
 
 func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) (out ConnectOutcome, err error) {
