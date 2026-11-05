@@ -41,6 +41,11 @@ function restoreQuestion(c: Counts, remoteOlder = false): string {
   return lines(remoteOlder ? olderPrefix : "", "Would you like to restore data from remote storage?", c.deleted > 0 ? `Restore will delete ${c.deleted} local notes.` : "");
 }
 
+/** needsBackupQuestion: a Backup is confirmed only when it deletes notes on the server or overwrites newer data. */
+function needsBackupQuestion(p: BackupPreview): boolean {
+  return p.counts.deleted > 0 || p.remoteNewer;
+}
+
 function backupQuestion(p: BackupPreview): string {
   return lines(
     p.remoteNewer ? `${fresher} Backup will overwrite it.` : "",
@@ -118,11 +123,14 @@ async function connectTrusting(api: SyncApi, d: Dialogs): Promise<{ status: stri
   }
 }
 
-/** backupFlow is scenario 2; it returns whether the Backup ran. */
+/**
+ * backupFlow is scenario 2; it returns whether the Backup ran. It asks only
+ * when the Backup deletes notes on the server or overwrites newer data.
+ */
 export async function backupFlow(api: SyncApi, d: Dialogs): Promise<boolean> {
   try {
     const preview = await api.prepareBackup();
-    if (!(await d.ask(backupQuestion(preview)))) {
+    if (needsBackupQuestion(preview) && !(await d.ask(backupQuestion(preview)))) {
       await api.cancelPending();
       return false;
     }
@@ -186,7 +194,7 @@ export async function closeFlow(api: SyncApi, d: Dialogs, quit: () => Promise<vo
 
   try {
     const preview = await api.prepareBackup();
-    if ((preview.counts.deleted > 0 || preview.remoteNewer) && !(await d.ask(backupQuestion(preview)))) {
+    if (needsBackupQuestion(preview) && !(await d.ask(backupQuestion(preview)))) {
       await api.cancelPending();
       return;
     }

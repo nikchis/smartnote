@@ -65,6 +65,29 @@ function typeAhead(q: string): void {
 }
 
 describe("SearchBar", () => {
+  it("shows a thin bar with the numbers of Indexing N of M", async () => {
+    box.follow({ notes: 500, queued: 380, lexical: "ready", semantic: "ready" });
+    api.results = [hit("a")];
+    field().dispatchEvent(new FocusEvent("focus"));
+    await type("word");
+
+    const bar = target.querySelector<HTMLProgressElement>(".status progress");
+    expect(target.querySelector(".status")?.textContent).toContain("Indexing 120 of 500");
+    expect(bar?.max).toBe(500);
+    expect(bar?.value).toBe(120);
+    expect(bar?.getAttribute("aria-label")).toBe("Indexing progress");
+  });
+
+  it("shows no bar without indexing", async () => {
+    box.follow({ notes: 500, queued: 0, lexical: "ready", semantic: "unavailable" });
+    api.results = [hit("a")];
+    field().dispatchEvent(new FocusEvent("focus"));
+    await type("word");
+
+    expect(target.querySelector(".status")?.textContent).toContain("Semantic search unavailable");
+    expect(target.querySelector(".status progress")).toBeNull();
+  });
+
   // The hits on screen answer the previous query until the new answer comes:
   // Enter must not open one of them for the new query.
   it("opens with Enter a hit of the query in the field, not of the previous one", async () => {

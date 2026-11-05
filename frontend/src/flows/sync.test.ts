@@ -198,20 +198,23 @@ describe("connectFlow", () => {
 });
 
 describe("backupFlow", () => {
-  it("asks without a deletion line and reports success", async () => {
-    d.answers = [true];
+  it("saves without a question when nothing is deleted and the server is not newer", async () => {
+    api.preview = { counts: { added: 2, updated: 1, deleted: 0 }, remoteNewer: false };
 
     expect(await backupFlow(api, d)).toBe(true);
-    expect(d.questions()).toEqual(["Would you like to save data on remote storage?"]);
+    expect(d.questions()).toEqual([]);
+    expect(api.calls).toEqual(["prepareBackup", "commitBackup"]);
     expect(d.log).toContain("info: Data successfully saved.");
   });
 
-  it("adds the deletion line", async () => {
+  it("asks with the deletion line when the Backup deletes notes on the server", async () => {
     api.preview = { counts: { added: 0, updated: 0, deleted: 3 }, remoteNewer: false };
+    d.answers = [true];
 
-    await backupFlow(api, d);
-
+    expect(await backupFlow(api, d)).toBe(true);
     expect(d.questions()).toEqual(["Would you like to save data on remote storage?\nBackup will delete 3 notes on the server."]);
+    expect(api.calls).toEqual(["prepareBackup", "commitBackup"]);
+    expect(d.log).toContain("info: Data successfully saved.");
   });
 
   it("warns first when the server is newer", async () => {
@@ -224,12 +227,13 @@ describe("backupFlow", () => {
   });
 
   it("no cancels the pending Backup", async () => {
+    api.preview = { counts: { added: 0, updated: 0, deleted: 1 }, remoteNewer: false };
+
     expect(await backupFlow(api, d)).toBe(false);
     expect(api.calls).toEqual(["prepareBackup", "cancelPending"]);
   });
 
   it("remote_changed shows its message", async () => {
-    d.answers = [true];
     api.commitBackupError = uiError("remote_changed", "Remote data changed during the operation. Please try again.");
 
     expect(await backupFlow(api, d)).toBe(false);

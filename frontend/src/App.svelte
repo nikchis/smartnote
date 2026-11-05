@@ -9,6 +9,7 @@
   import { AppService, ConnectionService, SyncService, VaultService, type StateDTO } from "./lib/api";
   import { dialogs } from "./lib/dialogs.svelte";
   import { parseError } from "./lib/errors";
+  import { progressView, type Progress } from "./lib/progress";
   import Main from "./screens/Main.svelte";
   import NewStorage from "./screens/NewStorage.svelte";
   import Settings from "./screens/Settings.svelte";
@@ -19,17 +20,25 @@
   let screen: Screen = $state({ kind: "loading" });
   let sync: StateDTO = $state({ connected: false, dirty: false, restoreAvailable: false, busy: false });
   let overlay = $state("");
+  /** progress is the last sync:progress event of the operation under the overlay. */
+  let progress: Progress | undefined = $state();
   let showSettings = $state(false);
   let closing = false;
   let main: ReturnType<typeof Main> | undefined = $state();
 
-  /** withOverlay shows text over the window while a call to the server runs. */
+  /**
+   * withOverlay shows text over the window while a call to the server runs,
+   * or the progress of its transfer once the storage reports one. A progress
+   * left from another call (Test in the settings) is dropped.
+   */
   async function withOverlay<T>(text: string, call: () => Promise<T>): Promise<T> {
     overlay = text;
+    progress = undefined;
     try {
       return await call();
     } finally {
       overlay = "";
+      progress = undefined;
     }
   }
 
@@ -84,6 +93,7 @@
 
   onMount(() => {
     const offState = Events.On("sync:state", (ev) => (sync = ev.data));
+    const offProgress = Events.On("sync:progress", (ev) => (progress = ev.data));
     // The close scenario runs on every screen; before unlocking it just quits.
     const offClose = Events.On("app:close-requested", () => void closeRequested());
     // Until this call Go closes the window without asking: nothing listened yet.
@@ -100,6 +110,7 @@
 
     return () => {
       offState();
+      offProgress();
       offClose();
     };
   });
@@ -124,7 +135,7 @@
 </main>
 
 {#if overlay}
-  <Overlay text={overlay} />
+  <Overlay text={overlay} progress={progressView(progress)} />
 {/if}
 
 <MessageDialog />

@@ -339,9 +339,10 @@ describe("Settings Yandex account", () => {
 
   it("marks the account block for a yandex_account validation error", async () => {
     await open();
-    go.save.mockRejectedValue(uiError("validation", "Sign in first.", "yandex_account"));
+    go.save.mockRejectedValue(uiError("validation", "Sign in to Yandex Disk first, or choose None (local only).", "yandex_account"));
     await press("OK");
     expect(target.querySelector('[data-testid="account"]')!.getAttribute("aria-invalid")).toBe("true");
+    expect(go.error).toHaveBeenCalledWith("Sign in to Yandex Disk first, or choose None (local only).");
   });
 });
 

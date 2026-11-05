@@ -22,7 +22,8 @@
   /** returnTo had the focus before the field; Escape gives it back. */
   let returnTo: HTMLElement | null = null;
 
-  const line = $derived(box.statusLine());
+  const info = $derived(box.statusInfo());
+  const line = $derived(info.text);
   const shown = $derived(open && box.query.trim() !== "" && (box.hits.length > 0 || line !== ""));
 
   /**
@@ -159,7 +160,12 @@
         {/each}
       </ul>
       {#if line}
-        <div class="status" role="status">{line}</div>
+        <div class="status" role="status">
+          {line}
+          {#if info.indexing}
+            <progress max={info.indexing.total} value={info.indexing.done} aria-label="Indexing progress"></progress>
+          {/if}
+        </div>
       {/if}
     </div>
   {/if}
@@ -250,9 +256,16 @@
     color: var(--text);
   }
   .status {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
     padding: 0.2rem 0.5rem;
     color: var(--muted);
     font-size: 0.85rem;
     background: var(--surface);
+  }
+  .status progress {
+    flex: 1;
+    height: 4px;
   }
 </style>
