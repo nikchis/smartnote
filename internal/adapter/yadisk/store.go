@@ -101,9 +101,8 @@ type Store struct {
 	reauth  bool // the token was refused for good; no more requests
 }
 
-// NewStore returns a store that signs API requests with the token of tokens,
-// and keeps the pending record in pending, which
-// must not be nil.
+// NewStore returns a store that signs API requests with the token of tokens
+// and keeps the pending record in pending, which must not be nil.
 func NewStore(e Endpoints, tokens usecase.CloudTokenSource, pending PendingStore, opts StoreOptions) *Store {
 	s := &Store{
 		api:     newAPIClient(opts.HTTP, e.API),
@@ -140,8 +139,7 @@ func WithLog(log *slog.Logger) FactoryOption {
 	return func(o *StoreOptions) { o.Log = log }
 }
 
-// NewStoreFactory builds a Store per operation over the target's token, with
-// the target's client ID or builtinClientID.
+// NewStoreFactory builds a Store per operation over the target's token.
 func NewStoreFactory(e Endpoints, pending PendingStore, options ...FactoryOption) blobremote.StoreFactory {
 	var opts StoreOptions
 	for _, o := range options {
@@ -319,7 +317,7 @@ func (s *Store) Write(ctx context.Context, name string, data []byte, expect stri
 	}
 
 	s.cleanup(ctx, name)
-	// Trash cleanup (spec §5.4 step 8) waits for the prototype's answer to В3.
+	// No trash cleanup: the app-folder permission cannot see the trash (spec §14).
 
 	return nil
 }
@@ -754,7 +752,8 @@ func (s *Store) get(ctx context.Context, path string, q url.Values, out any) err
 }
 
 // call sends an API request with the token. A 401 answer is
-// domain.ErrReauthRequired: the app has no way to refresh the token (spec §6.1).
+// domain.ErrReauthRequired: the app has no way to refresh the token
+// (spec §14).
 func (s *Store) call(ctx context.Context, method string, u *url.URL, out any) (int, error) {
 	if s.reauth {
 		return 0, domain.ErrReauthRequired

@@ -42,7 +42,7 @@ type Connection struct {
 	current *signIn     // the active sign-in, or nil
 	pending *CloudToken // replaced, never changed in place
 	signOut bool        // the saved token is to be deleted by Save
-	gen     uint64      // changes with pending and signOut, not with a refresh
+	gen     uint64      // changes with pending and signOut
 }
 
 // signIn is one active sign-in. Its fields are guarded by Connection.mu while
@@ -128,9 +128,8 @@ func (c *Connection) Load(ctx context.Context) (domain.ConnectionSettings, error
 // Test opens a session with s in OpenCheck mode and closes it, without saving
 // s or creating the schema. Empty settings return domain.ErrNotConnected. An
 // unknown server key is remembered for TrustOfferedKey. A Yandex Disk test
-// uses the pending token, whose refresh stays in memory, or else the saved
-// one; without either it is refused before Open (ValidationError for
-// "yandex_account").
+// uses the pending token, or else the saved one; without either it is
+// refused before Open (ValidationError for "yandex_account").
 func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res TestResult, err error) {
 	leave, err := c.gate.Enter()
 	if err != nil {
@@ -577,9 +576,9 @@ func (c *Connection) dropOtherPendingLocked(clientID string) {
 }
 
 // testTokenSource returns the token source Test uses for Yandex Disk
-// settings s: the pending token, whose refresh replaces it in memory only,
-// or the saved token unless Sign out marked it for deletion. Without either
-// for the effective client ID it returns a ValidationError for "yandex_account".
+// settings s: the pending token, or the saved token unless Sign out marked
+// it for deletion. Without either for the effective client ID it returns a
+// ValidationError for "yandex_account".
 func (c *Connection) testTokenSource(ctx context.Context, s domain.ConnectionSettings) (CloudTokenSource, error) {
 	clientID, err := c.clientID(s)
 	if err != nil {
@@ -588,12 +587,12 @@ func (c *Connection) testTokenSource(ctx context.Context, s domain.ConnectionSet
 
 	c.mu.Lock()
 	c.dropOtherPendingLocked(clientID)
-	pending, signOut, gen := c.pending, c.signOut, c.gen
+	pending, signOut := c.pending, c.signOut
 	c.mu.Unlock()
 
 	switch {
 	case pending != nil:
-		return NewMemoryTokenSource(*pending, clientID, c.refreshPending(gen, *pending)), nil
+		return NewMemoryTokenSource(*pending, clientID), nil
 	case signOut:
 		return nil, errSignInRequired()
 	}
@@ -618,22 +617,6 @@ func (c *Connection) requireStoredToken(ctx context.Context, clientID string) er
 	}
 
 	return nil
-}
-
-// refreshPending returns the callback that replaces the pending token of was
-// with its refresh, unless the pending token changed since generation gen.
-// The refresh keeps the Provider and ClientID of was.
-func (c *Connection) refreshPending(gen uint64, was CloudToken) func(CloudToken) {
-	return func(t CloudToken) {
-		t.Provider, t.ClientID = was.Provider, was.ClientID
-
-		c.mu.Lock()
-		defer c.mu.Unlock()
-
-		if c.gen == gen {
-			c.pending = &t
-		}
-	}
 }
 
 // tokenPlan is what Save does with the saved token.

@@ -129,8 +129,7 @@ func newE2EDevice(t *testing.T, h *harness, pending *fakePending) *e2eDevice {
 	cfg := &e2eConfig{
 		settings: domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: fakeClientID, SyncPhrase: "sixteen chars ok"},
 		token: usecase.CloudToken{
-			Provider: fakeProvider, ClientID: fakeClientID, Access: "acc-1", Refresh: "ref-1",
-			Account: fakeAccount, Expiry: testNow.Add(time.Hour),
+			Provider: fakeProvider, ClientID: fakeClientID, Access: "acc-1", Expiry: testNow.Add(time.Hour),
 		},
 	}
 	factory := newStoreFactory(h.disk.endpoints(), pending, h.options())

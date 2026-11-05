@@ -776,40 +776,15 @@ func TestSignInThenSignOut(t *testing.T) {
 	}
 }
 
-// TestTestRefreshPendingCancel: a refresh during Test stays in memory, and
-// a discarded pending token never reaches local.db.
-func TestTestRefreshPendingCancel(t *testing.T) {
-	srv := &fakeServer{}
-	f := newConnFixture(t, domain.ConnectionSettings{}, srv)
+// TestTestDiscardedPendingNeverSaved: a discarded pending token used by Test
+// never reaches local.db.
+func TestTestDiscardedPendingNeverSaved(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
 	f.withStored()
 	f.signIn(t, yandexSettings("a"), issued)
 
-	refreshed := pendingOf(issued, "a")
-	refreshed.Access = "refreshed"
-
-	var seen []CloudToken
-
-	srv.onOpen = func(ctx context.Context, rt RemoteTarget) {
-		tok, err := rt.Token.Token(ctx)
-		if err != nil {
-			t.Errorf("Token: %v", err)
-		}
-
-		seen = append(seen, tok)
-
-		if err := rt.Token.Update(ctx, refreshed); err != nil {
-			t.Errorf("Update: %v", err)
-		}
-	}
-
-	for range 2 {
-		if _, err := f.c.Test(context.Background(), yandexSettings("a")); err != nil {
-			t.Fatalf("Test: %v", err)
-		}
-	}
-
-	if len(seen) != 2 || seen[0] != pendingOf(issued, "a") || seen[1] != refreshed {
-		t.Fatalf("tokens seen by Open = %d, want the pending one, then its refresh", len(seen))
+	if _, err := f.c.Test(context.Background(), yandexSettings("a")); err != nil {
+		t.Fatalf("Test: %v", err)
 	}
 
 	f.c.DiscardPending()
@@ -863,10 +838,6 @@ func TestTestUsesStoredSource(t *testing.T) {
 
 	if tok, err := src.Token(context.Background()); err != nil || tok != storedToken {
 		t.Errorf("Token = %q, %v; want the stored token", tok.Access, err)
-	}
-
-	if err := src.Update(context.Background(), issued); err != nil || len(f.tokens.saves) != 1 {
-		t.Errorf("Update = %v, saves = %d; the stored source writes local.db", err, len(f.tokens.saves))
 	}
 }
 
@@ -1315,32 +1286,6 @@ func TestAccount(t *testing.T) {
 	}
 }
 
-// TestRefreshAfterDiscardIgnored: a refresh that arrives after Cancel does
-// not bring the discarded token back.
-func TestRefreshAfterDiscardIgnored(t *testing.T) {
-	srv := &fakeServer{}
-	f := newConnFixture(t, domain.ConnectionSettings{}, srv)
-	f.signIn(t, yandexSettings("a"), issued)
-
-	srv.onOpen = func(ctx context.Context, rt RemoteTarget) {
-		f.c.DiscardPending()
-
-		if err := rt.Token.Update(ctx, pendingOf(issued, "a")); err != nil {
-			t.Errorf("Update: %v", err)
-		}
-	}
-
-	if _, err := f.c.Test(context.Background(), yandexSettings("a")); err != nil {
-		t.Fatalf("Test: %v", err)
-	}
-
-	if _, ok, _ := f.c.Account(context.Background(), yandexSettings("a")); ok {
-		t.Error("the discarded token came back with its refresh")
-	}
-
-	assertField(t, f.c.Save(context.Background(), yandexSettings("a")), "yandex_account")
-}
-
 func TestTestYandexWithoutToken(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1369,35 +1314,6 @@ func TestTestYandexWithoutToken(t *testing.T) {
 				t.Errorf("Open called %d times without a token", len(srv.opens))
 			}
 		})
-	}
-}
-
-// TestRefreshKeepsPendingIdentity: a refresh without Provider and ClientID
-// still replaces the pending token, with the identity of the pending one.
-func TestRefreshKeepsPendingIdentity(t *testing.T) {
-	srv := &fakeServer{}
-	f := newConnFixture(t, domain.ConnectionSettings{}, srv)
-	f.signIn(t, yandexSettings("a"), issued)
-
-	srv.onOpen = func(ctx context.Context, rt RemoteTarget) {
-		if err := rt.Token.Update(ctx, CloudToken{Access: "refreshed", Refresh: "refreshed-r", Account: "me"}); err != nil {
-			t.Errorf("Update: %v", err)
-		}
-	}
-
-	if _, err := f.c.Test(context.Background(), yandexSettings("a")); err != nil {
-		t.Fatalf("Test: %v", err)
-	}
-
-	if err := f.c.Save(context.Background(), yandexSettings("a")); err != nil {
-		t.Fatalf("Save after a refresh without identity: %v", err)
-	}
-
-	want := CloudToken{Provider: "yandex_disk", ClientID: "a", Access: "refreshed", Refresh: "refreshed-r", Account: "me"}
-	f.assertSaved(t, TokenSet, want)
-
-	if got := f.store.saveCalls()[0].Token; got.Provider != want.Provider || got.ClientID != want.ClientID {
-		t.Errorf("saved token provider %q, client %q; want %q, %q", got.Provider, got.ClientID, want.Provider, want.ClientID)
 	}
 }
 

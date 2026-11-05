@@ -97,64 +97,8 @@ func TestStoredSourceOtherClientID(t *testing.T) {
 	}
 }
 
-func TestStoredSourceUpdatePersists(t *testing.T) {
-	store := &fakeTokenStore{}
-	src := NewStoredTokenSource(store, "a")
-	tok := CloudToken{ClientID: "a", Access: "new"}
-
-	if err := src.Update(context.Background(), tok); err != nil {
-		t.Fatal(err)
-	}
-
-	if len(store.saves) != 1 || store.saves[0] != tok {
-		t.Fatalf("saves = %+v", store.saves)
-	}
-
-	boom := errors.New("write failed")
-	src = NewStoredTokenSource(&fakeTokenStore{saveErr: boom}, "a")
-
-	err := src.Update(context.Background(), tok)
-	if _, ok := errors.AsType[LocalError](err); !ok || !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want LocalError wrapping %v", err, boom)
-	}
-
-	if err := NewStoredTokenSource(nil, "a").Update(context.Background(), tok); err == nil {
-		t.Fatal("nil store: Update must fail")
-	}
-}
-
-func TestMemorySourceUpdateStaysInMemory(t *testing.T) {
-	store := &fakeTokenStore{}
-
-	var seen []CloudToken
-
-	src := NewMemoryTokenSource(CloudToken{ClientID: "a", Access: "old"}, "a", func(t CloudToken) { seen = append(seen, t) })
-	fresh := CloudToken{ClientID: "a", Access: "fresh"}
-
-	if err := src.Update(context.Background(), fresh); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := src.Token(context.Background())
-	if err != nil || got != fresh {
-		t.Fatalf("Token = %+v, %v", got, err)
-	}
-
-	if len(seen) != 1 || seen[0] != fresh {
-		t.Fatalf("onUpdate calls = %+v", seen)
-	}
-
-	if len(store.saves) != 0 {
-		t.Fatalf("store touched: %+v", store.saves)
-	}
-}
-
-func TestMemorySourceNilCallbackAndClientMismatch(t *testing.T) {
-	src := NewMemoryTokenSource(CloudToken{ClientID: "a"}, "b", nil)
-
-	if err := src.Update(context.Background(), CloudToken{ClientID: "a"}); err != nil {
-		t.Fatal(err)
-	}
+func TestMemorySourceClientMismatch(t *testing.T) {
+	src := NewMemoryTokenSource(CloudToken{ClientID: "a"}, "b")
 
 	if _, err := src.Token(context.Background()); !errors.Is(err, domain.ErrReauthRequired) {
 		t.Fatalf("err = %v", err)

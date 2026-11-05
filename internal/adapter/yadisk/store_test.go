@@ -32,7 +32,6 @@ type harness struct {
 	tokens  usecase.CloudTokenSource
 
 	mu      sync.Mutex
-	updates []usecase.CloudToken
 	sleeps  []time.Duration
 	onSleep func() // called before each Sleep returns
 	ids     int
@@ -52,16 +51,11 @@ func newHarnessWith(t *testing.T, edit func(*usecase.CloudToken)) *harness {
 	h := &harness{t: t, disk: d, pending: &fakePending{disk: d}}
 
 	tok := usecase.CloudToken{
-		Provider: fakeProvider, ClientID: fakeClientID, Access: "acc-1", Refresh: "ref-1",
-		Account: fakeAccount, Expiry: testNow.Add(time.Hour),
+		Provider: fakeProvider, ClientID: fakeClientID, Access: "acc-1", Expiry: testNow.Add(time.Hour),
 	}
 	edit(&tok)
 
-	h.tokens = usecase.NewMemoryTokenSource(tok, fakeClientID, func(t usecase.CloudToken) {
-		h.mu.Lock()
-		h.updates = append(h.updates, t)
-		h.mu.Unlock()
-	})
+	h.tokens = usecase.NewMemoryTokenSource(tok, fakeClientID)
 
 	return h
 }
@@ -138,13 +132,6 @@ func (h *harness) sleepLog() []time.Duration {
 	defer h.mu.Unlock()
 
 	return slices.Clone(h.sleeps)
-}
-
-func (h *harness) tokenUpdates() []usecase.CloudToken {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	return slices.Clone(h.updates)
 }
 
 // mustRead reads the container and fails the test on an error.
@@ -1180,10 +1167,6 @@ func TestExpiredTokenReauth(t *testing.T) {
 			if n := len(h.disk.reqs()); n != 0 {
 				t.Errorf("requests = %d, want none", n)
 			}
-
-			if len(h.tokenUpdates()) != 0 {
-				t.Error("the token was updated")
-			}
 		})
 	}
 }
@@ -1220,10 +1203,6 @@ func TestUnauthorizedReauth(t *testing.T) {
 
 	if n := len(h.disk.reqs()); n != 1 {
 		t.Errorf("requests = %d, want 1 (no retry)", n)
-	}
-
-	if len(h.tokenUpdates()) != 0 {
-		t.Error("the token was updated")
 	}
 }
 
@@ -1314,7 +1293,7 @@ func TestNetworkError(t *testing.T) {
 func TestStoreFactory(t *testing.T) {
 	d := newFakeDisk(t, testNow)
 	pending := &fakePending{disk: d}
-	tokens := usecase.NewMemoryTokenSource(usecase.CloudToken{ClientID: "builtin"}, "builtin", nil)
+	tokens := usecase.NewMemoryTokenSource(usecase.CloudToken{ClientID: "builtin"}, "builtin")
 
 	tests := []struct {
 		name    string

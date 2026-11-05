@@ -381,8 +381,6 @@ type fakeServer struct {
 	backupBlocks    bool   // Backup waits for the context to end
 	afterBackup     func() // runs after a successful Backup, before it returns
 	closeErr        error  // returned by Close
-	// onOpen, when set, runs in Open with the target, after it is recorded.
-	onOpen func(ctx context.Context, t RemoteTarget)
 
 	opens    []OpenMode
 	settings []domain.ConnectionSettings
@@ -393,7 +391,7 @@ type fakeServer struct {
 
 var errAckLost = errors.New("connection lost after COMMIT")
 
-func (f *fakeServer) Open(ctx context.Context, t RemoteTarget, mode OpenMode) (RemoteSession, error) {
+func (f *fakeServer) Open(_ context.Context, t RemoteTarget, mode OpenMode) (RemoteSession, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -401,10 +399,6 @@ func (f *fakeServer) Open(ctx context.Context, t RemoteTarget, mode OpenMode) (R
 
 	f.targets = append(f.targets, t)
 	f.settings = append(f.settings, t.Settings)
-
-	if f.onOpen != nil {
-		f.onOpen(ctx, t)
-	}
 
 	if f.openErr != nil {
 		return nil, f.openErr

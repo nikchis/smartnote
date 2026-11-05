@@ -342,9 +342,8 @@ func (c hrefClient) put(ctx context.Context, href string, data []byte) error {
 
 // tokenAnswer is a successful answer of the OAuth token endpoint.
 type tokenAnswer struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int64  `json:"expires_in"`
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int64  `json:"expires_in"`
 }
 
 // expiry is the end of the token's life counted from now; zero when the

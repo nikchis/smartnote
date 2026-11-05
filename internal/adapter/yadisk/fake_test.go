@@ -20,7 +20,6 @@ import (
 const (
 	fakeClientID = "client-1"
 	fakeProvider = "yandex_disk"
-	fakeAccount  = "alice"
 	fakeAuthCode = "code-1"
 	// fakeDescription is the "description" of every error answer; it must
 	// never reach an error text.
@@ -40,7 +39,6 @@ const (
 	epPut      = "put"      // PUT <upload href>
 	epMove     = "move"     // POST /v1/disk/resources/move
 	epDelete   = "delete"   // DELETE /v1/disk/resources
-	epDisk     = "disk"     // GET /v1/disk
 	epToken    = "token"    // POST /token of OAuth
 )
 
@@ -88,18 +86,14 @@ type fakeDisk struct {
 	events   []string // move and DELETE requests and pending-store calls, in order
 	requests []fakeRequest
 
-	// OAuth: the API accepts only access; the token endpoint expects refresh
-	// or authCode and issues nextAccess and nextRefresh.
-	access, refresh         string
-	authCode                string
-	nextAccess, nextRefresh string
-	expiresIn               int
-	omitRefresh             bool
-	oauthError              string // error of every token answer
-	oauthStatus             int    // status of the oauthError answer
-	reject401               bool   // the API rejects every token
-	tokenForms              []url.Values
-	hold                    func(ep string) // called before a token (epToken), account (epDisk) or move (epMove) request is served
+	// OAuth: the API accepts only access; the token endpoint expects authCode
+	// and issues nextAccess.
+	access     string
+	authCode   string
+	nextAccess string
+	expiresIn  int
+	tokenForms []url.Values
+	hold       func(ep string) // called before a token (epToken) or move (epMove) request is served
 
 	// Modes.
 	upload202      bool   // PUT answers 202, the md5 appears after md5Delay metadata requests
@@ -131,10 +125,9 @@ func newFakeDisk(t *testing.T, now time.Time) *fakeDisk {
 		ops:     map[string]*fakeOp{},
 		fail:    map[string]fakeFailure{},
 
-		access: "acc-1", refresh: "ref-1", authCode: fakeAuthCode,
-		nextAccess: "acc-2", nextRefresh: "ref-2",
+		access: "acc-1", authCode: fakeAuthCode,
+		nextAccess:     "acc-2",
 		expiresIn:      3600,
-		oauthStatus:    http.StatusBadRequest,
 		downloadPrefix: "/download/",
 	}
 
@@ -314,10 +307,7 @@ func (d *fakeDisk) record(server string, r *http.Request) {
 }
 
 func (d *fakeDisk) serveAPI(w http.ResponseWriter, r *http.Request) {
-	switch {
-	case r.URL.Path == "/v1/disk":
-		d.held(epDisk)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/disk/resources/move":
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/disk/resources/move" {
 		d.held(epMove)
 	}
 
@@ -331,7 +321,7 @@ func (d *fakeDisk) serveAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if d.reject401 || r.Header.Get("Authorization") != "OAuth "+d.access {
+	if r.Header.Get("Authorization") != "OAuth "+d.access {
 		writeError(w, http.StatusUnauthorized, "UnauthorizedError")
 		return
 	}
@@ -339,10 +329,6 @@ func (d *fakeDisk) serveAPI(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
 	switch {
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/disk":
-		if !d.failed(w, epDisk) {
-			writeJSON(w, http.StatusOK, map[string]any{"user": map[string]any{"login": fakeAccount}, "total_space": 1 << 30})
-		}
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/disk/resources" && q.Get("path") == "app:/":
 		d.list(w, q)
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/disk/resources":
@@ -645,21 +631,9 @@ func (d *fakeDisk) serveOAuth(w http.ResponseWriter, r *http.Request) {
 
 	d.tokenForms = append(d.tokenForms, r.PostForm)
 
-	if d.oauthError != "" {
-		writeJSON(w, d.oauthStatus, map[string]any{"error": d.oauthError, "error_description": fakeDescription})
-		return
-	}
-
 	f := r.PostForm
 
-	var granted bool
-
-	switch f.Get("grant_type") {
-	case "refresh_token":
-		granted = f.Get("refresh_token") == d.refresh
-	case "authorization_code":
-		granted = f.Get("code") == d.authCode && f.Get("code_verifier") != ""
-	}
+	granted := f.Get("grant_type") == "authorization_code" && f.Get("code") == d.authCode && f.Get("code_verifier") != ""
 
 	if !granted || f.Get("client_id") != fakeClientID {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant", "error_description": fakeDescription})
@@ -668,11 +642,6 @@ func (d *fakeDisk) serveOAuth(w http.ResponseWriter, r *http.Request) {
 
 	d.access = d.nextAccess
 	out := map[string]any{"access_token": d.nextAccess, "expires_in": d.expiresIn, "token_type": "bearer"}
-
-	if !d.omitRefresh {
-		out["refresh_token"] = d.nextRefresh
-		d.refresh = d.nextRefresh
-	}
 
 	writeJSON(w, http.StatusOK, out)
 }

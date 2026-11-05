@@ -245,11 +245,11 @@ func wantCodeForm(t *testing.T, d *fakeDisk, challenge string) {
 	}
 }
 
-func wantToken(t *testing.T, tok usecase.CloudToken, account string, before time.Time) {
+func wantToken(t *testing.T, tok usecase.CloudToken, before time.Time) {
 	t.Helper()
 
-	if tok.Provider != fakeProvider || tok.ClientID != fakeClientID || tok.Access != "acc-2" || tok.Refresh != "" || tok.Account != account {
-		t.Errorf("token = %s, want acc-2 without a refresh token, account %q", describeToken(tok), account)
+	if tok.Provider != fakeProvider || tok.ClientID != fakeClientID || tok.Access != "acc-2" || tok.Refresh != "" || tok.Account != "" {
+		t.Errorf("token = %s, want acc-2 without a refresh token and account", describeToken(tok))
 	}
 
 	if lo, hi := before.Add(time.Hour), time.Now().Add(time.Hour); tok.Expiry.Before(lo) || tok.Expiry.After(hi) {
@@ -370,7 +370,7 @@ func TestLoopbackSuccess(t *testing.T) {
 		t.Fatalf("Wait: %v", r.err)
 	}
 
-	wantToken(t, r.tok, "", before)
+	wantToken(t, r.tok, before)
 	wantCodeForm(t, h.disk, l.query.Get("code_challenge"))
 	l.wantClosed(t)
 }
@@ -671,7 +671,7 @@ func TestManualExchange(t *testing.T) {
 		t.Fatalf("Exchange: %v", err)
 	}
 
-	wantToken(t, tok, "", before)
+	wantToken(t, tok, before)
 	wantCodeForm(t, h.disk, l.query.Get("code_challenge"))
 }
 
@@ -723,47 +723,43 @@ func TestCloseIdempotent(t *testing.T) {
 }
 
 func TestCloseDuringExchange(t *testing.T) {
-	for _, ep := range []string{epToken} {
-		t.Run(ep, func(t *testing.T) {
-			h := newAuthHarness(t)
-			l := h.loopback()
+	h := newAuthHarness(t)
+	l := h.loopback()
 
-			// The request to ep is held until the login is closed.
-			started, release := make(chan struct{}), make(chan struct{})
-			defer close(release)
+	// The token request is held until the login is closed.
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
 
-			var once sync.Once
+	var once sync.Once
 
-			h.disk.set(func(d *fakeDisk) {
-				d.hold = func(got string) {
-					if got == ep {
-						once.Do(func() { close(started) })
-						<-release
-					}
-				}
-			})
-
-			ch := waitAsync(t.Context(), l)
-			l.callback(t, "", l.withState("code", fakeAuthCode))
-
-			select {
-			case <-started:
-			case <-time.After(waitLimit):
-				t.Fatalf("the %s request did not start", ep)
+	h.disk.set(func(d *fakeDisk) {
+		d.hold = func(got string) {
+			if got == epToken {
+				once.Do(func() { close(started) })
+				<-release
 			}
+		}
+	})
 
-			if err := l.Close(); err != nil {
-				t.Errorf("Close: %v", err)
-			}
+	ch := waitAsync(t.Context(), l)
+	l.callback(t, "", l.withState("code", fakeAuthCode))
 
-			r := got(t, ch)
-			if !errors.Is(r.err, context.Canceled) {
-				t.Fatalf("Wait = %s, %v; want context.Canceled", describeToken(r.tok), r.err)
-			}
+	select {
+	case <-started:
+	case <-time.After(waitLimit):
+		t.Fatal("the token request did not start")
+	}
 
-			if _, ok := errors.AsType[CloudError](r.err); ok {
-				t.Errorf("a cancelled exchange reads as a Disk error: %v", r.err)
-			}
-		})
+	if err := l.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+
+	r := got(t, ch)
+	if !errors.Is(r.err, context.Canceled) {
+		t.Fatalf("Wait = %s, %v; want context.Canceled", describeToken(r.tok), r.err)
+	}
+
+	if _, ok := errors.AsType[CloudError](r.err); ok {
+		t.Errorf("a cancelled exchange reads as a Disk error: %v", r.err)
 	}
 }

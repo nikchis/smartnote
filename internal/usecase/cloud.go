@@ -2,7 +2,6 @@ package usecase
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -26,12 +25,12 @@ func (t CloudToken) GoString() string { return t.String() }
 // LogValue keeps slog output as redacted as String.
 func (t CloudToken) LogValue() slog.Value { return slog.StringValue(t.String()) }
 
-// CloudTokenSource gives the token for one operation and accepts its refresh.
-// The stored source writes the update to local.db, the pending one only to memory.
+// CloudTokenSource gives the token for one operation. The stored source reads
+// it from local.db, the pending one from memory. A token is never refreshed
+// (spec §14): an expired or refused one asks for a new sign-in.
 type CloudTokenSource interface {
 	// Token returns domain.ErrReauthRequired when there is no usable token.
 	Token(ctx context.Context) (CloudToken, error)
-	Update(ctx context.Context, t CloudToken) error
 }
 
 // CloudTokenStore is the token saved in local.db.
@@ -113,30 +112,16 @@ func (s *storedTokenSource) Token(ctx context.Context) (CloudToken, error) {
 	return t, nil
 }
 
-func (s *storedTokenSource) Update(ctx context.Context, t CloudToken) error {
-	if s.store == nil {
-		return LocalError{Err: errors.New("no cloud token store")}
-	}
-
-	if err := s.store.SaveCloudToken(ctx, t); err != nil {
-		return fmt.Errorf("save cloud token: %w", LocalError{Err: err})
-	}
-
-	return nil
-}
-
 type memoryTokenSource struct {
 	clientID string
-	onUpdate func(CloudToken)
 
 	mu  sync.Mutex
 	tok CloudToken
 }
 
-// NewMemoryTokenSource returns a source that keeps t in memory. Update replaces
-// the token and calls onUpdate, which may be nil.
-func NewMemoryTokenSource(t CloudToken, clientID string, onUpdate func(CloudToken)) CloudTokenSource {
-	return &memoryTokenSource{tok: t, clientID: clientID, onUpdate: onUpdate}
+// NewMemoryTokenSource returns a source that keeps t in memory.
+func NewMemoryTokenSource(t CloudToken, clientID string) CloudTokenSource {
+	return &memoryTokenSource{tok: t, clientID: clientID}
 }
 
 func (m *memoryTokenSource) Token(context.Context) (CloudToken, error) {
@@ -148,16 +133,4 @@ func (m *memoryTokenSource) Token(context.Context) (CloudToken, error) {
 	}
 
 	return m.tok, nil
-}
-
-func (m *memoryTokenSource) Update(_ context.Context, t CloudToken) error {
-	m.mu.Lock()
-	m.tok = t
-	m.mu.Unlock()
-
-	if m.onUpdate != nil {
-		m.onUpdate(t)
-	}
-
-	return nil
 }

@@ -177,9 +177,8 @@ func (a *Authorizer) secret() (string, error) {
 // URL returns the authorize URL to open in the browser.
 func (s *session) URL() string { return s.url }
 
-// redeem exchanges code for the token
-// within exchangeTimeout. When ctx ends first the error is ctx's, not a
-// network one.
+// redeem exchanges code for the token within exchangeTimeout. When ctx ends
+// first the error is ctx's, not a network one.
 func (s *session) redeem(ctx context.Context, code string) (usecase.CloudToken, error) {
 	opCtx, cancel := context.WithTimeout(ctx, exchangeTimeout)
 	defer cancel()
