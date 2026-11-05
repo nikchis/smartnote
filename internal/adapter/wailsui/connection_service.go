@@ -104,7 +104,7 @@ func (s *ConnectionService) Test(settings SettingsDTO) (empty bool, err error) {
 		return false, s.env.fail("test connection", err)
 	}
 
-	ctx, cancel := s.env.remote()
+	ctx, cancel := s.env.remoteFor(trusted.Kind())
 	defer cancel()
 
 	res, err := s.conn.Test(ctx, trusted)

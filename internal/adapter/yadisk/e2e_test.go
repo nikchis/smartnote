@@ -133,7 +133,7 @@ func newE2EDevice(t *testing.T, h *harness, pending *fakePending) *e2eDevice {
 			Account: fakeAccount, Expiry: testNow.Add(time.Hour),
 		},
 	}
-	factory := newStoreFactory(h.disk.endpoints(), "", pending, h.options())
+	factory := newStoreFactory(h.disk.endpoints(), pending, h.options())
 
 	s, err := usecase.NewSync(usecase.SyncDeps{
 		Local: dev.local, Settings: cfg, Tokens: cfg,

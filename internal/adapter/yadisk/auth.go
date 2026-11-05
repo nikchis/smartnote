@@ -25,13 +25,13 @@ import (
 const (
 	authorizePath = "/authorize"
 	callbackPath  = "/callback"
-	diskPath      = "/v1/disk"
+	tokenPath     = "/token"
 
 	// manualRedirect is the page of Yandex that shows the code to copy.
 	manualRedirect = "https://oauth.yandex.ru/verification_code"
 
 	defaultAuthTimeout = 5 * time.Minute  // the wait for the browser (spec §6.2)
-	exchangeTimeout    = 60 * time.Second // the code exchange and the account request
+	exchangeTimeout    = 60 * time.Second // the code exchange
 	shutdownTimeout    = 2 * time.Second  // a graceful stop of the receiver, then a hard one
 	secretBytes        = 32               // of state and of code_verifier
 
@@ -56,7 +56,7 @@ type AuthOptions struct {
 type Authorizer struct {
 	authorize string    // the authorize URL without parameters
 	token     string    // the token endpoint
-	api       apiClient // the account request; its client also exchanges codes
+	api       apiClient // its client exchanges codes
 	listen    func(network, addr string) (net.Listener, error)
 	rand      io.Reader
 	timeout   time.Duration
@@ -177,7 +177,7 @@ func (a *Authorizer) secret() (string, error) {
 // URL returns the authorize URL to open in the browser.
 func (s *session) URL() string { return s.url }
 
-// redeem exchanges code for the token and reads the account name, both
+// redeem exchanges code for the token
 // within exchangeTimeout. When ctx ends first the error is ctx's, not a
 // network one.
 func (s *session) redeem(ctx context.Context, code string) (usecase.CloudToken, error) {
@@ -204,31 +204,8 @@ func (s *session) redeem(ctx context.Context, code string) (usecase.CloudToken, 
 		Provider: string(domain.KindYandexDisk),
 		ClientID: s.clientID,
 		Access:   answer.AccessToken,
-		Refresh:  answer.RefreshToken,
-		Account:  s.a.account(opCtx, answer.AccessToken),
 		Expiry:   answer.expiry(time.Now()),
 	}, nil
-}
-
-// account returns the login of the Disk's user, or "" when it cannot be
-// read: the sign-in succeeds without it (spec §6.2).
-func (a *Authorizer) account(ctx context.Context, access string) string {
-	u, err := a.api.url(diskPath, nil)
-	if err != nil {
-		return ""
-	}
-
-	var disk struct {
-		User struct {
-			Login string `json:"login"`
-		} `json:"user"`
-	}
-
-	if _, err := a.api.send(ctx, http.MethodGet, u, access, &disk); err != nil {
-		return ""
-	}
-
-	return disk.User.Login
 }
 
 // manualLogin ends with the code the user pastes (spec §6.3). Yandex does
@@ -353,8 +330,7 @@ func (l *loopbackLogin) Wait(ctx context.Context) (usecase.CloudToken, error) {
 
 	tok, err := l.redeem(ctx, cb.code)
 	if l.life.Err() != nil {
-		// Closed during the exchange: even a token without its account
-		// (the cancelled account request) is dropped.
+		// Closed during the exchange: even a finished token is dropped.
 		return usecase.CloudToken{}, context.Canceled
 	}
 

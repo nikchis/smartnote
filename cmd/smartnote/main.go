@@ -27,6 +27,7 @@ import (
 	"github.com/nikchis/smartnote/internal/adapter/wailsui"
 	"github.com/nikchis/smartnote/internal/adapter/yadisk"
 	"github.com/nikchis/smartnote/internal/applog"
+	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/platform"
 	"github.com/nikchis/smartnote/internal/sealbox"
 	"github.com/nikchis/smartnote/internal/usecase"
@@ -118,7 +119,7 @@ func run(logger *slog.Logger) error {
 
 	app.OnShutdown(finish)
 
-	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger}, store, lifecycle, searchParts{
+	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger, SavedKind: savedKind(store)}, store, lifecycle, searchParts{
 		engine: engine, status: searchStatus, run: searchRun,
 	})
 	if err != nil {
@@ -210,6 +211,19 @@ type searchParts struct {
 	run    *searchRunner
 }
 
+// savedKind returns what the services use to pick the operation limit: the
+// kind of the settings saved in store.
+func savedKind(store *sqlite.Store) func(context.Context) (domain.StorageKind, error) {
+	return func(ctx context.Context) (domain.StorageKind, error) {
+		s, err := store.LoadSettings(ctx)
+		if err != nil {
+			return "", err
+		}
+
+		return s.Kind(), nil
+	}
+}
+
 // newServices wires the use cases over store into the Wails services.
 func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecycle, sp searchParts) ([]application.Service, error) {
 	// The local storage keeps milliseconds; a finer clock would make a saved
@@ -246,7 +260,7 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 	}
 
 	connector := remote.NewRouter(sshConnector, blobremote.NewConnector(
-		yadisk.NewStoreFactory(yadisk.DefaultEndpoints, yadisk.BuiltinClientID, store, yadisk.WithLog(env.Log)),
+		yadisk.NewStoreFactory(yadisk.DefaultEndpoints, store, yadisk.WithLog(env.Log)),
 		sealbox.DefaultKDF(),
 	))
 

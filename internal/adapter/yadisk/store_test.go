@@ -68,7 +68,7 @@ func newHarnessWith(t *testing.T, edit func(*usecase.CloudToken)) *harness {
 
 // store returns a new Store of the device, as after a restart.
 func (h *harness) store() *Store {
-	return NewStore(h.disk.endpoints(), h.tokens, fakeClientID, h.pending, h.options())
+	return NewStore(h.disk.endpoints(), h.tokens, h.pending, h.options())
 }
 
 func (h *harness) options() StoreOptions {
@@ -83,7 +83,7 @@ func (h *harness) options() StoreOptions {
 
 // factory returns a factory of the device's stores over the emulator.
 func (h *harness) factory() blobremote.StoreFactory {
-	return newStoreFactory(h.disk.endpoints(), fakeClientID, h.pending, h.options())
+	return newStoreFactory(h.disk.endpoints(), h.pending, h.options())
 }
 
 // fromFactory opens a store with f for the device's token.
@@ -803,10 +803,10 @@ func TestFenceRememberedWithoutRecord(t *testing.T) {
 	}
 }
 
-// TestFenceReauthRequired: a refused token during the fence asks for a new
+// TestFenceReauthRequired: a token refused (401) during the fence asks for a new
 // sign-in and keeps the record for the fence after it.
 func TestFenceReauthRequired(t *testing.T) {
-	refuse := func(d *fakeDisk) { d.access, d.oauthError = "acc-0", "invalid_grant" }
+	refuse := func(d *fakeDisk) { d.access = "acc-0" }
 
 	t.Run("on restart", func(t *testing.T) {
 		h := newHarness(t)
@@ -1159,156 +1159,54 @@ func TestCleanupPaginates(t *testing.T) {
 	})
 }
 
-func TestRefreshOn401(t *testing.T) {
-	tests := []struct {
-		name        string
-		omitRefresh bool
-		wantRefresh string
-	}{
-		{name: "new refresh token", wantRefresh: "ref-2"},
-		{name: "refresh token kept", omitRefresh: true, wantRefresh: "ref-1"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t)
-			h.disk.put(container, []byte("container"), testNow)
-			h.disk.set(func(d *fakeDisk) { d.access, d.omitRefresh = "acc-0", tc.omitRefresh })
-
-			if data, _, _ := mustRead(t, h.store()); string(data) != "container" {
-				t.Errorf("Read = %q", data)
-			}
-
-			want := usecase.CloudToken{
-				Provider: fakeProvider, ClientID: fakeClientID, Access: "acc-2", Refresh: tc.wantRefresh,
-				Account: fakeAccount, Expiry: testNow.Add(time.Hour),
-			}
-
-			got := h.tokenUpdates()
-			if len(got) != 1 || got[0] != want {
-				t.Fatalf("updates = %d, want one token %s", len(got), describeToken(want))
-			}
-
-			wantRefreshForm(t, h.disk)
-
-			var auths []string
-
-			for _, r := range h.disk.reqs() {
-				if r.server == "api" && r.path == "/v1/disk/resources" {
-					auths = append(auths, r.auth)
-				}
-			}
-
-			if len(auths) < 2 || auths[0] != "OAuth acc-1" || auths[1] != "OAuth acc-2" {
-				t.Errorf("metadata Authorization = %v, want the old token, then the new one", auths)
-			}
-		})
-	}
-}
-
-// describeToken prints the fields of a test token; CloudToken itself is redacted.
-func describeToken(t usecase.CloudToken) string {
-	return fmt.Sprintf("{%s %s %s %s %s %v}", t.Provider, t.ClientID, t.Access, t.Refresh, t.Account, t.Expiry)
-}
-
-// wantRefreshForm checks the one refresh request: no client secret and no
-// Authorization header.
-func wantRefreshForm(t *testing.T, d *fakeDisk) {
-	t.Helper()
-
-	forms := d.forms()
-	if len(forms) != 1 {
-		t.Fatalf("refresh requests = %d, want 1", len(forms))
-	}
-
-	f := forms[0]
-	if f.Get("grant_type") != "refresh_token" || f.Get("refresh_token") != "ref-1" || f.Get("client_id") != fakeClientID || f.Has("client_secret") {
-		t.Errorf("refresh form = %v", f)
-	}
-
-	for _, r := range d.reqs() {
-		if r.server == "oauth" && r.auth != "" {
-			t.Errorf("token request carried Authorization")
-		}
-	}
-}
-
-func TestRefreshBeforeExpiry(t *testing.T) {
-	h := newHarnessWith(t, func(tok *usecase.CloudToken) { tok.Expiry = testNow.Add(30 * time.Second) })
-	h.disk.put(container, []byte("container"), testNow)
-	h.disk.set(func(d *fakeDisk) { d.access = "acc-0" })
-
-	mustRead(t, h.store())
-	wantRefreshForm(t, h.disk)
-
-	for _, r := range h.disk.reqs() {
-		if r.server == "api" && r.auth != "OAuth acc-2" {
-			t.Errorf("%s %s with %q, want only the refreshed token", r.method, r.path, r.auth)
-		}
-	}
-
-	if got := h.tokenUpdates(); len(got) != 1 || got[0].Access != "acc-2" {
-		t.Errorf("updates = %d, want the refreshed token", len(got))
-	}
-}
-
-func TestRefreshRejected(t *testing.T) {
+func TestExpiredTokenReauth(t *testing.T) {
 	tests := []struct {
 		name   string
-		code   string
-		status int
-		reauth bool
+		expiry time.Time
 	}{
-		{name: "invalid_grant", code: "invalid_grant", status: http.StatusBadRequest, reauth: true},
-		{name: "invalid_client", code: "invalid_client", status: http.StatusUnauthorized, reauth: true},
-		{name: "unauthorized_client", code: "unauthorized_client", status: http.StatusBadRequest, reauth: true},
-		// Any other 4xx of the token endpoint is a refusal too (final review M4).
-		{name: "invalid_request", code: "invalid_request", status: http.StatusBadRequest, reauth: true},
-		{name: "unknown 403", code: "forbidden", status: http.StatusForbidden, reauth: true},
-		{name: "server error", code: "server_error", status: http.StatusInternalServerError},
-		{name: "unavailable", code: "temporarily_unavailable", status: http.StatusServiceUnavailable},
+		{name: "passed", expiry: testNow.Add(-time.Second)},
+		{name: "exactly now", expiry: testNow},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t)
-			h.disk.set(func(d *fakeDisk) { d.access, d.oauthError, d.oauthStatus = "acc-0", tc.code, tc.status })
+			h := newHarnessWith(t, func(tok *usecase.CloudToken) { tok.Expiry = tc.expiry })
+			h.disk.put(container, []byte("container"), testNow)
 
-			err := readErr(t, h.store())
-			if got := errors.Is(err, domain.ErrReauthRequired); got != tc.reauth {
-				t.Fatalf("Read: err = %v, reauth = %v, want %v", err, got, tc.reauth)
+			if err := readErr(t, h.store()); !errors.Is(err, domain.ErrReauthRequired) {
+				t.Fatalf("Read: err = %v, want ErrReauthRequired", err)
 			}
 
-			if !tc.reauth {
-				if ce := cloudError(t, err); ce.Status != tc.status || ce.Code != tc.code {
-					t.Errorf("CloudError = %+v", ce)
-				}
+			if n := len(h.disk.reqs()); n != 0 {
+				t.Errorf("requests = %d, want none", n)
 			}
 
 			if len(h.tokenUpdates()) != 0 {
-				t.Error("a rejected refresh updated the token")
+				t.Error("the token was updated")
 			}
 		})
 	}
 }
 
-func TestRefreshWithoutRefreshToken(t *testing.T) {
-	h := newHarnessWith(t, func(tok *usecase.CloudToken) { tok.Refresh = "" })
-	h.disk.set(func(d *fakeDisk) { d.access = "acc-0" })
+// TestSoonExpiringTokenUsed: a token that has not passed its expiry is used
+// as it is; nothing is refreshed.
+func TestSoonExpiringTokenUsed(t *testing.T) {
+	h := newHarnessWith(t, func(tok *usecase.CloudToken) { tok.Expiry = testNow.Add(30 * time.Second) })
+	h.disk.put(container, []byte("container"), testNow)
 
-	if err := readErr(t, h.store()); !errors.Is(err, domain.ErrReauthRequired) {
-		t.Fatalf("Read: err = %v, want ErrReauthRequired", err)
+	if data, _, _ := mustRead(t, h.store()); string(data) != "container" {
+		t.Errorf("Read = %q", data)
 	}
 
-	if len(h.disk.forms()) != 0 {
-		t.Error("refresh sent without a refresh token")
+	if n := len(h.disk.forms()); n != 0 {
+		t.Errorf("token requests = %d, want none", n)
 	}
 }
 
-func TestSecond401(t *testing.T) {
+func TestUnauthorizedReauth(t *testing.T) {
 	h := newHarness(t)
 	old := h.disk.put(container, []byte("old"), testNow)
-	h.disk.set(func(d *fakeDisk) { d.reject401 = true })
+	h.disk.set(func(d *fakeDisk) { d.access = "acc-0" })
 
 	s := h.store()
 
@@ -1316,9 +1214,22 @@ func TestSecond401(t *testing.T) {
 		t.Fatalf("Write: err = %v, want ErrReauthRequired", err)
 	}
 
-	if n := len(h.disk.forms()); n != 1 {
-		t.Errorf("refresh requests = %d, want 1", n)
+	if n := len(h.disk.forms()); n != 0 {
+		t.Errorf("token requests = %d, want none", n)
 	}
+
+	if n := len(h.disk.reqs()); n != 1 {
+		t.Errorf("requests = %d, want 1 (no retry)", n)
+	}
+
+	if len(h.tokenUpdates()) != 0 {
+		t.Error("the token was updated")
+	}
+}
+
+// describeToken prints the fields of a test token; CloudToken itself is redacted.
+func describeToken(t usecase.CloudToken) string {
+	return fmt.Sprintf("{%s %s %s %s %s %v}", t.Provider, t.ClientID, t.Access, t.Refresh, t.Account, t.Expiry)
 }
 
 func TestErrorsMapped(t *testing.T) {
@@ -1406,26 +1317,19 @@ func TestStoreFactory(t *testing.T) {
 	tokens := usecase.NewMemoryTokenSource(usecase.CloudToken{ClientID: "builtin"}, "builtin", nil)
 
 	tests := []struct {
-		name     string
-		target   usecase.RemoteTarget
-		pending  PendingStore
-		wantErr  error
-		clientID string
+		name    string
+		target  usecase.RemoteTarget
+		pending PendingStore
+		wantErr error
 	}{
 		{name: "no token", target: usecase.RemoteTarget{}, pending: pending, wantErr: domain.ErrReauthRequired},
-		{name: "builtin client ID", target: usecase.RemoteTarget{Token: tokens}, pending: pending, clientID: "builtin"},
-		{
-			name:     "own client ID",
-			target:   usecase.RemoteTarget{Settings: domain.ConnectionSettings{YandexClientID: "own"}, Token: tokens},
-			pending:  pending,
-			clientID: "own",
-		},
+		{name: "with token", target: usecase.RemoteTarget{Token: tokens}, pending: pending},
 		{name: "no pending store", target: usecase.RemoteTarget{Token: tokens}, wantErr: errNoPendingStore},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := NewStoreFactory(DefaultEndpoints, "builtin", tc.pending)(tc.target)
+			got, err := NewStoreFactory(DefaultEndpoints, tc.pending)(tc.target)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("err = %v, want %v", err, tc.wantErr)
@@ -1438,13 +1342,8 @@ func TestStoreFactory(t *testing.T) {
 				t.Fatalf("factory: %v", err)
 			}
 
-			s, ok := got.(*Store)
-			if !ok {
+			if _, ok := got.(*Store); !ok {
 				t.Fatalf("store = %T, want *Store", got)
-			}
-
-			if s.clientID != tc.clientID {
-				t.Errorf("client ID = %q, want %q", s.clientID, tc.clientID)
 			}
 		})
 	}

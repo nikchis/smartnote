@@ -17,7 +17,8 @@ Disk, `Applications/<app name>/smartnote.v1.bin`.
 2. Press **Sign in with Yandex**. The browser opens on the Yandex page; sign in and press **Allow**.
    Smartnote asks only for access to its own application folder, not to the rest of the Disk.
    Smartnote shows "Waiting for the browser…" for up to 5 minutes; **Cancel** stops the wait.
-3. When the browser reports success, **Settings** shows "Signed in as <login>".
+3. When the browser reports success, **Settings** shows "Signed in". The account name is not
+   shown: the access to the application folder does not let Smartnote read it.
 4. Enter the sync phrase (at least 16 characters; every device that shares the notes uses the same
    one). Press **Test connection**, then **OK**. The sign-in is saved only when you press **OK**; **Cancel** or closing Settings discards it.
 
@@ -49,6 +50,21 @@ The package carries the client ID of the author's Yandex application, so normall
 Smartnote needs no client secret. Data belongs to the application: another client ID means another
 application folder, that is another, empty storage. Your notes under the old client ID stay where
 they are. Changing the client ID signs you out.
+
+## How long the sign-in lasts
+
+The sign-in is valid for about a year. Smartnote does not renew it by itself; when it expires, the
+next operation shows "Sign in to Yandex Disk again." and, after Connect, opens **Settings**. Press
+**Sign in again**, sign in once more and press **OK**; the notes are untouched.
+
+## Large sets of notes and the trash
+
+Uploads to Yandex Disk can be slow (about 120 KB/s was measured), so a large set of notes can take
+minutes to back up over a slow connection. An operation with Yandex Disk is limited to 10 minutes.
+
+Smartnote cannot see or empty the trash of your Disk: the access to the application folder does not
+cover it. If earlier copies of the container land in the trash, they take space there and can be
+deleted by hand in the Yandex Disk web interface.
 
 ## Revoking access
 

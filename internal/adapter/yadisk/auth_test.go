@@ -248,8 +248,8 @@ func wantCodeForm(t *testing.T, d *fakeDisk, challenge string) {
 func wantToken(t *testing.T, tok usecase.CloudToken, account string, before time.Time) {
 	t.Helper()
 
-	if tok.Provider != fakeProvider || tok.ClientID != fakeClientID || tok.Access != "acc-2" || tok.Refresh != "ref-2" || tok.Account != account {
-		t.Errorf("token = %s, want acc-2/ref-2 of %q", describeToken(tok), account)
+	if tok.Provider != fakeProvider || tok.ClientID != fakeClientID || tok.Access != "acc-2" || tok.Refresh != "" || tok.Account != account {
+		t.Errorf("token = %s, want acc-2 without a refresh token, account %q", describeToken(tok), account)
 	}
 
 	if lo, hi := before.Add(time.Hour), time.Now().Add(time.Hour); tok.Expiry.Before(lo) || tok.Expiry.After(hi) {
@@ -370,7 +370,7 @@ func TestLoopbackSuccess(t *testing.T) {
 		t.Fatalf("Wait: %v", r.err)
 	}
 
-	wantToken(t, r.tok, fakeAccount, before)
+	wantToken(t, r.tok, "", before)
 	wantCodeForm(t, h.disk, l.query.Get("code_challenge"))
 	l.wantClosed(t)
 }
@@ -671,50 +671,27 @@ func TestManualExchange(t *testing.T) {
 		t.Fatalf("Exchange: %v", err)
 	}
 
-	wantToken(t, tok, fakeAccount, before)
+	wantToken(t, tok, "", before)
 	wantCodeForm(t, h.disk, l.query.Get("code_challenge"))
 }
 
-func TestAccountLogin(t *testing.T) {
-	cases := []struct {
-		name    string
-		fail    bool
-		account string
-	}{
-		{name: "account of the disk", account: fakeAccount},
-		{name: "disk unavailable", fail: true, account: ""},
+// TestNoAccountRequest: the sign-in does not read the account (the
+// app-folder permission forbids it) and keeps no refresh token.
+func TestNoAccountRequest(t *testing.T) {
+	h := newAuthHarness(t)
+	l := h.begin(h.authorizer(h.options()), true)
+
+	tok, err := l.Exchange(t.Context(), fakeAuthCode)
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			h := newAuthHarness(t)
-			if tc.fail {
-				h.disk.set(func(d *fakeDisk) {
-					d.fail[epDisk] = fakeFailure{status: http.StatusInternalServerError, code: "DiskInternalError"}
-				})
-			}
+	if tok.Account != "" || tok.Refresh != "" || tok.Access != "acc-2" {
+		t.Errorf("token = %s, want acc-2 without account and refresh token", describeToken(tok))
+	}
 
-			l := h.begin(h.authorizer(h.options()), true)
-
-			tok, err := l.Exchange(t.Context(), fakeAuthCode)
-			if err != nil {
-				t.Fatalf("Exchange: %v", err)
-			}
-
-			if tok.Account != tc.account || tok.Access != "acc-2" {
-				t.Errorf("token = %s, want account %q", describeToken(tok), tc.account)
-			}
-
-			if n := h.disk.count("api", http.MethodGet, "/v1/disk"); n != 1 {
-				t.Errorf("account requests = %d, want 1", n)
-			}
-
-			for _, r := range h.disk.reqs() {
-				if r.server == "api" && r.auth != "OAuth acc-2" {
-					t.Errorf("account request with %q, want the new token", r.auth)
-				}
-			}
-		})
+	if n := h.disk.count("api", http.MethodGet, "/v1/disk"); n != 0 {
+		t.Errorf("account requests = %d, want 0", n)
 	}
 }
 
@@ -746,7 +723,7 @@ func TestCloseIdempotent(t *testing.T) {
 }
 
 func TestCloseDuringExchange(t *testing.T) {
-	for _, ep := range []string{epToken, epDisk} {
+	for _, ep := range []string{epToken} {
 		t.Run(ep, func(t *testing.T) {
 			h := newAuthHarness(t)
 			l := h.loopback()

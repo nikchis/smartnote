@@ -36,16 +36,14 @@ const (
 	downloadPath  = "/v1/disk/resources/download"
 	uploadPath    = "/v1/disk/resources/upload"
 	movePath      = "/v1/disk/resources/move"
-	tokenPath     = "/token"
 
-	refreshMargin = time.Minute     // a token expiring sooner is refreshed first
-	fenceTimeout  = 5 * time.Second // each step of the fence (spec §5.5)
-	pollFirst     = 500 * time.Millisecond
-	pollMax       = 2 * time.Second
-	tempMaxAge    = time.Hour // older temporary files are left by failed Backups
-	listPageSize  = 100
-	listMaxPages  = 10
-	maxCleanups   = 20 // deletions of old temporary files per Write
+	fenceTimeout = 5 * time.Second // each step of the fence (spec §5.5)
+	pollFirst    = 500 * time.Millisecond
+	pollMax      = 2 * time.Second
+	tempMaxAge   = time.Hour // older temporary files are left by failed Backups
+	listPageSize = 100
+	listMaxPages = 10
+	maxCleanups  = 20 // deletions of old temporary files per Write
 
 	opSuccess = "success"
 	opFailed  = "failed"
@@ -54,8 +52,6 @@ const (
 	qPath      = "path"
 	qFields    = "fields"
 	qOverwrite = "overwrite"
-
-	grantRefresh = "refresh_token" // the grant type and its parameter
 )
 
 var (
@@ -90,16 +86,14 @@ type StoreOptions struct {
 // (spec §5.4): an object is the file app:/<name>, its version is the file's
 // MD5. A Store serves one operation and is not safe for concurrent use.
 type Store struct {
-	api      apiClient
-	href     hrefClient
-	oauth    string
-	tokens   usecase.CloudTokenSource
-	clientID string
-	pending  PendingStore
-	now      func() time.Time
-	sleep    func(context.Context, time.Duration) error
-	newID    func() uuid.UUID
-	log      *slog.Logger
+	api     apiClient
+	href    hrefClient
+	tokens  usecase.CloudTokenSource
+	pending PendingStore
+	now     func() time.Time
+	sleep   func(context.Context, time.Duration) error
+	newID   func() uuid.UUID
+	log     *slog.Logger
 
 	memory *pendingMemory // temporary files to fence that pending could not record
 
@@ -108,21 +102,19 @@ type Store struct {
 }
 
 // NewStore returns a store that signs API requests with the token of tokens,
-// refreshes it with clientID, and keeps the pending record in pending, which
+// and keeps the pending record in pending, which
 // must not be nil.
-func NewStore(e Endpoints, tokens usecase.CloudTokenSource, clientID string, pending PendingStore, opts StoreOptions) *Store {
+func NewStore(e Endpoints, tokens usecase.CloudTokenSource, pending PendingStore, opts StoreOptions) *Store {
 	s := &Store{
-		api:      newAPIClient(opts.HTTP, e.API),
-		href:     newHrefClient(opts.Href),
-		oauth:    strings.TrimSuffix(e.OAuth, "/") + tokenPath,
-		tokens:   tokens,
-		clientID: clientID,
-		pending:  pending,
-		now:      opts.Now,
-		sleep:    opts.Sleep,
-		newID:    opts.NewID,
-		log:      cmp.Or(opts.Log, slog.New(slog.DiscardHandler)),
-		memory:   &pendingMemory{},
+		api:     newAPIClient(opts.HTTP, e.API),
+		href:    newHrefClient(opts.Href),
+		tokens:  tokens,
+		pending: pending,
+		now:     opts.Now,
+		sleep:   opts.Sleep,
+		newID:   opts.NewID,
+		log:     cmp.Or(opts.Log, slog.New(slog.DiscardHandler)),
+		memory:  &pendingMemory{},
 	}
 
 	if s.now == nil {
@@ -150,18 +142,18 @@ func WithLog(log *slog.Logger) FactoryOption {
 
 // NewStoreFactory builds a Store per operation over the target's token, with
 // the target's client ID or builtinClientID.
-func NewStoreFactory(e Endpoints, builtinClientID string, pending PendingStore, options ...FactoryOption) blobremote.StoreFactory {
+func NewStoreFactory(e Endpoints, pending PendingStore, options ...FactoryOption) blobremote.StoreFactory {
 	var opts StoreOptions
 	for _, o := range options {
 		o(&opts)
 	}
 
-	return newStoreFactory(e, builtinClientID, pending, opts)
+	return newStoreFactory(e, pending, opts)
 }
 
 // newStoreFactory is NewStoreFactory with the seams of the stores. Its
 // stores share one pendingMemory.
-func newStoreFactory(e Endpoints, builtinClientID string, pending PendingStore, opts StoreOptions) blobremote.StoreFactory {
+func newStoreFactory(e Endpoints, pending PendingStore, opts StoreOptions) blobremote.StoreFactory {
 	memory := &pendingMemory{}
 
 	return func(t usecase.RemoteTarget) (blobremote.ObjectStore, error) {
@@ -173,7 +165,7 @@ func newStoreFactory(e Endpoints, builtinClientID string, pending PendingStore, 
 			return nil, errNoPendingStore
 		}
 
-		s := NewStore(e, t.Token, usecase.EffectiveClientID(t.Settings, builtinClientID), pending, opts)
+		s := NewStore(e, t.Token, pending, opts)
 		s.memory = memory
 
 		return s, nil
@@ -494,7 +486,7 @@ func (s *Store) move(ctx context.Context, tmp, path string, create bool) (moveRe
 // mayBeApplied reports whether a failed request may still take effect: it
 // got no answer, the server failed while handling it, or it was accepted
 // with a body that could not be read. Other answers and failures before
-// sending (token, refresh, 401) are known to change nothing.
+// sending (token, 401) are known to change nothing.
 func mayBeApplied(err error) bool {
 	ce, ok := errors.AsType[CloudError](err)
 	accepted := ce.Status >= http.StatusOK && ce.Status < http.StatusMultipleChoices
@@ -761,8 +753,8 @@ func (s *Store) get(ctx context.Context, path string, q url.Values, out any) err
 	return err
 }
 
-// call sends an API request with the token. A 401 answer refreshes the token
-// once and repeats the request; a second 401 is domain.ErrReauthRequired.
+// call sends an API request with the token. A 401 answer is
+// domain.ErrReauthRequired: the app has no way to refresh the token (spec §6.1).
 func (s *Store) call(ctx context.Context, method string, u *url.URL, out any) (int, error) {
 	if s.reauth {
 		return 0, domain.ErrReauthRequired
@@ -774,15 +766,6 @@ func (s *Store) call(ctx context.Context, method string, u *url.URL, out any) (i
 	}
 
 	status, err := s.api.send(ctx, method, u, tok.Access, out)
-	if status != http.StatusUnauthorized {
-		return status, err
-	}
-
-	if tok, err = s.refresh(ctx, tok); err != nil {
-		return 0, s.noteReauth(err)
-	}
-
-	status, err = s.api.send(ctx, method, u, tok.Access, out)
 	if status == http.StatusUnauthorized {
 		return 0, s.noteReauth(domain.ErrReauthRequired)
 	}
@@ -799,63 +782,19 @@ func (s *Store) noteReauth(err error) error {
 	return err
 }
 
-// token returns the token for the next request; one that expires within
-// refreshMargin is refreshed first.
+// token returns the token for the next request. One whose expiry has passed
+// is not sent: it asks for a new sign-in.
 func (s *Store) token(ctx context.Context) (usecase.CloudToken, error) {
 	t, err := s.tokens.Token(ctx)
 	if err != nil {
 		return usecase.CloudToken{}, fmt.Errorf("cloud token: %w", err)
 	}
 
-	if !t.Expiry.IsZero() && t.Expiry.Sub(s.now()) < refreshMargin {
-		return s.refresh(ctx, t)
-	}
-
-	return t, nil
-}
-
-// refresh exchanges the refresh token of cur for a new token and passes it
-// to the token source. Any 4xx answer of the token endpoint (invalid_grant,
-// invalid_client, a demand for a client secret...) means a new sign-in;
-// 5xx and network errors stay a CloudError. The client secret is not sent:
-// the app has none (spec §6.1).
-func (s *Store) refresh(ctx context.Context, cur usecase.CloudToken) (usecase.CloudToken, error) {
-	if cur.Refresh == "" {
+	if !t.Expiry.IsZero() && !s.now().Before(t.Expiry) {
 		return usecase.CloudToken{}, domain.ErrReauthRequired
 	}
 
-	form := url.Values{paramGrantType: {grantRefresh}, grantRefresh: {cur.Refresh}, paramClientID: {s.clientID}}
-
-	answer, err := postToken(ctx, s.api.http, s.oauth, form)
-	if err != nil {
-		if ce, ok := errors.AsType[CloudError](err); ok && refusedRefresh(ce.Status) {
-			return usecase.CloudToken{}, domain.ErrReauthRequired
-		}
-
-		return usecase.CloudToken{}, fmt.Errorf("refresh token: %w", err)
-	}
-
-	next := usecase.CloudToken{
-		Provider: cur.Provider, ClientID: cur.ClientID, Account: cur.Account,
-		Access: answer.AccessToken, Refresh: cmp.Or(answer.RefreshToken, cur.Refresh),
-		Expiry: answer.expiry(s.now()),
-	}
-
-	if err := s.tokens.Update(ctx, next); err != nil {
-		if _, ok := errors.AsType[usecase.LocalError](err); !ok {
-			err = usecase.LocalError{Err: err}
-		}
-
-		return usecase.CloudToken{}, fmt.Errorf("save refreshed token: %w", err)
-	}
-
-	return next, nil
-}
-
-// refusedRefresh reports whether status of a token answer is a refusal of
-// the request itself, which a retry cannot fix.
-func refusedRefresh(status int) bool {
-	return status >= http.StatusBadRequest && status < http.StatusInternalServerError
+	return t, nil
 }
 
 func md5Hex(data []byte) string {

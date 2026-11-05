@@ -3,7 +3,7 @@ package wailsui
 import "github.com/nikchis/smartnote/internal/usecase"
 
 // SyncService runs the connect check, Backup and Restore. Every operation
-// with the server gets operationTimeout.
+// with the server is bounded by the limit of the saved storage kind.
 type SyncService struct {
 	env  Env
 	sync *usecase.Sync
@@ -16,7 +16,7 @@ func NewSyncService(env Env, s *usecase.Sync) *SyncService {
 
 // Connect runs the connect check (spec §6.3, scenario 1).
 func (s *SyncService) Connect() (ConnectDTO, error) {
-	ctx, cancel := s.env.remote()
+	ctx, cancel := s.env.remoteSaved()
 	defer cancel()
 
 	out, err := s.sync.Connect(ctx)
@@ -29,7 +29,7 @@ func (s *SyncService) Connect() (ConnectDTO, error) {
 
 // PrepareBackup plans a Backup and keeps the plan for CommitBackup.
 func (s *SyncService) PrepareBackup() (BackupPreviewDTO, error) {
-	ctx, cancel := s.env.remote()
+	ctx, cancel := s.env.remoteSaved()
 	defer cancel()
 
 	p, err := s.sync.PrepareBackup(ctx)
@@ -42,7 +42,7 @@ func (s *SyncService) PrepareBackup() (BackupPreviewDTO, error) {
 
 // CommitBackup runs the planned Backup.
 func (s *SyncService) CommitBackup() error {
-	ctx, cancel := s.env.remote()
+	ctx, cancel := s.env.remoteSaved()
 	defer cancel()
 
 	return s.env.fail("backup", s.sync.CommitBackup(ctx))
@@ -50,7 +50,7 @@ func (s *SyncService) CommitBackup() error {
 
 // PrepareRestore plans a Restore and keeps the plan for CommitRestore.
 func (s *SyncService) PrepareRestore() (RestorePreviewDTO, error) {
-	ctx, cancel := s.env.remote()
+	ctx, cancel := s.env.remoteSaved()
 	defer cancel()
 
 	p, err := s.sync.PrepareRestore(ctx)
@@ -63,7 +63,7 @@ func (s *SyncService) PrepareRestore() (RestorePreviewDTO, error) {
 
 // CommitRestore runs the planned Restore, from PrepareRestore or Connect.
 func (s *SyncService) CommitRestore() error {
-	ctx, cancel := s.env.remote()
+	ctx, cancel := s.env.remoteSaved()
 	defer cancel()
 
 	return s.env.fail("restore", s.sync.CommitRestore(ctx))

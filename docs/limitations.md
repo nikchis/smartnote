@@ -17,6 +17,12 @@ search by meaning in [Search](search.md#semantic-search).
 - The data belong to the application whose client ID signed you in. With your own client ID, or a
   build with another built-in one, the storage is another and empty; the notes under the old one
   stay there.
+- Yandex Disk: the sign-in lasts about a year, then Smartnote asks to sign in again ("Sign in to
+  Yandex Disk again."). The account name is not shown, only "Signed in".
+- Yandex Disk: Smartnote cannot see or empty the Disk trash. If earlier copies of the container
+  land there, they take space and can be deleted by hand in the Disk web interface.
+- Yandex Disk: a large set of notes can take minutes to back up over a slow connection. An operation
+  is limited to 10 minutes (60 seconds with an SSH + PostgreSQL server).
 - The container holds at most 64 MiB. A larger set is refused with "Notes do not fit into the remote
   storage (64 MiB)."
 - The sync phrase cannot be changed while the Yandex Disk storage holds notes, as with the server.
