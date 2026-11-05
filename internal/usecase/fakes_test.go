@@ -399,6 +399,7 @@ func (f *fakeServer) Open(_ context.Context, t RemoteTarget, mode OpenMode) (Rem
 
 	f.targets = append(f.targets, t)
 	f.settings = append(f.settings, t.Settings)
+
 	if f.openErr != nil {
 		return nil, f.openErr
 	}

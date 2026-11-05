@@ -48,6 +48,7 @@ type keyServer struct {
 func (k *keyServer) Open(_ context.Context, t usecase.RemoteTarget, _ usecase.OpenMode) (usecase.RemoteSession, error) {
 	s := t.Settings
 	k.seen = s
+
 	if s.TrustedKey() != k.key {
 		return nil, &domain.HostKeyUnknownError{Fingerprint: k.fp, AuthorizedKey: k.key, Addr: s.SSHAddr()}
 	}

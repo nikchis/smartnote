@@ -104,6 +104,9 @@ const (
 	tableCloudAuth     = "cloud_auth"
 )
 
+// columnData is the sealed payload column shared by cloud_auth and note_embedding.
+const columnData = "data"
+
 // AADs of the sealed fields (spec §4).
 func aadWrappedDEK() sealbox.AAD {
 	return sealbox.AAD{Table: tableMeta, Column: metaWrappedDEK, RowID: "1"}
@@ -116,7 +119,7 @@ func aadPrivateKey() sealbox.AAD {
 }
 
 func aadEmbedding(id string) sealbox.AAD {
-	return sealbox.AAD{Table: tableNoteEmbedding, Column: "data", RowID: id}
+	return sealbox.AAD{Table: tableNoteEmbedding, Column: columnData, RowID: id}
 }
 
 func aadNote(column, id string) sealbox.AAD {

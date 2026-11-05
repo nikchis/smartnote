@@ -117,6 +117,16 @@ func (s ConnectionSettings) validateYandexDisk() error {
 	return nil
 }
 
+// isClientIDChar reports whether c is one of [A-Za-z0-9_-].
+func isClientIDChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	default:
+		return c == '_' || c == '-'
+	}
+}
+
 // validYandexClientID reports whether id is empty or 1 to 64 characters of
 // [A-Za-z0-9_-]. An empty ID means "use the built-in one".
 func validYandexClientID(id string) bool {
@@ -125,8 +135,7 @@ func validYandexClientID(id string) bool {
 	}
 
 	for i := 0; i < len(id); i++ {
-		c := id[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+		if !isClientIDChar(id[i]) {
 			return false
 		}
 	}

@@ -36,7 +36,7 @@ func hasTable(t *testing.T, dir, name string) bool {
 	defer db.Close()
 
 	var n int
-	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&n); err != nil {
+	if err := db.QueryRowContext(context.Background(), "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 
@@ -53,7 +53,7 @@ func formatOf(t *testing.T, dir string) string {
 	defer db.Close()
 
 	var v []byte
-	if err := db.QueryRow("SELECT value FROM meta WHERE key = 'format_version'").Scan(&v); err != nil {
+	if err := db.QueryRowContext(context.Background(), "SELECT value FROM meta WHERE key = 'format_version'").Scan(&v); err != nil {
 		t.Fatal(err)
 	}
 
@@ -145,6 +145,7 @@ func TestCloudTokenRoundTrip(t *testing.T) {
 
 	next := want
 	next.Access = "ACCESS-NEW"
+
 	if err := s.SaveCloudToken(ctx, next); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +181,7 @@ func TestCloudTokenSealed(t *testing.T) {
 	defer db.Close()
 
 	var data []byte
-	if err := db.QueryRow("SELECT data FROM cloud_auth WHERE cloud_auth_id = 1").Scan(&data); err != nil {
+	if err := db.QueryRowContext(context.Background(), "SELECT data FROM cloud_auth WHERE cloud_auth_id = 1").Scan(&data); err != nil {
 		t.Fatal(err)
 	}
 

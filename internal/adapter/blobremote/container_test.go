@@ -237,6 +237,48 @@ func TestBodyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestContainerRoundTripJSONEscaping checks that characters encoding/json may
+// escape (<, >, &, U+2028) survive the full container path byte-identically.
+func TestContainerRoundTripJSONEscaping(t *testing.T) {
+	m, key := testMeta(t)
+
+	header, err := newHeader(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := note(1, "info <b>&</b> > \u2028 end")
+	want.Name = "a<b>&c\u2028d"
+
+	body, err := sealBody(key, header, m.ServerID, 7, []domain.Note{want})
+	if err != nil {
+		t.Fatalf("sealBody: %v", err)
+	}
+
+	file, err := assemble(header, body)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+
+	gotHeader, _, gotBody, err := parseHeader(file)
+	if err != nil {
+		t.Fatalf("parseHeader: %v", err)
+	}
+
+	rev, got, err := openBody(key, gotHeader, m.ServerID, gotBody)
+	if err != nil {
+		t.Fatalf("openBody: %v", err)
+	}
+
+	if rev != 7 || len(got) != 1 {
+		t.Fatalf("rev=%d notes=%d", rev, len(got))
+	}
+
+	if got[0].Name != want.Name || got[0].Info != want.Info || got[0] != want {
+		t.Fatalf("note = %+v, want %+v", got[0], want)
+	}
+}
+
 // sealPlain seals arbitrary plaintext exactly like sealBody does.
 func sealPlain(t *testing.T, key, header []byte, id uuid.UUID, plain []byte) []byte {
 	t.Helper()

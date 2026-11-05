@@ -171,7 +171,7 @@ func TestCloudTokenRedacted(t *testing.T) {
 	slog.New(slog.NewJSONHandler(&buf, nil)).Info("token", "t", tok)
 
 	outputs := map[string]string{
-		"%v":   fmt.Sprintf("%v", tok),
+		"%v":   tok.String(),
 		"%+v":  fmt.Sprintf("%+v", tok),
 		"%#v":  fmt.Sprintf("%#v", tok),
 		"slog": buf.String(),

@@ -323,6 +323,7 @@ func TestIsEmptyByKind(t *testing.T) {
 	yandex := ConnectionSettings{StorageKind: KindYandexDisk}
 
 	unknown := ConnectionSettings{StorageKind: "google_drive"}
+
 	if !none.IsEmpty() {
 		t.Error("none with SSH fields: IsEmpty() = false, want true")
 	}

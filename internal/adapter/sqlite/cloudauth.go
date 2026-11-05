@@ -13,7 +13,7 @@ import (
 )
 
 func aadCloudAuth() sealbox.AAD {
-	return sealbox.AAD{Table: tableCloudAuth, Column: "data", RowID: "1"}
+	return sealbox.AAD{Table: tableCloudAuth, Column: columnData, RowID: "1"}
 }
 
 // LoadCloudToken returns the saved cloud token and true, or false when there is none.
@@ -134,13 +134,8 @@ func (s *Store) SaveConnection(ctx context.Context, settings domain.ConnectionSe
 }
 
 // LoadPendingTemp returns the name of the temporary file waiting for fencing.
-func (s *Store) LoadPendingTemp(ctx context.Context) (string, bool, error) {
-	var (
-		name  string
-		found bool
-	)
-
-	err := s.unlocked(func(db *sql.DB, _ []byte) error {
+func (s *Store) LoadPendingTemp(ctx context.Context) (name string, found bool, err error) {
+	err = s.unlocked(func(db *sql.DB, _ []byte) error {
 		err := db.QueryRowContext(ctx, "SELECT temp_name FROM cloud_pending WHERE cloud_pending_id = 1").Scan(&name)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
