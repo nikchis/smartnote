@@ -1034,7 +1034,7 @@ func TestSubmitCodeRetry(t *testing.T) {
 	login := recv(t, f.auth.begun, "BeginManual")
 	bad := errors.New("bad code")
 
-	for _, res := range []loginResult{{err: bad}, {tok: issued}} {
+	for _, res := range []loginResult{{err: bad}, {err: bad}, {err: bad}, {tok: issued}} {
 		done := make(chan error, 1)
 
 		go func() {
@@ -1251,12 +1251,11 @@ func TestPendingDroppedOnClientIDChange(t *testing.T) {
 		f := newConnFixture(t, domain.ConnectionSettings{}, srv)
 		f.signIn(t, yandexSettings("a"), issued)
 
-		if _, err := f.c.Test(context.Background(), yandexSettings("b")); err != nil {
-			t.Fatalf("Test: %v", err)
-		}
+		_, err := f.c.Test(context.Background(), yandexSettings("b"))
+		assertField(t, err, "yandex_account")
 
-		if _, err := srv.targets[0].Token.Token(context.Background()); !errors.Is(err, domain.ErrReauthRequired) {
-			t.Errorf("Token for client b = %v, want ErrReauthRequired: the pending token is of client a", err)
+		if len(srv.opens) != 0 {
+			t.Errorf("Open called %d times with the pending token of another client ID", len(srv.opens))
 		}
 
 		assertField(t, f.c.Save(context.Background(), yandexSettings("a")), "yandex_account")
@@ -1326,4 +1325,96 @@ func TestRefreshAfterDiscardIgnored(t *testing.T) {
 	}
 
 	assertField(t, f.c.Save(context.Background(), yandexSettings("a")), "yandex_account")
+}
+
+func TestTestYandexWithoutToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		store   *fakeTokenStore
+		field   string
+		wantErr error
+	}{
+		{name: "no token", store: &fakeTokenStore{}, field: "yandex_account"},
+		{name: "token of another client ID", store: &fakeTokenStore{tok: storedToken, has: true}, field: "yandex_account"},
+		{name: "load error", store: &fakeTokenStore{loadErr: errStore}, wantErr: errStore},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := &fakeServer{}
+			f := newConnFixture(t, domain.ConnectionSettings{}, srv)
+			f.tokens.tok, f.tokens.has, f.tokens.loadErr = tt.store.tok, tt.store.has, tt.store.loadErr
+
+			_, err := f.c.Test(context.Background(), yandexSettings("b"))
+			if tt.field != "" {
+				assertField(t, err, tt.field)
+			} else if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Test = %v, want %v", err, tt.wantErr)
+			}
+
+			if len(srv.opens) != 0 {
+				t.Errorf("Open called %d times without a token", len(srv.opens))
+			}
+		})
+	}
+}
+
+// TestRefreshKeepsPendingIdentity: a refresh without Provider and ClientID
+// still replaces the pending token, with the identity of the pending one.
+func TestRefreshKeepsPendingIdentity(t *testing.T) {
+	srv := &fakeServer{}
+	f := newConnFixture(t, domain.ConnectionSettings{}, srv)
+	f.signIn(t, yandexSettings("a"), issued)
+
+	srv.onOpen = func(ctx context.Context, rt RemoteTarget) {
+		if err := rt.Token.Update(ctx, CloudToken{Access: "refreshed", Refresh: "refreshed-r", Account: "me"}); err != nil {
+			t.Errorf("Update: %v", err)
+		}
+	}
+
+	if _, err := f.c.Test(context.Background(), yandexSettings("a")); err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+
+	if err := f.c.Save(context.Background(), yandexSettings("a")); err != nil {
+		t.Fatalf("Save after a refresh without identity: %v", err)
+	}
+
+	want := CloudToken{Provider: "yandex_disk", ClientID: "a", Access: "refreshed", Refresh: "refreshed-r", Account: "me"}
+	f.assertSaved(t, TokenSet, want)
+
+	if got := f.store.saveCalls()[0].Token; got.Provider != want.Provider || got.ClientID != want.ClientID {
+		t.Errorf("saved token provider %q, client %q; want %q, %q", got.Provider, got.ClientID, want.Provider, want.ClientID)
+	}
+}
+
+func TestSubmitCodeConcurrentBusy(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+
+	if err := f.c.SignInManual(context.Background(), yandexSettings("a")); err != nil {
+		t.Fatalf("SignInManual: %v", err)
+	}
+
+	login := recv(t, f.auth.begun, "BeginManual")
+	done := make(chan signInResult, 1)
+
+	go func() {
+		account, err := f.c.SubmitCode(context.Background(), "first")
+		done <- signInResult{account: account, err: err}
+	}()
+
+	recv(t, login.entered, "Exchange")
+
+	if _, err := f.c.SubmitCode(context.Background(), "second"); !errors.Is(err, domain.ErrBusy) {
+		t.Errorf("concurrent SubmitCode = %v, want ErrBusy", err)
+	}
+
+	send(t, login.result, loginResult{tok: issued}, "the token")
+
+	if r := recv(t, done, "first SubmitCode"); r.err != nil || r.account != "me" {
+		t.Errorf("first SubmitCode = %q, %v", r.account, r.err)
+	}
+
+	if codes := login.submitted(); len(codes) != 1 || codes[0] != "first" {
+		t.Errorf("exchanged codes = %d, want only the first", len(codes))
+	}
 }

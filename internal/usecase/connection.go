@@ -52,6 +52,8 @@ type signIn struct {
 	manual   bool
 	login    CloudLogin // nil until Begin* returns
 	cancel   context.CancelFunc
+	// exchanging is set while SubmitCode exchanges a code.
+	exchanging bool
 }
 
 // stop cancels what s is waiting for and closes its login. s may be nil.
@@ -126,7 +128,9 @@ func (c *Connection) Load(ctx context.Context) (domain.ConnectionSettings, error
 // Test opens a session with s in OpenCheck mode and closes it, without saving
 // s or creating the schema. Empty settings return domain.ErrNotConnected. An
 // unknown server key is remembered for TrustOfferedKey. A Yandex Disk test
-// uses the pending token, whose refresh stays in memory, or else the saved one.
+// uses the pending token, whose refresh stays in memory, or else the saved
+// one; without either it is refused before Open (ValidationError for
+// "yandex_account").
 func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res TestResult, err error) {
 	leave, err := c.gate.Enter()
 	if err != nil {
@@ -145,7 +149,7 @@ func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res
 
 	target := RemoteTarget{Settings: s}
 	if s.Kind() == domain.KindYandexDisk {
-		if target.Token, err = c.testTokenSource(s); err != nil {
+		if target.Token, err = c.testTokenSource(ctx, s); err != nil {
 			return TestResult{}, err
 		}
 	}
@@ -295,8 +299,9 @@ func (c *Connection) SignInManual(ctx context.Context, s domain.ConnectionSettin
 }
 
 // SubmitCode exchanges code for the token of the active SignInManual, which
-// becomes pending. Without one it returns domain.ErrNoPendingOperation. A
-// rejected code keeps the sign-in for another try.
+// becomes pending. Without one it returns domain.ErrNoPendingOperation, and
+// domain.ErrBusy while another SubmitCode exchanges a code. A rejected code
+// keeps the sign-in for another try.
 func (c *Connection) SubmitCode(ctx context.Context, code string) (string, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -304,19 +309,24 @@ func (c *Connection) SubmitCode(ctx context.Context, code string) (string, error
 	c.mu.Lock()
 
 	sess := c.current
-	if sess == nil || !sess.manual || sess.login == nil {
+	switch {
+	case sess == nil || !sess.manual || sess.login == nil:
 		c.mu.Unlock()
 		return "", fmt.Errorf("submit code: %w", domain.ErrNoPendingOperation)
+	case sess.exchanging:
+		c.mu.Unlock()
+		return "", fmt.Errorf("submit code: %w", domain.ErrBusy)
 	}
 
 	// CancelSignIn also cancels this exchange.
 	prev := sess.cancel
 	sess.cancel = func() { prev(); cancel() }
+	sess.exchanging = true
 	c.mu.Unlock()
 
 	tok, err := sess.login.Exchange(ctx, code)
 	if err != nil {
-		if !c.isCurrent(sess) {
+		if !c.endExchange(sess, prev) {
 			return "", context.Canceled
 		}
 
@@ -324,6 +334,21 @@ func (c *Connection) SubmitCode(ctx context.Context, code string) (string, error
 	}
 
 	return c.complete(sess, tok)
+}
+
+// endExchange makes a still current sess ready for another code, with its
+// cancel func restored to prev, and reports whether sess is still current.
+func (c *Connection) endExchange(sess *signIn, prev context.CancelFunc) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.current != sess {
+		return false
+	}
+
+	sess.cancel, sess.exchanging = prev, false
+
+	return true
 }
 
 // CancelSignIn ends the active sign-in, if any; its pending token, if one
@@ -396,6 +421,11 @@ func (c *Connection) beginSignIn(ctx context.Context, s domain.ConnectionSetting
 	sess, ctx, err := c.startLogin(ctx, clientID, manual)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if !c.isCurrent(sess) {
+		// Replaced or cancelled after the login started; it is stopped already.
+		return nil, nil, context.Canceled
 	}
 
 	if c.openURL != nil {
@@ -543,32 +573,55 @@ func (c *Connection) dropOtherPendingLocked(clientID string) {
 
 // testTokenSource returns the token source Test uses for Yandex Disk
 // settings s: the pending token, whose refresh replaces it in memory only,
-// or the saved token unless Sign out marked it for deletion.
-func (c *Connection) testTokenSource(s domain.ConnectionSettings) (CloudTokenSource, error) {
+// or the saved token unless Sign out marked it for deletion. Without either
+// for the effective client ID it returns a ValidationError for "yandex_account".
+func (c *Connection) testTokenSource(ctx context.Context, s domain.ConnectionSettings) (CloudTokenSource, error) {
 	clientID, err := c.clientID(s)
 	if err != nil {
 		return nil, err
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	c.dropOtherPendingLocked(clientID)
+	pending, signOut, gen := c.pending, c.signOut, c.gen
+	c.mu.Unlock()
 
 	switch {
-	case c.pending != nil:
-		return NewMemoryTokenSource(*c.pending, clientID, c.refreshPending(c.gen)), nil
-	case c.signOut:
+	case pending != nil:
+		return NewMemoryTokenSource(*pending, clientID, c.refreshPending(gen, *pending)), nil
+	case signOut:
 		return nil, errSignInRequired()
-	default:
-		return NewStoredTokenSource(c.tokens, clientID), nil
 	}
+
+	if err := c.requireStoredToken(ctx, clientID); err != nil {
+		return nil, err
+	}
+
+	return NewStoredTokenSource(c.tokens, clientID), nil
 }
 
-// refreshPending returns the callback that replaces the pending token with
-// its refresh, unless the pending token changed since generation gen.
-func (c *Connection) refreshPending(gen uint64) func(CloudToken) {
+// requireStoredToken returns a ValidationError for "yandex_account" unless
+// local.db has a token for clientID.
+func (c *Connection) requireStoredToken(ctx context.Context, clientID string) error {
+	tok, ok, err := c.tokens.LoadCloudToken(ctx)
+	if err != nil {
+		return fmt.Errorf("load cloud token: %w", err)
+	}
+
+	if !ok || tok.ClientID != clientID {
+		return errSignInRequired()
+	}
+
+	return nil
+}
+
+// refreshPending returns the callback that replaces the pending token of was
+// with its refresh, unless the pending token changed since generation gen.
+// The refresh keeps the Provider and ClientID of was.
+func (c *Connection) refreshPending(gen uint64, was CloudToken) func(CloudToken) {
 	return func(t CloudToken) {
+		t.Provider, t.ClientID = was.Provider, was.ClientID
+
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
@@ -617,13 +670,8 @@ func (c *Connection) tokenPlan(ctx context.Context, s domain.ConnectionSettings)
 		return tokenPlan{}, errSignInRequired()
 	}
 
-	tok, ok, err := c.tokens.LoadCloudToken(ctx)
-	if err != nil {
-		return tokenPlan{}, fmt.Errorf("load cloud token: %w", err)
-	}
-
-	if !ok || tok.ClientID != clientID {
-		return tokenPlan{}, errSignInRequired()
+	if err := c.requireStoredToken(ctx, clientID); err != nil {
+		return tokenPlan{}, err
 	}
 
 	return tokenPlan{change: TokenKeep, gen: gen}, nil
