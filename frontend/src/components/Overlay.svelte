@@ -6,6 +6,9 @@
   import type { ProgressView } from "../lib/progress";
 
   let { text, progress }: { text: string; progress?: ProgressView } = $props();
+
+  // With nothing to transfer the bar is full, next to "Finishing…", not empty.
+  const empty = $derived(progress !== undefined && progress.total <= 0);
 </script>
 
 <div class="overlay" role="status" aria-live="polite" use:modal>
@@ -13,7 +16,7 @@
     {#if progress}
       <p>{progress.title}</p>
       <!-- The numbers change up to 10 times a second: the bar carries them for screen readers, the live region does not repeat them. -->
-      <progress max={progress.total} value={progress.done} aria-label={progress.title} aria-valuetext={progress.detail}></progress>
+      <progress max={empty ? 1 : progress.total} value={empty ? 1 : progress.done} aria-label={progress.title} aria-valuetext={progress.detail}></progress>
       <p class="detail" aria-hidden="true">{progress.detail}</p>
       {#if progress.warning}
         <p class="warning">{progress.warning}</p>

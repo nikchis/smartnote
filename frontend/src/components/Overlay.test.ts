@@ -56,6 +56,15 @@ describe("Overlay", () => {
     ]);
   });
 
+  it("fills the bar beside Finishing… when there is nothing to transfer", () => {
+    const el = show("Synchronizing…", { storage: "yandex_disk", direction: "download", unit: "bytes", done: 0, total: 0 });
+    const bar = el.querySelector("progress")!;
+
+    expect(lines(el)[1]).toBe("Finishing…");
+    expect(bar.max).toBe(1);
+    expect(bar.value).toBe(1);
+  });
+
   it("shows the notes of the server without the Yandex Disk warning", () => {
     const el = show("Connecting…", { storage: "ssh_postgres", direction: "download", unit: "notes", done: 12, total: 340 });
 
