@@ -104,7 +104,7 @@ func TestSyncServiceTimeoutByKind(t *testing.T) {
 					return s.Kind(), err
 				},
 			}
-			svc := NewSyncService(env, syncer)
+			svc := NewSyncService(env, syncer, nil)
 
 			if _, err := svc.Connect(); err != nil {
 				t.Fatalf("Connect: %v", err)

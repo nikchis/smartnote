@@ -81,6 +81,8 @@ func TestToUIError(t *testing.T) {
 				Expected: "SHA256:a", Got: "SHA256:b"}},
 		{name: "validation", err: wrap(&domain.ValidationError{Field: "ssh_port", Reason: "must be 1-65535"}),
 			want: UIError{Code: "validation", Message: "invalid ssh_port: must be 1-65535", Field: "ssh_port"}},
+		{name: "yandex account", err: wrap(&domain.ValidationError{Field: "yandex_account", Reason: "sign in required"}),
+			want: UIError{Code: "validation", Message: "Sign in to Yandex Disk first, or choose None (local only).", Field: "yandex_account"}},
 		{name: "not connected", err: wrap(domain.ErrNotConnected),
 			want: UIError{Code: "not_connected", Message: msgNotConnected}},
 		{name: "remote changed", err: wrap(domain.ErrRemoteChanged),
@@ -266,6 +268,24 @@ func TestLogErrorCloud(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("log %q lacks %q", got, want)
 		}
+	}
+
+	if strings.Contains(got, "step=") || strings.Contains(got, "net=") {
+		t.Errorf("log %q has a step or a network class the error lacks", got)
+	}
+
+	buf.Reset()
+	LogError(log, "backup", fmt.Errorf("upload: %w", yadisk.CloudError{Code: "network", Step: "upload", Net: "reset"}))
+
+	got = buf.String()
+	for _, want := range []string{"code=cloud", "status=0", "cloud_code=network", "step=upload", "net=reset"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log %q lacks %q", got, want)
+		}
+	}
+
+	if strings.Contains(got, "err=") {
+		t.Errorf("log %q has the error text", got)
 	}
 
 	for _, bad := range []string{"SECRET", "https://", "description"} {

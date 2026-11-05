@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1271,8 +1273,8 @@ func TestNetworkError(t *testing.T) {
 	h.disk.api.Close()
 
 	err := readErr(t, h.store())
-	if ce := cloudError(t, err); ce.Status != 0 || ce.Code != codeNetwork {
-		t.Errorf("CloudError = %+v, want 0 network", ce)
+	if ce := cloudError(t, err); ce.Status != 0 || ce.Code != codeNetwork || ce.Step != "stat" || ce.Net != "refused" {
+		t.Errorf("CloudError = %+v, want 0 network at stat, refused", ce)
 	}
 
 	cause := errors.Unwrap(cloudError(t, err))
@@ -1332,5 +1334,259 @@ func TestDefaultEndpoints(t *testing.T) {
 	want := Endpoints{API: "https://cloud-api.yandex.net", OAuth: "https://oauth.yandex.ru"}
 	if DefaultEndpoints != want {
 		t.Errorf("DefaultEndpoints = %+v, want %+v", DefaultEndpoints, want)
+	}
+}
+
+// progressLog collects the progress reports of a store; the transport may
+// report from its own goroutine.
+type progressLog struct {
+	mu  sync.Mutex
+	got []usecase.TransferProgress
+}
+
+func (l *progressLog) add(p usecase.TransferProgress) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.got = append(l.got, p)
+}
+
+func (l *progressLog) list() []usecase.TransferProgress {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return slices.Clone(l.got)
+}
+
+// tickingNow is a clock that moves 200 ms on every call, so that the
+// throttle lets every report of a transfer pass.
+func tickingNow() func() time.Time {
+	var ticks atomic.Int64
+
+	return func() time.Time { return testNow.Add(time.Duration(ticks.Add(1)) * 200 * time.Millisecond) }
+}
+
+// wantTransfer checks that reports are one whole transfer of total bytes in
+// direction: from 0, never back, up to total.
+func wantTransfer(t *testing.T, reports []usecase.TransferProgress, direction string, total int64, minReports int) {
+	t.Helper()
+
+	if len(reports) < minReports {
+		t.Fatalf("%d reports, want at least %d: %+v", len(reports), minReports, reports)
+	}
+
+	want := usecase.TransferProgress{Storage: domain.KindYandexDisk, Direction: direction, Unit: usecase.UnitBytes, Total: total}
+
+	var last int64
+
+	for i, p := range reports {
+		if p.Storage != want.Storage || p.Direction != want.Direction || p.Unit != want.Unit || p.Total != want.Total {
+			t.Fatalf("report %d = %+v, want %+v", i, p, want)
+		}
+
+		if p.Done < last {
+			t.Fatalf("report %d goes back: %d after %d", i, p.Done, last)
+		}
+
+		last = p.Done
+	}
+
+	if reports[0].Done != 0 || last != total {
+		t.Errorf("reports go from %d to %d, want 0 to %d", reports[0].Done, last, total)
+	}
+}
+
+func TestWriteReportsUploadProgress(t *testing.T) {
+	h := newHarness(t)
+	data := bytes.Repeat([]byte("u"), 300_000)
+
+	var log progressLog
+
+	opts := h.options()
+	opts.Progress, opts.Now = log.add, tickingNow()
+
+	if err := NewStore(h.disk.endpoints(), h.tokens, h.pending, opts).Write(t.Context(), container, data, ""); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	wantTransfer(t, log.list(), usecase.DirectionUpload, int64(len(data)), 3)
+	wantContainer(t, h.disk, data)
+}
+
+func TestReadReportsDownloadProgress(t *testing.T) {
+	h := newHarness(t)
+	data := bytes.Repeat([]byte("d"), 300_000)
+	h.disk.put(container, data, testNow)
+
+	var log progressLog
+
+	opts := h.options()
+	opts.Progress, opts.Now = log.add, tickingNow()
+
+	got, _, _ := mustRead(t, NewStore(h.disk.endpoints(), h.tokens, h.pending, opts))
+	if !bytes.Equal(got, data) {
+		t.Fatal("Read returned other bytes")
+	}
+
+	wantTransfer(t, log.list(), usecase.DirectionDownload, int64(len(data)), 3)
+}
+
+func TestProgressThrottled(t *testing.T) {
+	h := newHarness(t)
+	data := bytes.Repeat([]byte("t"), 300_000)
+
+	var log progressLog
+
+	opts := h.options() // the clock stands still: only the first and the last report pass
+	opts.Progress = log.add
+
+	if err := NewStore(h.disk.endpoints(), h.tokens, h.pending, opts).Write(t.Context(), container, data, ""); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	got := log.list()
+	wantTransfer(t, got, usecase.DirectionUpload, int64(len(data)), 2)
+
+	if len(got) != 2 {
+		t.Errorf("%d reports in one instant, want 2 (the first and the last)", len(got))
+	}
+}
+
+func TestFactoryWithProgress(t *testing.T) {
+	h := newHarness(t)
+	h.disk.put(container, []byte("container"), testNow)
+
+	var log progressLog
+
+	s := h.fromFactory(NewStoreFactory(h.disk.endpoints(), h.pending, WithProgress(log.add), withClients(h.options())))
+	if _, _, _, err := s.Read(t.Context(), container); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	wantTransfer(t, log.list(), usecase.DirectionDownload, int64(len("container")), 2)
+}
+
+// idleCounter is a transport that counts CloseIdleConnections.
+type idleCounter struct {
+	http.RoundTripper
+
+	closed atomic.Int32
+}
+
+func (c *idleCounter) CloseIdleConnections() { c.closed.Add(1) }
+
+func TestStoreCloseClosesIdleConnections(t *testing.T) {
+	h := newHarness(t)
+	api := &idleCounter{RoundTripper: h.disk.api.Client().Transport}
+	href := &idleCounter{RoundTripper: h.disk.href.Client().Transport}
+
+	opts := h.options()
+	opts.HTTP, opts.Href = &http.Client{Transport: api}, &http.Client{Transport: href}
+
+	s := NewStore(h.disk.endpoints(), h.tokens, h.pending, opts)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if api.closed.Load() == 0 || href.closed.Load() == 0 {
+		t.Errorf("CloseIdleConnections: api %d, href %d times, want both", api.closed.Load(), href.closed.Load())
+	}
+}
+
+func TestErrorSteps(t *testing.T) {
+	old := []byte("container")
+
+	tests := []struct {
+		name  string
+		write bool
+		edit  func(d *fakeDisk)
+		step  string
+	}{
+		{name: "metadata", edit: func(d *fakeDisk) { d.fail[epMeta] = fakeFailure{500, "DiskInternalError"} }, step: "stat"},
+		{name: "download link", edit: func(d *fakeDisk) { d.fail[epDownload] = fakeFailure{500, ""} }, step: "download_link"},
+		{name: "download", edit: func(d *fakeDisk) { d.fail[epGet] = fakeFailure{500, ""} }, step: "download"},
+		{name: "upload link", write: true, edit: func(d *fakeDisk) { d.fail[epUpload] = fakeFailure{500, ""} }, step: "upload_link"},
+		{name: "upload", write: true, edit: func(d *fakeDisk) { d.fail[epPut] = fakeFailure{500, ""} }, step: "upload"},
+		{name: "md5 of the upload", write: true, edit: func(d *fakeDisk) { d.uploadMD5 = md5Of([]byte("other")) }, step: "wait_md5"},
+		{name: "move", write: true, edit: func(d *fakeDisk) { d.fail[epMove] = fakeFailure{403, "ForbiddenError"} }, step: "move"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.disk.put(container, old, testNow)
+			h.disk.set(tc.edit)
+
+			var err error
+			if tc.write {
+				err = h.store().Write(t.Context(), container, []byte("new"), md5Of(old))
+			} else {
+				err = readErr(t, h.store())
+			}
+
+			if ce := cloudError(t, err); ce.Step != tc.step || ce.Net != "" {
+				t.Errorf("CloudError = %+v, want step %s without net", ce, tc.step)
+			}
+		})
+	}
+}
+
+// TestLoggedSteps checks the steps of the failures that the store only logs:
+// the deletion of its own temporary file, the fence and the cleanup.
+func TestLoggedSteps(t *testing.T) {
+	old := []byte("container")
+
+	tests := []struct {
+		name string
+		edit func(d *fakeDisk)
+		want string
+	}{
+		{
+			name: "delete after a version mismatch",
+			edit: func(d *fakeDisk) { d.deleteFail = true },
+			want: "at delete",
+		},
+		{
+			name: "fence after a failed move",
+			edit: func(d *fakeDisk) { d.deleteFail, d.fail[epMove] = true, fakeFailure{500, "DiskInternalError"} },
+			want: "at fence",
+		},
+		{
+			name: "cleanup",
+			edit: func(d *fakeDisk) { d.fail[epList] = fakeFailure{500, "DiskInternalError"} },
+			want: "at cleanup",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.disk.put(container, old, testNow)
+			h.disk.set(tc.edit)
+
+			var buf bytes.Buffer
+
+			opts := h.options()
+			opts.Log = slog.New(slog.NewTextHandler(&buf, nil))
+
+			expect := md5Of(old)
+			if tc.name == "delete after a version mismatch" {
+				expect = md5Of([]byte("stale"))
+			}
+
+			_ = NewStore(h.disk.endpoints(), h.tokens, h.pending, opts).Write(t.Context(), container, []byte("new"), expect) // the log is checked
+
+			if !strings.Contains(buf.String(), tc.want) {
+				t.Errorf("log %q lacks %q", buf.String(), tc.want)
+			}
+		})
+	}
+}
+
+// withClients makes a factory's stores use the emulator's clients and the
+// test's seams of o.
+func withClients(o StoreOptions) FactoryOption {
+	return func(opts *StoreOptions) {
+		opts.HTTP, opts.Href, opts.Now, opts.Sleep, opts.NewID = o.HTTP, o.Href, o.Now, o.Sleep, o.NewID
 	}
 }

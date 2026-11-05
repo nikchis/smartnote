@@ -84,7 +84,12 @@ const (
 	msgNoSpace               = "Not enough space on Yandex Disk."
 	msgFileTooLarge          = "The file is larger than your Yandex Disk plan allows."
 	msgLoopbackUnavailable   = "The local sign-in address is unavailable. Enter the code manually."
+	msgSignInFirst           = "Sign in to Yandex Disk first, or choose None (local only)."
 )
+
+// fieldYandexAccount is the field of the validation error of a Yandex Disk
+// storage without a sign-in; the interface marks the account block.
+const fieldYandexAccount = "yandex_account"
 
 // sentinels maps domain and use case errors to their code and text, in the order they are checked.
 var sentinels = []struct {
@@ -134,7 +139,7 @@ func classify(err error) *UIError {
 	}
 
 	if ve, ok := errors.AsType[*domain.ValidationError](err); ok {
-		return &UIError{Code: codeValidation, Message: ve.Error(), Field: ve.Field}
+		return validationError(ve)
 	}
 
 	if hk, ok := errors.AsType[*domain.HostKeyUnknownError](err); ok {
@@ -163,6 +168,16 @@ func classify(err error) *UIError {
 	default:
 		return &UIError{Code: codeInternal, Message: err.Error()}
 	}
+}
+
+// validationError is the UIError of ve: its own text, except for the account
+// of Yandex Disk, whose text tells what to do.
+func validationError(ve *domain.ValidationError) *UIError {
+	if ve.Field == fieldYandexAccount {
+		return &UIError{Code: codeValidation, Message: msgSignInFirst, Field: ve.Field}
+	}
+
+	return &UIError{Code: codeValidation, Message: ve.Error(), Field: ve.Field}
 }
 
 // cloudMessage is the text of a Yandex Disk error: the two statuses with a
@@ -198,9 +213,9 @@ func isDatabase(err error) bool {
 // LogError writes err to log when its code is worth a record: internal with
 // its text; ssh, database and timeout without it, since those texts name the
 // user, the database and the host (spec §3.5). A Yandex Disk error is logged
-// by its status and code, and reauth_required, remote_outcome_unknown and
-// remote_damaged by the code alone (spec §9). Codes the interface explains to
-// the user are not logged.
+// by its status, code, step and network class, without its text, and
+// reauth_required, remote_outcome_unknown and remote_damaged by the code
+// alone (spec §9). Codes the interface explains to the user are not logged.
 func LogError(log *slog.Logger, msg string, err error) {
 	if err == nil {
 		return
@@ -215,8 +230,23 @@ func LogError(log *slog.Logger, msg string, err error) {
 		log.Error(msg, "code", ui.Code, applog.Redacted(err))
 	case codeCloud:
 		ce, _ := errors.AsType[yadisk.CloudError](err)
-		log.Error(msg, "code", ui.Code, "status", ce.Status, "cloud_code", ce.Code)
+		log.Error(msg, cloudAttrs(ui.Code, ce)...)
 	case codeReauthRequired, codeRemoteOutcomeUnknown, codeRemoteDamaged:
 		log.Error(msg, "code", ui.Code)
 	}
+}
+
+// cloudAttrs are the log attributes of a Yandex Disk error; the step and the
+// network class only when the error has them.
+func cloudAttrs(code string, ce yadisk.CloudError) []any {
+	attrs := []any{"code", code, "status", ce.Status, "cloud_code", ce.Code}
+	if ce.Step != "" {
+		attrs = append(attrs, "step", ce.Step)
+	}
+
+	if ce.Net != "" {
+		attrs = append(attrs, "net", ce.Net)
+	}
+
+	return attrs
 }

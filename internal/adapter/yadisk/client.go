@@ -6,14 +6,17 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -47,6 +50,35 @@ const (
 	codeInvalidGrant       = "invalid_grant"
 	codeInvalidClient      = "invalid_client"
 	codeUnauthorizedClient = "unauthorized_client"
+
+	// idleConnTimeout closes a kept connection that no request used for this
+	// long: a long-idle connection may already be dropped by the network.
+	idleConnTimeout = 30 * time.Second
+)
+
+// Steps of the Store, CloudError.Step: the request that failed.
+const (
+	stepStat         = "stat"          // metadata of the object, before the download and the move
+	stepDownloadLink = "download_link" // GET /resources/download
+	stepDownload     = "download"      // GET of the download link
+	stepUploadLink   = "upload_link"   // GET /resources/upload
+	stepUpload       = "upload"        // PUT to the upload link
+	stepWaitMD5      = "wait_md5"      // metadata of the uploaded file
+	stepMove         = "move"          // the move and its operation
+	stepFence        = "fence"         // the fence of a move with an unknown outcome
+	stepCleanup      = "cleanup"       // the cleanup of old temporary files
+	stepDelete       = "delete"        // deletion of the Write's own temporary file
+)
+
+// Classes of a network error, CloudError.Net.
+const (
+	netTimeout = "timeout"
+	netReset   = "reset"
+	netEOF     = "eof"
+	netDNS     = "dns"
+	netTLS     = "tls"
+	netRefused = "refused"
+	netOther   = "other"
 )
 
 // knownCodes are the error names of the Disk API and of Yandex OAuth that
@@ -87,16 +119,31 @@ var (
 
 // CloudError is an error answer of Yandex Disk or OAuth (Status is the HTTP
 // status) or a request without an answer (Status 0, Code "network"). Code is
-// a known Yandex error name or "other". The text of the answer and the URLs
-// of the request never get into it (spec §5.4, §9).
+// a known Yandex error name or "other". Step names the request of the Store
+// that failed ("" for OAuth), Net the class of a network error ("timeout",
+// "reset", "eof", "dns", "tls", "refused" or "other"). The text of the answer
+// and the URLs of the request never get into it (spec §5.4, §9).
 type CloudError struct {
 	Status int
 	Code   string
+	Step   string
+	Net    string
 
 	err error // why there is no answer, without the request URL
 }
 
-func (e CloudError) Error() string { return fmt.Sprintf("yandex disk error: %d %s", e.Status, e.Code) }
+func (e CloudError) Error() string {
+	text := fmt.Sprintf("yandex disk error: %d %s", e.Status, e.Code)
+	if e.Step != "" {
+		text += " at " + e.Step
+	}
+
+	if e.Net != "" {
+		text += " (" + e.Net + ")"
+	}
+
+	return text
+}
 
 // Unwrap returns the cause of a network error.
 func (e CloudError) Unwrap() error { return e.err }
@@ -129,7 +176,65 @@ func networkError(err error) CloudError {
 		err = ue.Err
 	}
 
-	return CloudError{Code: codeNetwork, err: err}
+	return CloudError{Code: codeNetwork, Net: netClass(err), err: err}
+}
+
+// netClass is the class of the cause of a request without an answer, for
+// the log: the cause itself may quote addresses.
+func netClass(err error) string {
+	switch {
+	case isDNS(err):
+		return netDNS
+	case isTLS(err):
+		return netTLS
+	case isTimeout(err):
+		return netTimeout
+	case errors.Is(err, syscall.ECONNRESET):
+		return netReset
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return netRefused
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return netEOF
+	default:
+		return netOther
+	}
+}
+
+func isDNS(err error) bool {
+	_, ok := errors.AsType[*net.DNSError](err)
+	return ok
+}
+
+func isTimeout(err error) bool {
+	ne, ok := errors.AsType[net.Error](err)
+	return ok && ne.Timeout()
+}
+
+// isTLS reports a failed TLS handshake or certificate check.
+func isTLS(err error) bool {
+	if _, ok := errors.AsType[*tls.CertificateVerificationError](err); ok {
+		return true
+	}
+
+	if _, ok := errors.AsType[tls.RecordHeaderError](err); ok {
+		return true
+	}
+
+	if _, ok := errors.AsType[tls.AlertError](err); ok {
+		return true
+	}
+
+	if _, ok := errors.AsType[x509.UnknownAuthorityError](err); ok {
+		return true
+	}
+
+	if _, ok := errors.AsType[x509.HostnameError](err); ok {
+		return true
+	}
+
+	_, ok := errors.AsType[x509.CertificateInvalidError](err)
+
+	return ok
 }
 
 // isStatus reports whether err is an answer with status.
@@ -140,7 +245,8 @@ func isStatus(err error, status int) bool {
 
 // defaultHTTP is the base client of both kinds of requests: system roots,
 // TLS 1.2 or later and the proxy from the environment. One transport serves
-// all stores, so connections are reused between operations.
+// all stores, so connections are reused within an operation; Store.Close
+// closes the idle ones at its end, and idleConnTimeout bounds their life.
 var defaultHTTP = sync.OnceValue(func() *http.Client {
 	t := &http.Transport{Proxy: http.ProxyFromEnvironment}
 	if dt, ok := http.DefaultTransport.(*http.Transport); ok {
@@ -148,6 +254,7 @@ var defaultHTTP = sync.OnceValue(func() *http.Client {
 	}
 
 	t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	t.IdleConnTimeout = idleConnTimeout
 
 	return &http.Client{Transport: t}
 })
@@ -204,9 +311,9 @@ func (c apiClient) link(href string) (*url.URL, error) {
 	return u, nil
 }
 
-// send sends the request with the access token and decodes a 2xx answer into
-// out (nil skips the body). It returns the status of the answer.
-func (c apiClient) send(ctx context.Context, method string, u *url.URL, access string, out any) (int, error) {
+// send sends the request of step with the access token and decodes a 2xx
+// answer into out (nil skips the body). It returns the status of the answer.
+func (c apiClient) send(ctx context.Context, step, method string, u *url.URL, access string, out any) (int, error) {
 	if c.base == nil || u.Scheme != schemeHTTPS || u.Host != c.base.Host {
 		return 0, errForeignHost
 	}
@@ -219,30 +326,35 @@ func (c apiClient) send(ctx context.Context, method string, u *url.URL, access s
 	req.Header.Set("Authorization", "OAuth "+access)
 	req.Header.Set("Accept", "application/json")
 
-	return roundTrip(c.http, req, out)
+	return roundTrip(c.http, req, step, out)
 }
 
-// roundTrip sends req and decodes a 2xx JSON answer into out (nil skips it);
-// any other status becomes a CloudError.
-func roundTrip(hc *http.Client, req *http.Request, out any) (int, error) {
+// roundTrip sends req, the request of step, and decodes a 2xx JSON answer
+// into out (nil skips it); any other status becomes a CloudError.
+func roundTrip(hc *http.Client, req *http.Request, step string, out any) (int, error) {
+	fail := func(ce CloudError) (int, error) {
+		ce.Step = step
+		return ce.Status, ce
+	}
+
 	resp, err := hc.Do(req)
 	if err != nil {
-		return 0, networkError(err)
+		return fail(networkError(err))
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer))
 	if err != nil {
-		return 0, networkError(err)
+		return fail(networkError(err))
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return resp.StatusCode, answerError(resp.StatusCode, body)
+		return fail(answerError(resp.StatusCode, body))
 	}
 
 	if out != nil && len(body) > 0 {
 		if err := json.Unmarshal(body, out); err != nil {
-			return resp.StatusCode, CloudError{Status: resp.StatusCode, Code: codeOther}
+			return fail(CloudError{Status: resp.StatusCode, Code: codeOther})
 		}
 	}
 
@@ -274,46 +386,50 @@ func checkHrefRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// secureLink parses a link of an answer and requires https.
+// secureLink parses a link of an answer and requires https. Its errors are
+// errBadLink and errInsecureLink.
 func secureLink(href string) (string, error) {
 	u, err := url.Parse(href)
 	if err != nil {
-		return "", CloudError{Code: codeOther, err: errBadLink}
+		return "", errBadLink // the parse error quotes the link
 	}
 
 	if u.Scheme != schemeHTTPS || u.Host == "" {
-		return "", CloudError{Code: codeOther, err: errInsecureLink}
+		return "", errInsecureLink
 	}
 
 	return u.String(), nil
 }
 
-// get downloads href; more than limit bytes is errTooLarge.
-func (c hrefClient) get(ctx context.Context, href string, limit int64) ([]byte, error) {
+// get downloads href, counting the bytes of the body with m; more than limit
+// bytes is errTooLarge.
+func (c hrefClient) get(ctx context.Context, href string, limit int64, m *meter) ([]byte, error) {
+	defer m.stop()
+
 	link, err := secureLink(href)
 	if err != nil {
-		return nil, err
+		return nil, CloudError{Code: codeOther, Step: stepDownload, err: err}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, http.NoBody)
 	if err != nil {
-		return nil, CloudError{Code: codeOther, err: errBadLink}
+		return nil, CloudError{Code: codeOther, Step: stepDownload, err: errBadLink}
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, networkError(err)
+		return nil, withStep(networkError(err), stepDownload)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAnswer)) // the status is the error
-		return nil, answerError(resp.StatusCode, body)
+		return nil, withStep(answerError(resp.StatusCode, body), stepDownload)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	data, err := io.ReadAll(io.LimitReader(meteredReader{r: resp.Body, m: m}, limit+1))
 	if err != nil {
-		return nil, networkError(err)
+		return nil, withStep(networkError(err), stepDownload)
 	}
 
 	if int64(len(data)) > limit {
@@ -323,21 +439,110 @@ func (c hrefClient) get(ctx context.Context, href string, limit int64) ([]byte, 
 	return data, nil
 }
 
-// put uploads data to href.
-func (c hrefClient) put(ctx context.Context, href string, data []byte) error {
+// put uploads data to href, counting the bytes of the body with m.
+func (c hrefClient) put(ctx context.Context, href string, data []byte, m *meter) error {
+	defer m.stop() // the transport may read the body after Do returns
+
 	link, err := secureLink(href)
 	if err != nil {
-		return err
+		return CloudError{Code: codeOther, Step: stepUpload, err: err}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, link, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, link, meteredReader{r: bytes.NewReader(data), m: m})
 	if err != nil {
-		return CloudError{Code: codeOther, err: errBadLink}
+		return CloudError{Code: codeOther, Step: stepUpload, err: errBadLink}
 	}
 
-	_, err = roundTrip(c.http, req, nil)
+	// The body is not a *bytes.Reader any more: its length and a fresh copy
+	// for a retry or a redirect are set here, as NewRequest would.
+	req.ContentLength = int64(len(data))
+	req.GetBody = func() (io.ReadCloser, error) {
+		m.restart()
+		return io.NopCloser(meteredReader{r: bytes.NewReader(data), m: m}), nil
+	}
+
+	if len(data) == 0 {
+		req.Body, req.GetBody = http.NoBody, nil
+	}
+
+	_, err = roundTrip(c.http, req, stepUpload, nil)
 
 	return err
+}
+
+// withStep returns ce marked with step.
+func withStep(ce CloudError, step string) CloudError {
+	ce.Step = step
+	return ce
+}
+
+// meter counts the bytes of one transfer and reports the count. After stop
+// it reports nothing: the transport may read a request body from its own
+// goroutine even after the request is over. A nil meter counts nothing.
+type meter struct {
+	report func(done int64)
+
+	mu      sync.Mutex
+	done    int64
+	stopped bool
+}
+
+// startMeter reports 0 to report and returns a meter that reports to it.
+func startMeter(report func(done int64)) *meter {
+	report(0)
+	return &meter{report: report}
+}
+
+func (m *meter) add(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.stopped {
+		return
+	}
+
+	m.done += int64(n)
+	m.report(m.done)
+}
+
+// restart counts from 0 again: the body is sent anew.
+func (m *meter) restart() {
+	if m == nil {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.done = 0
+}
+
+func (m *meter) stop() {
+	if m == nil {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.stopped = true
+}
+
+// meteredReader counts what is read from r with m.
+type meteredReader struct {
+	r io.Reader
+	m *meter
+}
+
+func (r meteredReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.m.add(n)
+
+	return n, err
 }
 
 // tokenAnswer is a successful answer of the OAuth token endpoint.
@@ -362,7 +567,7 @@ func (a tokenAnswer) expiry(now time.Time) time.Time {
 func postToken(ctx context.Context, hc *http.Client, endpoint string, form url.Values) (tokenAnswer, error) {
 	link, err := secureLink(endpoint)
 	if err != nil {
-		return tokenAnswer{}, err
+		return tokenAnswer{}, CloudError{Code: codeOther, err: err}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, link, strings.NewReader(form.Encode()))
@@ -374,7 +579,7 @@ func postToken(ctx context.Context, hc *http.Client, endpoint string, form url.V
 	req.Header.Set("Accept", "application/json")
 
 	var answer tokenAnswer
-	if _, err := roundTrip(hc, req, &answer); err != nil {
+	if _, err := roundTrip(hc, req, "", &answer); err != nil {
 		return tokenAnswer{}, err
 	}
 

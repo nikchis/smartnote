@@ -7,7 +7,9 @@ import (
 	"errors"
 	"log"
 	"os"
+	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -192,10 +194,34 @@ func (nopIndex) NoteSaved(domain.Note) {}
 func (nopIndex) NoteDeleted(uuid.UUID) {}
 
 type machine struct {
-	store *sqlite.Store
-	sync  *usecase.Sync
-	notes *usecase.Notes
-	conn  *usecase.Connection
+	store    *sqlite.Store
+	sync     *usecase.Sync
+	notes    *usecase.Notes
+	conn     *usecase.Connection
+	progress *progressLog
+}
+
+// progressLog collects the progress reports of a machine.
+type progressLog struct {
+	mu  sync.Mutex
+	got []usecase.TransferProgress
+}
+
+func (l *progressLog) add(p usecase.TransferProgress) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.got = append(l.got, p)
+}
+
+// reached reports whether a transfer in direction reached total notes.
+func (l *progressLog) reached(direction string, total int64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	want := usecase.TransferProgress{Storage: domain.KindSSHPostgres, Direction: direction, Unit: usecase.UnitNotes, Done: total, Total: total}
+
+	return slices.Contains(l.got, want)
 }
 
 var testKDF = sealbox.KDFParams{Time: 1, MemoryKiB: 19456, Threads: 1}
@@ -226,7 +252,9 @@ func newMachine(t *testing.T, s domain.ConnectionSettings, key *domain.KeyPair) 
 		}
 	}
 
-	connector, err := NewConnector(store)
+	progress := &progressLog{}
+
+	connector, err := NewConnector(store, WithProgress(progress.add))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +285,7 @@ func newMachine(t *testing.T, s domain.ConnectionSettings, key *domain.KeyPair) 
 		t.Fatal(err)
 	}
 
-	return &machine{store: store, sync: sync, notes: notes, conn: conn}
+	return &machine{store: store, sync: sync, notes: notes, conn: conn, progress: progress}
 }
 
 // connect runs the connect check, trusting the server key on first contact
@@ -323,6 +351,10 @@ func TestTunnelEndToEnd(t *testing.T) {
 
 	if err := b.sync.CommitBackup(ctx); err != nil {
 		t.Fatalf("B: CommitBackup: %v", err)
+	}
+
+	if !b.progress.reached(usecase.DirectionDownload, 1) || !b.progress.reached(usecase.DirectionUpload, 1) {
+		t.Errorf("B: progress = %+v, want the download and the upload of 1 note", b.progress.got)
 	}
 
 	if out := a.connect(t); out.Status != usecase.StatusRemoteNewer {

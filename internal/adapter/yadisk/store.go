@@ -80,20 +80,24 @@ type StoreOptions struct {
 	Sleep      func(context.Context, time.Duration) error // default waits on a timer or ctx
 	NewID      func() uuid.UUID                           // names temporary files; default uuid.New
 	Log        *slog.Logger                               // failures of cleanup and of the pending record; default discards
+	// Progress receives the bytes of each upload and download, at most 10
+	// reports a second by Now and always the last one; nil reports nothing.
+	Progress usecase.ProgressFunc
 }
 
 // Store is the blobremote.ObjectStore over the app folder of Yandex Disk
 // (spec §5.4): an object is the file app:/<name>, its version is the file's
 // MD5. A Store serves one operation and is not safe for concurrent use.
 type Store struct {
-	api     apiClient
-	href    hrefClient
-	tokens  usecase.CloudTokenSource
-	pending PendingStore
-	now     func() time.Time
-	sleep   func(context.Context, time.Duration) error
-	newID   func() uuid.UUID
-	log     *slog.Logger
+	api      apiClient
+	href     hrefClient
+	tokens   usecase.CloudTokenSource
+	pending  PendingStore
+	now      func() time.Time
+	sleep    func(context.Context, time.Duration) error
+	newID    func() uuid.UUID
+	log      *slog.Logger
+	progress usecase.ProgressFunc
 
 	memory *pendingMemory // temporary files to fence that pending could not record
 
@@ -105,15 +109,16 @@ type Store struct {
 // and keeps the pending record in pending, which must not be nil.
 func NewStore(e Endpoints, tokens usecase.CloudTokenSource, pending PendingStore, opts StoreOptions) *Store {
 	s := &Store{
-		api:     newAPIClient(opts.HTTP, e.API),
-		href:    newHrefClient(opts.Href),
-		tokens:  tokens,
-		pending: pending,
-		now:     opts.Now,
-		sleep:   opts.Sleep,
-		newID:   opts.NewID,
-		log:     cmp.Or(opts.Log, slog.New(slog.DiscardHandler)),
-		memory:  &pendingMemory{},
+		api:      newAPIClient(opts.HTTP, e.API),
+		href:     newHrefClient(opts.Href),
+		tokens:   tokens,
+		pending:  pending,
+		now:      opts.Now,
+		sleep:    opts.Sleep,
+		newID:    opts.NewID,
+		log:      cmp.Or(opts.Log, slog.New(slog.DiscardHandler)),
+		progress: opts.Progress,
+		memory:   &pendingMemory{},
 	}
 
 	if s.now == nil {
@@ -137,6 +142,12 @@ type FactoryOption func(*StoreOptions)
 // WithLog makes the stores write the failures of their cleanup to log.
 func WithLog(log *slog.Logger) FactoryOption {
 	return func(o *StoreOptions) { o.Log = log }
+}
+
+// WithProgress makes the stores report the bytes of their uploads and
+// downloads to f.
+func WithProgress(f usecase.ProgressFunc) FactoryOption {
+	return func(o *StoreOptions) { o.Progress = f }
 }
 
 // NewStoreFactory builds a Store per operation over the target's token.
@@ -251,7 +262,7 @@ func (s *Store) Read(ctx context.Context, name string) (data []byte, version str
 
 // download reads the metadata of path and then its bytes.
 func (s *Store) download(ctx context.Context, path string) (data []byte, sum string, found bool, err error) {
-	r, found, err := s.meta(ctx, path, "md5,size,type")
+	r, found, err := s.meta(ctx, stepStat, path, "md5,size,type")
 	if err != nil || !found {
 		return nil, "", false, err
 	}
@@ -261,7 +272,7 @@ func (s *Store) download(ctx context.Context, path string) (data []byte, sum str
 	}
 
 	var l link
-	if err := s.get(ctx, downloadPath, url.Values{qPath: {path}}, &l); err != nil {
+	if err := s.get(ctx, stepDownloadLink, downloadPath, url.Values{qPath: {path}}, &l); err != nil {
 		if isStatus(err, http.StatusNotFound) {
 			return nil, "", false, nil
 		}
@@ -269,7 +280,7 @@ func (s *Store) download(ctx context.Context, path string) (data []byte, sum str
 		return nil, "", false, fmt.Errorf("download link: %w", err)
 	}
 
-	data, err = s.href.get(ctx, l.Href, maxObject)
+	data, err = s.href.get(ctx, l.Href, maxObject, s.meter(usecase.DirectionDownload, r.Size))
 	if errors.Is(err, errTooLarge) {
 		return nil, "", false, fmt.Errorf("download: %w", domain.ErrRemoteDamaged)
 	}
@@ -281,9 +292,10 @@ func (s *Store) download(ctx context.Context, path string) (data []byte, sum str
 	return data, r.MD5, true, nil
 }
 
-// meta returns the metadata fields of path; found is false on 404.
-func (s *Store) meta(ctx context.Context, path, fields string) (r resource, found bool, err error) {
-	err = s.get(ctx, resourcesPath, url.Values{qPath: {path}, qFields: {fields}}, &r)
+// meta returns the metadata fields of path, the request of step; found is
+// false on 404.
+func (s *Store) meta(ctx context.Context, step, path, fields string) (r resource, found bool, err error) {
+	err = s.get(ctx, step, resourcesPath, url.Values{qPath: {path}, qFields: {fields}}, &r)
 	if isStatus(err, http.StatusNotFound) {
 		return resource{}, false, nil
 	}
@@ -337,11 +349,11 @@ func (s *Store) stage(ctx context.Context, tmp, path string, data []byte, sum, e
 
 func (s *Store) upload(ctx context.Context, tmp string, data []byte) error {
 	var l link
-	if err := s.get(ctx, uploadPath, url.Values{qPath: {tmp}, qOverwrite: {"false"}}, &l); err != nil {
+	if err := s.get(ctx, stepUploadLink, uploadPath, url.Values{qPath: {tmp}, qOverwrite: {"false"}}, &l); err != nil {
 		return fmt.Errorf("upload link: %w", err)
 	}
 
-	if err := s.href.put(ctx, l.Href, data); err != nil {
+	if err := s.href.put(ctx, l.Href, data, s.meter(usecase.DirectionUpload, int64(len(data)))); err != nil {
 		return fmt.Errorf("upload: %w", err)
 	}
 
@@ -352,14 +364,14 @@ func (s *Store) upload(ctx context.Context, tmp string, data []byte) error {
 // answered with 202 gets later, and checks it against sum.
 func (s *Store) waitMD5(ctx context.Context, tmp, sum string) error {
 	for delay := pollFirst; ; delay = min(2*delay, pollMax) {
-		r, found, err := s.meta(ctx, tmp, "md5")
+		r, found, err := s.meta(ctx, stepWaitMD5, tmp, "md5")
 		if err != nil {
 			return fmt.Errorf("uploaded file: %w", err)
 		}
 
 		if found && r.MD5 != "" {
 			if !strings.EqualFold(r.MD5, sum) {
-				return CloudError{Code: codeOther, err: errChecksum}
+				return CloudError{Code: codeOther, Step: stepWaitMD5, err: errChecksum}
 			}
 
 			return nil
@@ -374,7 +386,7 @@ func (s *Store) waitMD5(ctx context.Context, tmp, sum string) error {
 // checkVersion returns ErrVersionMismatch unless path has the md5 expect, or
 // is missing when expect is "".
 func (s *Store) checkVersion(ctx context.Context, path, expect string) error {
-	r, found, err := s.meta(ctx, path, "md5")
+	r, found, err := s.meta(ctx, stepStat, path, "md5")
 	if err != nil {
 		return err
 	}
@@ -456,7 +468,7 @@ func (s *Store) move(ctx context.Context, tmp, path string, create bool) (moveRe
 
 	var l link
 
-	status, err := s.call(ctx, http.MethodPost, u, &l)
+	status, err := s.call(ctx, stepMove, http.MethodPost, u, &l)
 	if err != nil {
 		if mayBeApplied(err) {
 			return moveUnknown, err
@@ -469,13 +481,13 @@ func (s *Store) move(ctx context.Context, tmp, path string, create bool) (moveRe
 		return moveDone, nil
 	}
 
-	done, err := s.waitOperation(ctx, l.Href)
+	done, err := s.waitOperation(ctx, stepMove, l.Href)
 
 	switch {
 	case err != nil:
 		return moveUnknown, err
 	case !done:
-		return moveRejected, CloudError{Code: codeOther, err: errOperationFailed}
+		return moveRejected, CloudError{Code: codeOther, Step: stepMove, err: errOperationFailed}
 	}
 
 	return moveDone, nil
@@ -492,9 +504,10 @@ func mayBeApplied(err error) bool {
 	return ok && (ce.Status == 0 || accepted || ce.Status >= http.StatusInternalServerError)
 }
 
-// waitOperation polls the operation link of a 202 answer until the operation
-// ends; done reports its success. An error means the poll failed.
-func (s *Store) waitOperation(ctx context.Context, href string) (done bool, err error) {
+// waitOperation polls the operation link of a 202 answer to the request of
+// step until the operation ends; done reports its success. An error means
+// the poll failed.
+func (s *Store) waitOperation(ctx context.Context, step, href string) (done bool, err error) {
 	u, err := s.api.link(href)
 	if err != nil {
 		return false, err
@@ -509,7 +522,7 @@ func (s *Store) waitOperation(ctx context.Context, href string) (done bool, err 
 			Status string `json:"status"`
 		}
 
-		if _, err := s.call(ctx, http.MethodGet, u, &op); err != nil {
+		if _, err := s.call(ctx, step, http.MethodGet, u, &op); err != nil {
 			return false, fmt.Errorf("operation status: %w", err)
 		}
 
@@ -541,7 +554,7 @@ func (s *Store) fence(base context.Context, tmpName, path, sum string, cause err
 	)
 
 	err := s.withDeadline(base, func(ctx context.Context) (err error) {
-		r, found, err = s.meta(ctx, path, "md5")
+		r, found, err = s.meta(ctx, stepFence, path, "md5")
 		return err
 	})
 	if err != nil {
@@ -553,7 +566,7 @@ func (s *Store) fence(base context.Context, tmpName, path, sum string, cause err
 	}
 
 	if _, ok := errors.AsType[CloudError](cause); !ok {
-		cause = CloudError{Code: codeNetwork, err: cause}
+		cause = CloudError{Code: codeNetwork, Step: stepMove, Net: netClass(cause), err: cause}
 	}
 
 	return fmt.Errorf("move: %w", cause)
@@ -602,7 +615,7 @@ func (s *Store) settle(ctx context.Context) error {
 // failure leaves the outcome unknown, except a refused token, which asks for
 // a new sign-in; the caller keeps the record either way.
 func (s *Store) fenceTemp(ctx context.Context, name string) error {
-	err := s.deleteTemp(ctx, appRoot+name)
+	err := s.deleteTempAt(ctx, stepFence, appRoot+name)
 
 	switch {
 	case err == nil:
@@ -627,9 +640,15 @@ func validTempName(name string) bool {
 	return err == nil
 }
 
-// deleteTemp deletes path permanently within fenceTimeout. nil means path
-// is gone: deleted, or missing because a move took it.
+// deleteTemp deletes the Write's own temporary file path: deleteTempAt of
+// stepDelete.
 func (s *Store) deleteTemp(ctx context.Context, path string) error {
+	return s.deleteTempAt(ctx, stepDelete, path)
+}
+
+// deleteTempAt deletes path permanently within fenceTimeout, as the request
+// of step. nil means path is gone: deleted, or missing because a move took it.
+func (s *Store) deleteTempAt(ctx context.Context, step, path string) error {
 	err := s.withDeadline(ctx, func(ctx context.Context) error {
 		u, err := s.api.url(resourcesPath, url.Values{qPath: {path}, "permanently": {"true"}})
 		if err != nil {
@@ -638,7 +657,7 @@ func (s *Store) deleteTemp(ctx context.Context, path string) error {
 
 		var l link
 
-		status, err := s.call(ctx, http.MethodDelete, u, &l)
+		status, err := s.call(ctx, step, http.MethodDelete, u, &l)
 
 		switch {
 		case isStatus(err, http.StatusNotFound):
@@ -646,9 +665,9 @@ func (s *Store) deleteTemp(ctx context.Context, path string) error {
 		case err != nil:
 			return err
 		case status == http.StatusAccepted:
-			done, err := s.waitOperation(ctx, l.Href)
+			done, err := s.waitOperation(ctx, step, l.Href)
 			if err == nil && !done {
-				err = CloudError{Code: codeOther, err: errOperationFailed}
+				err = CloudError{Code: codeOther, Step: step, err: errOperationFailed}
 			}
 
 			return err
@@ -696,7 +715,7 @@ func (s *Store) cleanup(ctx context.Context, name string) {
 
 		offset := page * listPageSize
 
-		err := s.get(ctx, resourcesPath, url.Values{
+		err := s.get(ctx, stepCleanup, resourcesPath, url.Values{
 			qPath:    {appRoot},
 			qFields:  {"_embedded.items.name,_embedded.items.created,_embedded.total"},
 			"limit":  {strconv.Itoa(listPageSize)},
@@ -718,7 +737,7 @@ func (s *Store) cleanup(ctx context.Context, name string) {
 
 			deleted++
 
-			_ = s.deleteTemp(ctx, appRoot+it.Name) // logged; the next Write retries
+			_ = s.deleteTempAt(ctx, stepCleanup, appRoot+it.Name) // logged; the next Write retries
 		}
 
 		if len(l.Embedded.Items) < listPageSize || offset+len(l.Embedded.Items) >= l.Embedded.Total {
@@ -739,22 +758,22 @@ func (s *Store) oldTemp(name, file, created string) bool {
 	return err == nil && s.now().Sub(t) > tempMaxAge
 }
 
-// get sends a GET request to the API path with query q.
-func (s *Store) get(ctx context.Context, path string, q url.Values, out any) error {
+// get sends a GET request of step to the API path with query q.
+func (s *Store) get(ctx context.Context, step, path string, q url.Values, out any) error {
 	u, err := s.api.url(path, q)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.call(ctx, http.MethodGet, u, out)
+	_, err = s.call(ctx, step, http.MethodGet, u, out)
 
 	return err
 }
 
-// call sends an API request with the token. A 401 answer is
+// call sends the API request of step with the token. A 401 answer is
 // domain.ErrReauthRequired: the app has no way to refresh the token
 // (spec §14).
-func (s *Store) call(ctx context.Context, method string, u *url.URL, out any) (int, error) {
+func (s *Store) call(ctx context.Context, step, method string, u *url.URL, out any) (int, error) {
 	if s.reauth {
 		return 0, domain.ErrReauthRequired
 	}
@@ -764,7 +783,7 @@ func (s *Store) call(ctx context.Context, method string, u *url.URL, out any) (i
 		return 0, s.noteReauth(err)
 	}
 
-	status, err := s.api.send(ctx, method, u, tok.Access, out)
+	status, err := s.api.send(ctx, step, method, u, tok.Access, out)
 	if status == http.StatusUnauthorized {
 		return 0, s.noteReauth(domain.ErrReauthRequired)
 	}
@@ -794,6 +813,35 @@ func (s *Store) token(ctx context.Context) (usecase.CloudToken, error) {
 	}
 
 	return t, nil
+}
+
+// meter starts the count of the bytes of one transfer of total bytes in
+// direction; nil when nobody receives the progress. A download whose body
+// is longer than its metadata says counts up to its own length.
+func (s *Store) meter(direction string, total int64) *meter {
+	if s.progress == nil {
+		return nil
+	}
+
+	report := usecase.ThrottleProgress(s.progress, s.now)
+
+	return startMeter(func(done int64) {
+		report(usecase.TransferProgress{
+			Storage: domain.KindYandexDisk, Direction: direction, Unit: usecase.UnitBytes,
+			Done: done, Total: max(total, done),
+		})
+	})
+}
+
+// Close closes the idle connections of the store's clients. The transport
+// is shared by every store, so a connection kept after the operation would
+// wait for the next one, which may come much later over a changed network.
+// It implements io.Closer for blobremote.Session.
+func (s *Store) Close() error {
+	s.api.http.CloseIdleConnections()
+	s.href.http.CloseIdleConnections()
+
+	return nil
 }
 
 func md5Hex(data []byte) string {

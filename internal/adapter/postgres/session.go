@@ -21,12 +21,16 @@ import (
 // Options configure NewSession. KDF is used only when the storage is
 // created. Abort tears down the transport (the SSH client) when a context
 // ends, since an SSH channel has no deadlines; it is called at most once, and
-// nil means nothing to tear down.
+// nil means nothing to tear down. Progress receives the notes read by
+// Snapshot and written by Backup, at most 10 reports a second by Now
+// (default time.Now) and always the last one; nil reports nothing.
 type Options struct {
-	Mode   usecase.OpenMode
-	Phrase string
-	KDF    sealbox.KDFParams
-	Abort  func()
+	Mode     usecase.OpenMode
+	Phrase   string
+	KDF      sealbox.KDFParams
+	Abort    func()
+	Progress usecase.ProgressFunc
+	Now      func() time.Time
 }
 
 // closeTimeout bounds the goodbye message to the server on Close.
@@ -35,11 +39,13 @@ const closeTimeout = 2 * time.Second
 // Session is one operation's connection with the remote storage. It
 // implements usecase.RemoteSession. It is not safe for concurrent use.
 type Session struct {
-	conn    *pgx.Conn
-	abort   func()
-	key     []byte
-	created bool
-	empty   bool
+	conn     *pgx.Conn
+	abort    func()
+	key      []byte
+	created  bool
+	empty    bool
+	progress usecase.ProgressFunc
+	now      func() time.Time
 
 	closeOnce sync.Once
 	closeErr  error
@@ -61,7 +67,12 @@ func NewSession(ctx context.Context, conn *pgx.Conn, o Options) (*Session, error
 		abort = func() {}
 	}
 
-	s := &Session{conn: conn, abort: sync.OnceFunc(abort)}
+	now := o.Now
+	if now == nil {
+		now = time.Now
+	}
+
+	s := &Session{conn: conn, abort: sync.OnceFunc(abort), progress: o.Progress, now: now}
 
 	stop := context.AfterFunc(ctx, s.abort)
 	defer stop()
@@ -248,7 +259,8 @@ func (s *Session) Empty() bool { return s.empty }
 
 // Snapshot reads the revision, the server ID and all notes in one REPEATABLE
 // READ transaction and decrypts every note; any row that does not open fails
-// the whole snapshot.
+// the whole snapshot. With Progress it counts the notes first, in the same
+// transaction, and reports each row read.
 func (s *Session) Snapshot(ctx context.Context) (usecase.RemoteSnapshot, error) {
 	if s.key == nil {
 		return usecase.RemoteSnapshot{}, errNoStorage
@@ -281,7 +293,12 @@ func (s *Session) Snapshot(ctx context.Context) (usecase.RemoteSnapshot, error) 
 			s.snapshotHook()
 		}
 
-		snap.Notes, err = s.readNotes(ctx, tx)
+		report, err := s.downloadMeter(ctx, tx)
+		if err != nil {
+			return err
+		}
+
+		snap.Notes, err = s.readNotes(ctx, tx, report)
 
 		return err
 	})
@@ -292,7 +309,41 @@ func (s *Session) Snapshot(ctx context.Context) (usecase.RemoteSnapshot, error) 
 	return snap, nil
 }
 
-func (s *Session) readNotes(ctx context.Context, tx pgx.Tx) ([]domain.Note, error) {
+// downloadMeter counts the notes of the snapshot in tx and returns the
+// reporter of the rows read; without Progress it counts nothing.
+func (s *Session) downloadMeter(ctx context.Context, tx pgx.Tx) (func(done int64), error) {
+	if s.progress == nil {
+		return func(int64) {}, nil
+	}
+
+	var total int64
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM smartnote.note").Scan(&total); err != nil {
+		return nil, fmt.Errorf("count notes: %w", err)
+	}
+
+	return s.meter(usecase.DirectionDownload, total), nil
+}
+
+// meter reports 0 of total notes in direction and returns the reporter of
+// the next counts; without Progress it reports nothing.
+func (s *Session) meter(direction string, total int64) func(done int64) {
+	if s.progress == nil {
+		return func(int64) {}
+	}
+
+	report := usecase.ThrottleProgress(s.progress, s.now)
+	send := func(done int64) {
+		report(usecase.TransferProgress{
+			Storage: domain.KindSSHPostgres, Direction: direction, Unit: usecase.UnitNotes, Done: done, Total: total,
+		})
+	}
+
+	send(0)
+
+	return send
+}
+
+func (s *Session) readNotes(ctx context.Context, tx pgx.Tx, report func(done int64)) ([]domain.Note, error) {
 	rows, err := tx.Query(ctx, "SELECT note_uuid::text, updated, name, info FROM smartnote.note")
 	if err != nil {
 		return nil, fmt.Errorf("read notes: %w", err)
@@ -317,6 +368,7 @@ func (s *Session) readNotes(ctx context.Context, tx pgx.Tx) ([]domain.Note, erro
 		}
 
 		notes = append(notes, n)
+		report(int64(len(notes)))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -389,11 +441,14 @@ func (s *Session) Backup(ctx context.Context, notes []domain.Note, expectedServe
 	return revision, nil
 }
 
-// upsert writes notes in one batch, one round trip through the tunnel.
+// upsert writes notes in one batch, one round trip through the tunnel, and
+// reports each result of the batch.
 func (s *Session) upsert(ctx context.Context, tx pgx.Tx, notes []domain.Note) (err error) {
 	if len(notes) == 0 {
 		return nil
 	}
+
+	report := s.meter(usecase.DirectionUpload, int64(len(notes)))
 
 	batch := &pgx.Batch{}
 
@@ -415,10 +470,12 @@ func (s *Session) upsert(ctx context.Context, tx pgx.Tx, notes []domain.Note) (e
 		}
 	}()
 
-	for range notes {
+	for i := range notes {
 		if _, err := br.Exec(); err != nil {
 			return fmt.Errorf("write notes: %w", err)
 		}
+
+		report(int64(i + 1))
 	}
 
 	return nil

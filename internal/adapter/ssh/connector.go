@@ -27,17 +27,32 @@ type KeyLoader interface {
 // Connector opens remote sessions: SSH, then PostgreSQL through the tunnel,
 // then the storage check. It implements usecase.RemoteConnector.
 type Connector struct {
-	keys KeyLoader
+	keys     KeyLoader
+	progress usecase.ProgressFunc
+}
+
+// Option changes a Connector.
+type Option func(*Connector)
+
+// WithProgress makes the sessions report the notes they read and write to f
+// (postgres.Options.Progress).
+func WithProgress(f usecase.ProgressFunc) Option {
+	return func(c *Connector) { c.progress = f }
 }
 
 // NewConnector returns a Connector that authenticates with the key from keys
 // when there is one.
-func NewConnector(keys KeyLoader) (*Connector, error) {
+func NewConnector(keys KeyLoader, options ...Option) (*Connector, error) {
 	if keys == nil {
 		return nil, errors.New("ssh: NewConnector: nil key loader")
 	}
 
-	return &Connector{keys: keys}, nil
+	c := &Connector{keys: keys}
+	for _, o := range options {
+		o(c)
+	}
+
+	return c, nil
 }
 
 // Open connects with t.Settings and returns a checked session; the session closes the
@@ -62,7 +77,7 @@ func (c *Connector) Open(ctx context.Context, t usecase.RemoteTarget, mode useca
 		return nil, err
 	}
 
-	sess, err := openDatabase(ctx, s, client, mode)
+	sess, err := openDatabase(ctx, s, client, mode, c.progress)
 	if err != nil {
 		return nil, withContext(ctx, err)
 	}
@@ -93,7 +108,7 @@ func (c *Connector) signer(ctx context.Context) (gossh.Signer, error) {
 // openDatabase connects to PostgreSQL through client and checks the storage.
 // Until it returns, ending ctx closes client, which also frees a channel open
 // that the server never answers.
-func openDatabase(ctx context.Context, s domain.ConnectionSettings, client *gossh.Client, mode usecase.OpenMode) (usecase.RemoteSession, error) {
+func openDatabase(ctx context.Context, s domain.ConnectionSettings, client *gossh.Client, mode usecase.OpenMode, progress usecase.ProgressFunc) (usecase.RemoteSession, error) {
 	stop := context.AfterFunc(ctx, func() { _ = client.Close() }) // the operation is over; see withContext
 	defer stop()
 
@@ -110,7 +125,7 @@ func openDatabase(ctx context.Context, s domain.ConnectionSettings, client *goss
 	}
 
 	sess, err := postgres.NewSession(ctx, conn, postgres.Options{
-		Mode: mode, Phrase: s.SyncPhrase, KDF: sealbox.DefaultKDF(), Abort: abort,
+		Mode: mode, Phrase: s.SyncPhrase, KDF: sealbox.DefaultKDF(), Abort: abort, Progress: progress,
 	})
 	if err != nil {
 		return nil, err // NewSession closed conn and called abort

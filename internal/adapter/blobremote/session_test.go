@@ -383,6 +383,61 @@ func TestCloseWipesKey(t *testing.T) {
 	}
 }
 
+// closingStore is a fakeStore that also implements io.Closer.
+type closingStore struct {
+	*fakeStore
+
+	closes int
+	err    error
+}
+
+func (c *closingStore) Close() error {
+	c.closes++
+	return c.err
+}
+
+func TestCloseClosesStore(t *testing.T) {
+	errClose := errors.New("close failed")
+
+	t.Run("after an operation", func(t *testing.T) {
+		store := &closingStore{fakeStore: newFakeStore(), err: errClose}
+
+		s, err := NewSession(context.Background(), store, Options{Mode: usecase.OpenCreate, Phrase: testPhrase, KDF: testKDF})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+
+		if err := s.Close(); !errors.Is(err, errClose) {
+			t.Errorf("Close = %v, want the store's error", err)
+		}
+
+		_ = s.Close() // idempotent: the store is closed once
+
+		if store.closes != 1 {
+			t.Errorf("store closed %d times, want 1", store.closes)
+		}
+	})
+
+	t.Run("after a failed open", func(t *testing.T) {
+		store := &closingStore{fakeStore: newFakeStore()}
+
+		first, err := NewSession(context.Background(), store, Options{Mode: usecase.OpenCreate, Phrase: testPhrase, KDF: testKDF})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+
+		_ = first.Close()
+
+		if _, err := NewSession(context.Background(), store, Options{Mode: usecase.OpenCreate, Phrase: "another phrase ok!", KDF: testKDF}); err == nil {
+			t.Fatal("open with another phrase succeeded")
+		}
+
+		if store.closes != 2 {
+			t.Errorf("store closed %d times, want 2 (each session once)", store.closes)
+		}
+	})
+}
+
 func TestConnectorOpen(t *testing.T) {
 	f := newFakeStore()
 	c := NewConnector(func(usecase.RemoteTarget) (ObjectStore, error) { return f, nil }, testKDF)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 
 	"github.com/google/uuid"
@@ -65,6 +66,7 @@ type Session struct {
 	revision int64
 	notes    []domain.Note
 	stale    bool // a Backup succeeded: the cached state is behind the store
+	closed   bool
 }
 
 // NewSession opens the container as spec §5.1 describes.
@@ -294,10 +296,24 @@ func (s *Session) Backup(ctx context.Context, notes []domain.Note, expectedServe
 	return next, nil
 }
 
-// Close wipes the key. It is idempotent.
+// Close wipes the key and closes the store when it is an io.Closer (the
+// Yandex Disk store closes its idle connections). It is idempotent: the
+// store is closed once, and later calls return nil.
 func (s *Session) Close() error {
 	sealbox.Wipe(s.key)
 	s.key = nil
+
+	if s.closed {
+		return nil
+	}
+
+	s.closed = true
+
+	if c, ok := s.store.(io.Closer); ok {
+		if err := c.Close(); err != nil {
+			return fmt.Errorf("close remote store: %w", err)
+		}
+	}
 
 	return nil
 }

@@ -254,13 +254,16 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		return nil, err
 	}
 
-	sshConnector, err := ssh.NewConnector(store)
+	// Both storages report the progress of their transfers to the interface.
+	progress := wailsui.NewProgressFeed(emit)
+
+	sshConnector, err := ssh.NewConnector(store, ssh.WithProgress(progress.Publish))
 	if err != nil {
 		return nil, err
 	}
 
 	connector := remote.NewRouter(sshConnector, blobremote.NewConnector(
-		yadisk.NewStoreFactory(yadisk.DefaultEndpoints, store, yadisk.WithLog(env.Log)),
+		yadisk.NewStoreFactory(yadisk.DefaultEndpoints, store, yadisk.WithLog(env.Log), yadisk.WithProgress(progress.Publish)),
 		sealbox.DefaultKDF(),
 	))
 
@@ -296,7 +299,7 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		// The search runs from the first opening of the storage until the quit.
 		application.NewService(wailsui.NewVaultService(env, vault, func() { sp.run.start(search) })),
 		application.NewService(wailsui.NewNotesService(env, notes)),
-		application.NewService(wailsui.NewSyncService(env, syncer)),
+		application.NewService(wailsui.NewSyncService(env, syncer, progress)),
 		application.NewService(wailsui.NewConnectionService(env, connection)),
 		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{})),
 		application.NewService(wailsui.NewSearchService(env, search, searchStatus)),

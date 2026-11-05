@@ -883,3 +883,111 @@ func TestSessionContract(t *testing.T) {
 		}
 	})
 }
+
+// progressLog collects progress reports.
+type progressLog struct {
+	mu  sync.Mutex
+	got []usecase.TransferProgress
+}
+
+func (l *progressLog) add(p usecase.TransferProgress) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.got = append(l.got, p)
+}
+
+// take returns the reports so far and forgets them.
+func (l *progressLog) take() []usecase.TransferProgress {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	got := l.got
+	l.got = nil
+
+	return got
+}
+
+// wantNoteTransfer checks that reports count total notes in direction one
+// by one, from 0 to total.
+func wantNoteTransfer(t *testing.T, reports []usecase.TransferProgress, direction string, total int64) {
+	t.Helper()
+
+	if int64(len(reports)) != total+1 {
+		t.Fatalf("%d reports, want %d (0 to %d): %+v", len(reports), total+1, total, reports)
+	}
+
+	for i, p := range reports {
+		want := usecase.TransferProgress{Storage: domain.KindSSHPostgres, Direction: direction, Unit: usecase.UnitNotes, Done: int64(i), Total: total}
+		if p != want {
+			t.Errorf("report %d = %+v, want %+v", i, p, want)
+		}
+	}
+}
+
+func TestProgressReachesTotal(t *testing.T) {
+	cfg := newDatabase(t)
+	ctx := context.Background()
+
+	var (
+		log   progressLog
+		ticks atomic.Int64
+	)
+
+	// Every call moves the clock by a second, so the throttle passes every report.
+	now := func() time.Time { return time.Unix(ticks.Add(1), 0) }
+
+	s, err := NewSession(ctx, connect(t, cfg), Options{Mode: usecase.OpenCreate, Phrase: testPhrase, KDF: testKDF, Progress: log.add, Now: now})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	closeAtEnd(t, s)
+
+	serverID := mustServerID(t, s)
+	_ = log.take() // the empty snapshot of mustServerID
+
+	notes := []domain.Note{testNote("a", "1"), testNote("b", "2"), testNote("c", "3"), testNote("d", "4"), testNote("e", "5")}
+	if _, err := s.Backup(ctx, notes, serverID, 0); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+
+	wantNoteTransfer(t, log.take(), usecase.DirectionUpload, int64(len(notes)))
+
+	if _, err := s.Snapshot(ctx); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	wantNoteTransfer(t, log.take(), usecase.DirectionDownload, int64(len(notes)))
+}
+
+func TestProgressThrottledByClock(t *testing.T) {
+	cfg := newDatabase(t)
+	ctx := context.Background()
+
+	var log progressLog
+
+	stopped := time.Unix(1, 0)
+
+	s, err := NewSession(ctx, connect(t, cfg), Options{
+		Mode: usecase.OpenCreate, Phrase: testPhrase, KDF: testKDF, Progress: log.add, Now: func() time.Time { return stopped },
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	closeAtEnd(t, s)
+
+	serverID := mustServerID(t, s)
+	_ = log.take()
+
+	notes := []domain.Note{testNote("a", "1"), testNote("b", "2"), testNote("c", "3")}
+	if _, err := s.Backup(ctx, notes, serverID, 0); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+
+	got := log.take()
+	if len(got) != 2 || got[0].Done != 0 || got[1].Done != 3 || got[1].Total != 3 {
+		t.Errorf("reports in one instant = %+v, want 0 and 3 of 3", got)
+	}
+}

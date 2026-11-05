@@ -37,6 +37,7 @@ const (
 	epDownload = "download" // GET /v1/disk/resources/download
 	epUpload   = "upload"   // GET /v1/disk/resources/upload
 	epPut      = "put"      // PUT <upload href>
+	epGet      = "get"      // GET <download href>
 	epMove     = "move"     // POST /v1/disk/resources/move
 	epDelete   = "delete"   // DELETE /v1/disk/resources
 	epToken    = "token"    // POST /token of OAuth
@@ -582,6 +583,11 @@ func (d *fakeDisk) receive(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func (d *fakeDisk) send(w http.ResponseWriter, id string) {
+	if f, ok := d.fail[epGet]; ok {
+		http.Error(w, "download refused: "+fakeDescription, f.status)
+		return
+	}
+
 	f, ok := d.files[d.links[id]]
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
