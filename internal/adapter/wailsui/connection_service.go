@@ -30,7 +30,8 @@ func NewConnectionService(env Env, c *usecase.Connection) *ConnectionService {
 }
 
 // Load returns the saved settings for the settings dialog; a key trusted in
-// a dialog closed without OK is forgotten.
+// a dialog closed without OK is forgotten. A Yandex token that cannot be
+// read shows as Not signed in.
 func (s *ConnectionService) Load() (SettingsDTO, error) {
 	s.setPending(trustedKey{})
 
@@ -45,7 +46,12 @@ func (s *ConnectionService) Load() (SettingsDTO, error) {
 
 	dto.YandexAccount, dto.YandexSignedIn, err = s.conn.Account(s.env.Ctx, settings)
 	if err != nil {
-		return SettingsDTO{}, s.env.fail("load settings", err)
+		// An unreadable token must not keep Settings closed: the account
+		// shows as Not signed in. The error text may carry details of the
+		// token store, so only its code is logged.
+		s.env.Log.Error("load yandex account", "code", classify(err).Code)
+
+		dto.YandexAccount, dto.YandexSignedIn = "", false
 	}
 
 	return dto, nil

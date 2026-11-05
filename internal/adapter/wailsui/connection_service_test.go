@@ -22,6 +22,7 @@ type memSettings struct {
 	saves    int
 	token    usecase.CloudToken
 	hasToken bool
+	tokenErr error // of LoadCloudToken
 }
 
 func (m *memSettings) LoadSettings(context.Context) (domain.ConnectionSettings, error) {
@@ -42,7 +43,7 @@ func (m *memSettings) SaveConnection(ctx context.Context, s domain.ConnectionSet
 }
 
 func (m *memSettings) LoadCloudToken(context.Context) (usecase.CloudToken, bool, error) {
-	return m.token, m.hasToken, nil
+	return m.token, m.hasToken, m.tokenErr
 }
 
 func (m *memSettings) SaveCloudToken(context.Context, usecase.CloudToken) error { return nil }
@@ -317,6 +318,31 @@ func TestSettingsDTONoToken(t *testing.T) {
 	b, _ := json.Marshal(dto)
 	if s := string(b); strings.Contains(s, "SECRET") || !strings.Contains(s, `"yandexAccount":"ivan"`) || !strings.Contains(s, `"yandexSignedIn":true`) {
 		t.Errorf("Load JSON = %s", s)
+	}
+}
+
+// TestLoadWithUnreadableToken: a token that cannot be read still opens
+// Settings, as Not signed in, and only the error's code is logged.
+func TestLoadWithUnreadableToken(t *testing.T) {
+	saved := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "c", SyncPhrase: "sixteen chars ok"}
+	svc, store, _ := newTestConnectionService(t, saved)
+	store.tokenErr = errors.New("cipher: message authentication failed SECRET-DETAIL")
+
+	var logged strings.Builder
+
+	svc.env.Log = slog.New(slog.NewTextHandler(&logged, nil))
+
+	dto, err := svc.Load()
+	if err != nil {
+		t.Fatalf("Load: %v, want the settings without the account", err)
+	}
+
+	if dto.Kind != string(domain.KindYandexDisk) || dto.YandexClientID != "c" || dto.YandexSignedIn || dto.YandexAccount != "" {
+		t.Errorf("Load = %+v, want the saved settings, not signed in", dto)
+	}
+
+	if out := logged.String(); !strings.Contains(out, "code=") || strings.Contains(out, "SECRET-DETAIL") {
+		t.Errorf("log = %q, want the code only", out)
 	}
 }
 
