@@ -40,10 +40,10 @@ func NewConnector(keys KeyLoader) (*Connector, error) {
 	return &Connector{keys: keys}, nil
 }
 
-// Open connects with s and returns a checked session; the session closes the
+// Open connects with t.Settings and returns a checked session; the session closes the
 // SSH client. Ending ctx at any point closes everything opened so far.
-func (c *Connector) Open(ctx context.Context, s domain.ConnectionSettings, mode usecase.OpenMode) (usecase.RemoteSession, error) {
-	s = s.WithDefaults()
+func (c *Connector) Open(ctx context.Context, t usecase.RemoteTarget, mode usecase.OpenMode) (usecase.RemoteSession, error) {
+	s := t.Settings.WithDefaults()
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}

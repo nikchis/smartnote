@@ -45,10 +45,17 @@ const (
 	OpenCheck
 )
 
+// RemoteTarget is what to open and with which credentials. Token is nil for
+// ssh_postgres.
+type RemoteTarget struct {
+	Settings domain.ConnectionSettings
+	Token    CloudTokenSource
+}
+
 // RemoteConnector opens a session with the server: SSH, PostgreSQL through
 // the tunnel and the sync phrase check. It returns only a ready session.
 type RemoteConnector interface {
-	Open(ctx context.Context, s domain.ConnectionSettings, mode OpenMode) (RemoteSession, error)
+	Open(ctx context.Context, t RemoteTarget, mode OpenMode) (RemoteSession, error)
 }
 
 // RemoteSession is one operation's connection with the server.
@@ -105,6 +112,11 @@ type SyncDeps struct {
 	OnState  func(State)
 	Warn     func(error)
 	Index    RestoreIndex
+
+	// Tokens and BuiltinClientID serve the cloud storages; both are optional,
+	// and without Tokens the cloud token is domain.ErrReauthRequired.
+	Tokens          CloudTokenStore
+	BuiltinClientID string
 }
 
 // localWriteTimeout bounds the local revision write after a server commit,
@@ -250,7 +262,7 @@ func disconnects(err error) bool {
 	}
 
 	for _, e := range []error{domain.ErrValidation, domain.ErrWrongSyncPhrase, domain.ErrRemoteChanged,
-		domain.ErrUnsupportedFormat, domain.ErrLocalChanged} {
+		domain.ErrUnsupportedFormat, domain.ErrLocalChanged, domain.ErrRemoteDamaged, domain.ErrRemoteTooLarge} {
 		if errors.Is(err, e) {
 			return false
 		}
@@ -316,7 +328,7 @@ func (s *Sync) Connect(ctx context.Context) (ConnectOutcome, error) {
 }
 
 func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) (out ConnectOutcome, err error) {
-	sess, err := s.d.Remote.Open(ctx, settings, OpenCreate)
+	sess, err := s.d.Remote.Open(ctx, s.target(settings), OpenCreate)
 	if err != nil {
 		return ConnectOutcome{}, err
 	}
@@ -579,6 +591,17 @@ func (s *Sync) CommitRestore(ctx context.Context) error {
 	return nil
 }
 
+// target builds the RemoteTarget of settings; only a Yandex Disk target gets
+// a token source.
+func (s *Sync) target(settings domain.ConnectionSettings) RemoteTarget {
+	t := RemoteTarget{Settings: settings}
+	if settings.Kind() == domain.KindYandexDisk {
+		t.Token = NewStoredTokenSource(s.d.Tokens, EffectiveClientID(settings, s.d.BuiltinClientID))
+	}
+
+	return t
+}
+
 // open loads the settings and opens a session; empty settings return
 // domain.ErrNotConnected.
 func (s *Sync) open(ctx context.Context, mode OpenMode) (RemoteSession, error) {
@@ -591,7 +614,7 @@ func (s *Sync) open(ctx context.Context, mode OpenMode) (RemoteSession, error) {
 		return nil, domain.ErrNotConnected
 	}
 
-	sess, err := s.d.Remote.Open(ctx, settings, mode)
+	sess, err := s.d.Remote.Open(ctx, s.target(settings), mode)
 	if err != nil {
 		return nil, err
 	}

@@ -73,7 +73,7 @@ func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res
 		return TestResult{}, fmt.Errorf("test connection: %w", domain.ErrNotConnected)
 	}
 
-	sess, err := c.remote.Open(ctx, s, OpenCheck)
+	sess, err := c.remote.Open(ctx, RemoteTarget{Settings: s}, OpenCheck)
 	if err != nil {
 		c.offer.remember(err)
 		return TestResult{}, fmt.Errorf("test connection: %w", err)

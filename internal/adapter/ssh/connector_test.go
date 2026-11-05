@@ -218,7 +218,7 @@ func TestOpenCanceledWhileChannelOpenHangs(t *testing.T) {
 
 	start := time.Now()
 
-	_, err = c.Open(ctx, sshSettings(t, srv.addr, srv.authorizedKey()), usecase.OpenCheck)
+	_, err = c.Open(ctx, usecase.RemoteTarget{Settings: sshSettings(t, srv.addr, srv.authorizedKey())}, usecase.OpenCheck)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Open = %v, want DeadlineExceeded", err)
 	}
@@ -266,7 +266,7 @@ func TestOpenCanceledWhileDatabaseHangs(t *testing.T) {
 
 	start := time.Now()
 
-	if _, err := c.Open(ctx, s, usecase.OpenCheck); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := c.Open(ctx, usecase.RemoteTarget{Settings: s}, usecase.OpenCheck); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Open = %v, want DeadlineExceeded", err)
 	}
 
@@ -284,7 +284,7 @@ func TestOpenRefusesInvalidSettings(t *testing.T) {
 	s := sshSettings(t, "127.0.0.1:22", "")
 
 	s.DBHost = "10.0.0.5"
-	if _, err := c.Open(context.Background(), s, usecase.OpenCheck); !errors.Is(err, domain.ErrValidation) {
+	if _, err := c.Open(context.Background(), usecase.RemoteTarget{Settings: s}, usecase.OpenCheck); !errors.Is(err, domain.ErrValidation) {
 		t.Errorf("Open = %v, want a validation error before connecting", err)
 	}
 }
@@ -318,7 +318,7 @@ func TestOpenLocalKeyErrorIsLocal(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			_, err = c.Open(context.Background(), sshSettings(t, "127.0.0.1:22", ""), usecase.OpenCheck)
+			_, err = c.Open(context.Background(), usecase.RemoteTarget{Settings: sshSettings(t, "127.0.0.1:22", "")}, usecase.OpenCheck)
 			if err == nil {
 				t.Fatal("Open = nil error, want the key error")
 			}

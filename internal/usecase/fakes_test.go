@@ -384,19 +384,21 @@ type fakeServer struct {
 
 	opens    []OpenMode
 	settings []domain.ConnectionSettings
+	targets  []RemoteTarget
 	backups  []backupCall
 	closed   int
 }
 
 var errAckLost = errors.New("connection lost after COMMIT")
 
-func (f *fakeServer) Open(_ context.Context, s domain.ConnectionSettings, mode OpenMode) (RemoteSession, error) {
+func (f *fakeServer) Open(_ context.Context, t RemoteTarget, mode OpenMode) (RemoteSession, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	f.opens = append(f.opens, mode)
 
-	f.settings = append(f.settings, s)
+	f.targets = append(f.targets, t)
+	f.settings = append(f.settings, t.Settings)
 	if f.openErr != nil {
 		return nil, f.openErr
 	}

@@ -245,6 +245,7 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		OnState: func(s usecase.State) { emit(wailsui.EventSyncState, wailsui.ToStateDTO(s)) },
 		Warn:    func(err error) { wailsui.LogError(env.Log, "sync", err) },
 		Index:   search,
+		Tokens:  nil, // the sqlite store implements CloudTokenStore in a later task
 	})
 	if err != nil {
 		return nil, err

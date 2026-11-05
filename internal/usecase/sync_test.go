@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -1256,5 +1257,71 @@ func TestCommitRestoreTellsIndex(t *testing.T) {
 
 	if index.calls != 1 {
 		t.Errorf("NotesReplaced calls = %d after a refused Restore, want 1", index.calls)
+	}
+}
+
+func TestSyncOpenPassesStoredSource(t *testing.T) {
+	yandex := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "own"}
+	store := &fakeTokenStore{tok: CloudToken{ClientID: "own", Access: "x"}, has: true}
+
+	tests := []struct {
+		name      string
+		settings  domain.ConnectionSettings
+		wantToken bool
+	}{
+		{name: "yandex_disk", settings: yandex, wantToken: true},
+		{name: "ssh_postgres", settings: completeSettings()},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &fakeServer{openErr: errors.New("stop")}
+			f := newSyncFixture(t, LocalSnapshot{}, srv)
+			f.sync.d.Settings = &fakeSettings{s: tc.settings}
+			f.sync.d.Tokens = store
+
+			_, _ = f.sync.PrepareBackup(context.Background())
+
+			if len(srv.targets) != 1 {
+				t.Fatalf("opens = %d", len(srv.targets))
+			}
+
+			got := srv.targets[0]
+			if got.Settings != tc.settings {
+				t.Fatalf("settings = %+v", got.Settings)
+			}
+
+			if !tc.wantToken {
+				if got.Token != nil {
+					t.Fatal("Token must be nil for ssh_postgres")
+				}
+
+				return
+			}
+
+			tok, err := got.Token.Token(context.Background())
+			if err != nil || tok.Access != "x" {
+				t.Fatalf("Token = %+v, %v", tok, err)
+			}
+		})
+	}
+}
+
+func TestDisconnectsNewErrors(t *testing.T) {
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{domain.ErrRemoteDamaged, false},
+		{domain.ErrRemoteTooLarge, false},
+		{fmt.Errorf("wrap: %w", domain.ErrRemoteDamaged), false},
+		{domain.ErrReauthRequired, true},
+		{domain.ErrRemoteOutcomeUnknown, true},
+	}
+
+	for _, tc := range tests {
+		if got := disconnects(tc.err); got != tc.want {
+			t.Errorf("disconnects(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }

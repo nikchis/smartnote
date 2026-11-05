@@ -406,7 +406,7 @@ func TestHostKeyChangedAfterTrust(t *testing.T) {
 	s.SSHHost, s.SSHPort = host, port
 	s.TrustedHostKey, s.TrustedHostAddr = trusted, s.SSHAddr() // as if trusted for this address
 
-	_, err = c.Open(ctx, s, usecase.OpenCheck)
+	_, err = c.Open(ctx, usecase.RemoteTarget{Settings: s}, usecase.OpenCheck)
 	if _, ok := errors.AsType[*domain.HostKeyMismatchError](err); !ok {
 		t.Fatalf("Open = %v, want *HostKeyMismatchError", err)
 	}
