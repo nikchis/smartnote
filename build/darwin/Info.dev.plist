@@ -5,7 +5,7 @@
 		<key>CFBundleExecutable</key>
 		<string>smartnote</string>
 		<key>CFBundleGetInfoString</key>
-		<string>Encrypted notes with backup to your own PostgreSQL server over SSH</string>
+		<string>Encrypted notes with backup to Yandex Disk or to your own PostgreSQL server over SSH</string>
 		<key>CFBundleIconFile</key>
 		<string>icons</string>
 		<key>CFBundleIdentifier</key>

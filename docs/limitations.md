@@ -28,3 +28,7 @@ search by meaning in [Search](search.md#semantic-search).
 - Going back from 2.2.0 to 2.1.0 keeps `local.db` readable. But 2.1.0 reads the saved Yandex Disk
   settings as incomplete PostgreSQL settings, and Connect fails with an SSH error. Clear the fields
   in the Settings of 2.1.0; the local notes are not affected.
+- The storage type **None (local only)** keeps the saved SSH + PostgreSQL fields, so that you can
+  switch back without typing them again. After going back to 2.1.0 these fields make a configured
+  server again, and 2.1.0 connects to PostgreSQL with them. As usual it compares the notes and asks
+  before it replaces anything. Clear the fields in the Settings of 2.1.0 if you do not want that.

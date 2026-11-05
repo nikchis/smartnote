@@ -11,7 +11,7 @@
 			"FileDescription": "A notepad for private records",
 			"LegalCopyright": "© 2026, Nikita Chisnikov",
 			"ProductName": "Smartnote",
-			"Comments": "Encrypted notes with backup to your own PostgreSQL server over SSH"
+			"Comments": "Encrypted notes with backup to Yandex Disk or to your own PostgreSQL server over SSH"
 		}
 	}
 }
