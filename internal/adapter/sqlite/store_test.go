@@ -373,8 +373,9 @@ func TestKeyNaming(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(tables) != len(requiredTablesV2) {
-		t.Errorf("tables = %v, want %v", tables, requiredTablesV2)
+	// The required tables plus cloud_auth and cloud_pending.
+	if len(tables) != len(requiredTablesV2)+2 {
+		t.Errorf("tables = %v, want %v and the cloud tables", tables, requiredTablesV2)
 	}
 
 	for table := range tables {

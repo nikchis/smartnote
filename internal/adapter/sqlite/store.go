@@ -201,6 +201,10 @@ func (s *Store) buildStorage(ctx context.Context, tmp, password string) (dek []b
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
+	if err := ensureCloudTables(ctx, db); err != nil {
+		return nil, err
+	}
+
 	dek = make([]byte, sealbox.KeySize)
 	if _, err := rand.Read(dek); err != nil {
 		return nil, fmt.Errorf("new data key: %w", err)
@@ -414,7 +418,23 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 		}
 	}
 
+	if err := ensureCloudTables(ctx, s.db); err != nil {
+		sealbox.Wipe(dek)
+		return nil, err
+	}
+
 	return dek, nil
+}
+
+// ensureCloudTables creates the cloud tables if they are missing.
+func ensureCloudTables(ctx context.Context, db *sql.DB) error {
+	for _, ddl := range []string{cloudAuthDDL, cloudPendingDDL} {
+		if _, err := db.ExecContext(ctx, ddl); err != nil {
+			return fmt.Errorf("create cloud tables: %w", mapOpenError(err))
+		}
+	}
+
+	return nil
 }
 
 // checkTables reports a missing table of format version.

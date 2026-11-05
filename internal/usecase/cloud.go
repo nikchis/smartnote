@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -15,6 +16,15 @@ type CloudToken struct {
 	Provider, ClientID, Access, Refresh, Account string
 	Expiry                                       time.Time
 }
+
+// String hides the secrets, so the token is safe to format or log.
+func (CloudToken) String() string { return "CloudToken{redacted}" }
+
+// GoString keeps %#v as redacted as String.
+func (t CloudToken) GoString() string { return t.String() }
+
+// LogValue keeps slog output as redacted as String.
+func (t CloudToken) LogValue() slog.Value { return slog.StringValue(t.String()) }
 
 // CloudTokenSource gives the token for one operation and accepts its refresh.
 // The stored source writes the update to local.db, the pending one only to memory.

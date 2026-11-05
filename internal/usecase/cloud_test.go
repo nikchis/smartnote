@@ -1,8 +1,12 @@
 package usecase
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,5 +160,31 @@ func TestEffectiveClientID(t *testing.T) {
 
 	if got := EffectiveClientID(domain.ConnectionSettings{}, "builtin"); got != "builtin" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestCloudTokenRedacted(t *testing.T) {
+	tok := CloudToken{Provider: "yandex", ClientID: "cid", Access: "ACCESS-SECRET", Refresh: "REFRESH-SECRET", Account: "me"}
+
+	var buf bytes.Buffer
+
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("token", "t", tok)
+
+	outputs := map[string]string{
+		"%v":   fmt.Sprintf("%v", tok),
+		"%+v":  fmt.Sprintf("%+v", tok),
+		"%#v":  fmt.Sprintf("%#v", tok),
+		"slog": buf.String(),
+	}
+	for name, out := range outputs {
+		for _, secret := range []string{tok.Access, tok.Refresh} {
+			if strings.Contains(out, secret) {
+				t.Errorf("%s output %q contains %q", name, out, secret)
+			}
+		}
+
+		if !strings.Contains(out, "CloudToken{redacted}") {
+			t.Errorf("%s output %q is not redacted", name, out)
+		}
 	}
 }
