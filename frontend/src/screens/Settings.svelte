@@ -151,8 +151,8 @@
   <form class="card settings" onsubmit={(e) => (e.preventDefault(), save())}>
     <h2>Settings</h2>
 
-    <fieldset class="storage">
-      <legend>Storage</legend>
+    <section class="group storage" role="group" aria-labelledby="settings-storage">
+      <span class="legend" id="settings-storage">Storage</span>
       <div class="fields">
         <div class="wide row">
           <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} disabled={phase !== "idle"} />None (local only)</label>
@@ -160,11 +160,11 @@
           <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
         </div>
       </div>
-    </fieldset>
+    </section>
 
     {#if form.kind === "yandex_disk"}
-      <fieldset class="yandex">
-        <legend>Yandex account</legend>
+      <section class="group yandex" role="group" aria-labelledby="settings-yandex">
+        <span class="legend" id="settings-yandex">Yandex account</span>
         <div class="fields">
           <div class="wide">
             <YandexAccount bind:form bind:phase bind:invalid disabled={!!busy} />
@@ -179,24 +179,24 @@
             <p class="muted">Data of another client ID is a separate, empty storage.</p>
           </details>
         </div>
-      </fieldset>
+      </section>
     {/if}
 
     <!-- SSH server and Database side by side, as in v1 UDlgConnection. -->
     {#if form.kind === "ssh_postgres"}
     <div class="pair">
-      <fieldset>
-        <legend>SSH server</legend>
+      <section class="group" role="group" aria-labelledby="settings-ssh">
+        <span class="legend" id="settings-ssh">SSH server</span>
         <div class="fields">
           <label class="wide">Host <input bind:value={form.sshHost} aria-invalid={invalid === "ssh_host"} /></label>
           <label>Port <input bind:value={form.sshPort} inputmode="numeric" placeholder="22" aria-invalid={invalid === "ssh_port"} /></label>
           <label>User <input bind:value={form.sshUser} aria-invalid={invalid === "ssh_user"} /></label>
           <label>Password <input type="password" bind:value={form.sshPassword} autocomplete="off" /></label>
         </div>
-      </fieldset>
+      </section>
 
-      <fieldset>
-        <legend>Database</legend>
+      <section class="group" role="group" aria-labelledby="settings-db">
+        <span class="legend" id="settings-db">Database</span>
         <div class="fields">
           <label>Host <input bind:value={form.dbHost} placeholder="127.0.0.1" aria-invalid={invalid === "db_host"} /></label>
           <label>Port <input bind:value={form.dbPort} inputmode="numeric" placeholder="5432" aria-invalid={invalid === "db_port"} /></label>
@@ -204,14 +204,14 @@
           <label>User <input bind:value={form.dbUser} aria-invalid={invalid === "db_user"} /></label>
           <label>Password <input type="password" bind:value={form.dbPassword} autocomplete="off" /></label>
         </div>
-      </fieldset>
+      </section>
     </div>
     {/if}
 
     {#if form.kind !== "none"}
-    <fieldset>
+    <section class="group" role="group" aria-labelledby="settings-phrase">
       <!-- The v1 group of the salt had the gear too. -->
-      <legend><img src={gearIcon} alt="" />Sync phrase</legend>
+      <span class="legend" id="settings-phrase"><img src={gearIcon} alt="" />Sync phrase</span>
       <div class="fields">
         <label class="wide">
           Phrase (at least {LIMITS.phraseMin} characters, the same on every device)
@@ -219,12 +219,12 @@
         </label>
         <div class="wide"><StrengthMeter phrase={form.syncPhrase} /></div>
       </div>
-    </fieldset>
+    </section>
     {/if}
 
     {#if form.kind === "ssh_postgres"}
-    <fieldset>
-      <legend>Keys</legend>
+    <section class="group" role="group" aria-labelledby="settings-keys">
+      <span class="legend" id="settings-keys">Keys</span>
       <div class="fields">
         <div class="wide row">
           <span class="muted">{hasKey === undefined ? "" : hasKey ? "Client key is set." : "No client key."}</span>
@@ -241,7 +241,7 @@
           <button type="button" onclick={resetTrust} disabled={!!busy || !form.trustedFingerprint}>Reset</button>
         </div>
       </div>
-    </fieldset>
+    </section>
     {/if}
 
     <!-- OK on the left, Test connection in the middle, Cancel on the right, as in v1. -->
@@ -296,10 +296,25 @@
     align-items: start;
     gap: 0.75rem;
   }
-  fieldset {
-    margin: 0;
+  /* A section, not a fieldset: WebKitGTK lays out fieldset+legend ~19px too tall on first layout. */
+  .group {
+    position: relative;
+    margin: 0.55em 0 0;
+    padding: 0.95em 0.75em 0.625em;
     border: 1px solid var(--border);
     border-radius: 4px;
+  }
+  .legend {
+    position: absolute;
+    top: 0;
+    left: 0.6em;
+    transform: translateY(-50%);
+    padding: 0 0.3em;
+    background: var(--surface);
+    line-height: 1.2;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
   }
   .fields {
     display: grid;
@@ -346,8 +361,7 @@
     color: var(--text);
   }
   /* The key buttons carry the v1 glyphs. */
-  button,
-  legend {
+  button {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;

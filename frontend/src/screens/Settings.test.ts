@@ -137,6 +137,21 @@ describe("Settings storage choice", () => {
   });
 });
 
+describe("Settings groups", () => {
+  // WebKitGTK lays out fieldset+legend too tall on the first pass, so groups are plain sections.
+  it("uses labelled sections instead of fieldset", async () => {
+    await open({ kind: "ssh_postgres" });
+    expect(target.querySelector("fieldset, legend")).toBeNull();
+    const groups = [...target.querySelectorAll<HTMLElement>('section[role="group"]')];
+    expect(groups.map((g) => g.querySelector(".legend")?.textContent?.trim())).toEqual(["Storage", "SSH server", "Database", "Sync phrase", "Keys"]);
+    for (const g of groups) {
+      const label = target.querySelector(`#${g.getAttribute("aria-labelledby")}`);
+      expect(label, "aria-labelledby target").not.toBeNull();
+      expect(label!.textContent).toBe(g.querySelector(".legend")!.textContent);
+    }
+  });
+});
+
 describe("Settings Yandex account", () => {
   it("shows the login and Sign out when signed in", async () => {
     await open({ yandexSignedIn: true, yandexAccount: "ivan.petrov" });
