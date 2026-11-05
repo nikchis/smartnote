@@ -36,7 +36,9 @@
     invalid = "";
     phase = "browser";
     try {
-      signedIn(await ConnectionService.SignIn(fromForm(form)));
+      const account = await ConnectionService.SignIn(fromForm(form));
+      if (mine !== attempt) return;
+      signedIn(account);
     } catch (e) {
       if (mine !== attempt) return;
       if (parseError(e).code === "loopback_unavailable") return enterManual(mine);
@@ -83,13 +85,19 @@
     await ConnectionService.CancelSignIn().catch(() => {});
   }
 
+  let signingOut = false;
+
   async function signOut() {
+    if (signingOut) return;
+    signingOut = true;
     try {
       await ConnectionService.SignOut();
       form.yandexSignedIn = false;
       form.yandexAccount = "";
     } catch (e) {
       await report(e);
+    } finally {
+      signingOut = false;
     }
   }
 </script>
@@ -152,6 +160,10 @@
     color: var(--text);
     text-decoration: underline;
     cursor: pointer;
+  }
+  .link:focus-visible {
+    outline: 1px dotted var(--text);
+    outline-offset: 2px;
   }
   .hint {
     margin: 0.25rem 0 0;

@@ -25,7 +25,6 @@
   let loaded = $state(false);
   let hasKey: boolean | undefined = $state();
   let phase: SignInPhase = $state("idle");
-  let account: ReturnType<typeof YandexAccount> | undefined = $state();
   const allowed = $derived(settingsButtons(loaded, hasKey, form.kind, phase !== "idle"));
   let busy = $state("");
   let invalid = $state("");
@@ -133,9 +132,9 @@
     void KeyService.CancelImport();
   }
 
-  /** close abandons a running Yandex sign-in before the dialog goes away. */
+  /** close abandons a running Yandex sign-in before the dialog goes away; the account block may already be gone. */
   async function close() {
-    await account?.cancel();
+    if (phase !== "idle") await ConnectionService.CancelSignIn().catch(() => {});
     onClose();
   }
 
@@ -149,9 +148,9 @@
     <fieldset class="storage">
       <legend>Storage</legend>
       <div class="wide row">
-        <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} />None (local only)</label>
-        <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} />Yandex Disk</label>
-        <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} />SSH + PostgreSQL</label>
+        <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} disabled={phase !== "idle"} />None (local only)</label>
+        <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} disabled={phase !== "idle"} />Yandex Disk</label>
+        <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
       </div>
     </fieldset>
 
@@ -159,7 +158,7 @@
       <fieldset class="yandex">
         <legend>Yandex account</legend>
         <div class="wide">
-          <YandexAccount bind:this={account} bind:form bind:phase bind:invalid disabled={!!busy} />
+          <YandexAccount bind:form bind:phase bind:invalid disabled={!!busy} />
         </div>
         <details class="wide" open={invalid === "yandex_client_id" || undefined}>
           <summary>Advanced</summary>

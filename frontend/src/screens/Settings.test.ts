@@ -260,6 +260,25 @@ describe("Settings Yandex account", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("disables the storage choice during a sign-in", async () => {
+    await open();
+    go.signIn.mockReturnValue(pending<string>().promise);
+    await press("Sign in with Yandex");
+    for (const l of ["None (local only)", "Yandex Disk", "SSH + PostgreSQL"]) expect(radio(l).disabled).toBe(true);
+  });
+
+  it("ignores a late sign-in success after Enter code manually", async () => {
+    await open();
+    const signIn = pending<string>();
+    go.signIn.mockReturnValue(signIn.promise);
+    await press("Sign in with Yandex");
+    await press("Enter code manually");
+    signIn.resolve("ivan");
+    await settle();
+    expect(codeField()).not.toBeNull();
+    expect(has("Signed in as")).toBe(false);
+  });
+
   it("does not call CancelSignIn when closing without a sign-in", async () => {
     await open();
     await press("Cancel");
@@ -298,5 +317,13 @@ describe("Settings Advanced", () => {
     expect(a.getAttribute("href")).toBe("https://github.com/nikchis/smartnote/blob/master/docs/yandex-disk.md");
     a.click();
     expect(go.openURL).toHaveBeenCalledWith("https://github.com/nikchis/smartnote/blob/master/docs/yandex-disk.md");
+  });
+});
+
+describe("openExternal", () => {
+  it("refuses links that are not https", async () => {
+    const { openExternal } = await import("../lib/external");
+    await expect(openExternal("file:///etc/passwd")).rejects.toThrow();
+    expect(go.openURL).not.toHaveBeenCalled();
   });
 });

@@ -6,5 +6,6 @@ export const YANDEX_DOCS = "https://github.com/nikchis/smartnote/blob/master/doc
 
 /** openExternal opens url in the default browser; the webview must not navigate away. */
 export function openExternal(url: string): Promise<void> {
+  if (!url.startsWith("https://")) return Promise.reject(new Error("only https links open"));
   return Browser.OpenURL(url);
 }
