@@ -69,16 +69,27 @@ func permanent(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission)
 }
 
+// noStackCache is the glibc tunable that frees the stack of a finished thread
+// at once instead of keeping it for the next thread. The stacks of the
+// threads that tantivy starts and ends (merges, a writer replaced on reset)
+// hold note text, which the zeroing allocator never sees: a cached stack
+// keeps it in the process. Freed with munmap, the pages leave the process.
+// Only glibc reads it; on other systems it is an unused variable.
+const noStackCache = "glibc.pthread.stack_cache_size=0"
+
 // workerEnv is the environment of the worker: the parent's without the
 // variables of ONNX Runtime and of code injection through the dynamic loader,
-// with telemetry of ONNX Runtime off (spec §6.1). LD_LIBRARY_PATH stays: an
-// AppImage sets it for its bundled libraries, and the worker and ONNX Runtime
-// themselves are given by absolute path, the library with a pinned digest.
+// with telemetry of ONNX Runtime off (spec §6.1) and without the stack cache
+// of glibc (noStackCache; tunables of the parent stay before it).
+// LD_LIBRARY_PATH stays: an AppImage sets it for its bundled libraries, and
+// the worker and ONNX Runtime themselves are given by absolute path, the
+// library with a pinned digest.
 func workerEnv(environ []string) []string {
-	env := make([]string, 0, len(environ)+1)
+	env := make([]string, 0, len(environ)+2)
+	tunables := noStackCache
 
 	for _, kv := range environ {
-		name, _, _ := strings.Cut(kv, "=")
+		name, value, _ := strings.Cut(kv, "=")
 
 		// Names on Windows ignore case; elsewhere dropping more is harmless.
 		upper := strings.ToUpper(name)
@@ -86,10 +97,18 @@ func workerEnv(environ []string) []string {
 			continue
 		}
 
+		if name == "GLIBC_TUNABLES" {
+			if value != "" {
+				tunables = value + ":" + noStackCache
+			}
+
+			continue
+		}
+
 		env = append(env, kv)
 	}
 
-	return append(env, "ORT_DISABLE_TELEMETRY=1")
+	return append(env, "ORT_DISABLE_TELEMETRY=1", "GLIBC_TUNABLES="+tunables)
 }
 
 // generation is one worker process and the goroutines that serve it. Its

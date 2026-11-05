@@ -1,155 +1,42 @@
-## Smartnote
+**English** | [Русский](README.ru.md)
 
-A notepad for private records. Notes are kept in an encrypted local storage;
-optionally they are backed up to and restored from your own PostgreSQL server
-reachable over SSH.
+# Smartnote
 
-Version 2 is a rewrite of the Delphi application (branch `1.0.0`) in Go,
-Wails v3 and Svelte. It runs on Linux, Windows and macOS.
+A notepad for private records on Linux, Windows and macOS. Notes are kept in an encrypted local
+storage; optionally they are backed up to and restored from your own PostgreSQL server reachable
+over SSH. Version 2 is a rewrite of the Delphi application (branch
+[`v1`](https://github.com/nikchis/smartnote/tree/v1)) in Go, Wails v3 and Svelte.
 
-### Installation
+## Features
 
-Packages are not signed.
+- Notes encrypted locally with a key protected by your password, with a version history.
+- Optional backup and restore through your own PostgreSQL over SSH; the server sees only ciphertext.
+- Local full-text and semantic search, in Russian and English and in code; nothing leaves the device.
 
-| System | Package | Notes |
-|---|---|---|
-| Ubuntu 26.04 (amd64) | `smartnote.deb` | `sudo apt install ./smartnote.deb` pulls in GTK 4 and WebKitGTK 6.0. |
-| Ubuntu desktop (amd64) | `smartnote-x86_64.AppImage` | `chmod +x` and run. A minimal system also needs `libegl1 libgles2 libfontconfig1 libfribidi0 libharfbuzz0b bubblewrap xdg-dbus-proxy`, which every Ubuntu desktop has. |
-| Windows 10/11 | `smartnote-amd64-installer.exe` | SmartScreen shows "Windows protected your PC": choose **More info**, then **Run anyway**. Semantic search needs the Microsoft Visual C++ Redistributable (x64), which most systems have; without it only full-text search works. |
-| macOS 12+ on Apple Silicon (arm64) | `smartnote.dmg` | Not for Intel Macs: build from source there. Gatekeeper refuses an unsigned app: drag Smartnote to Applications, then either open **System Settings → Privacy & Security** and press **Open Anyway** after the first attempt, or run `xattr -dr com.apple.quarantine /Applications/smartnote.app`. |
+## Download
 
-Upgrading from 2.0.x to 2.1.0 (local search): 2.1.0 keeps the local storage in format 2
-(it adds the encrypted search data of the notes). The first unlock with 2.1.0 converts `local.db` for
-good, and 2.0.x then refuses it with "Data was created by a newer version of Smartnote.". There is
-no conversion back. To return to 2.0.x, back up the notes to your server with 2.1.0 first
-(**Save**), then in 2.0.x start with a new local storage (move `local.db` away), set up the
-connection in **Settings** again (the SSH key is kept in `local.db` as well: import your key file or
-generate a new key and authorize it on the server) and **Restore**.
+Get the package from the [releases page](https://github.com/nikchis/smartnote/releases); the
+packages are not signed. Steps and requirements are in
+[Installation and upgrade](docs/install.md).
 
-Where the data lives:
-
-| System | Local storage (`local.db`) | Error log (`smartnote.log`) |
-|---|---|---|
-| Linux | `$XDG_DATA_HOME/smartnote` (`~/.local/share/smartnote`) | `$XDG_STATE_HOME/smartnote` (`~/.local/state/smartnote`) |
-| Windows | `%APPDATA%\smartnote` | `%LOCALAPPDATA%\smartnote` |
-| macOS | `~/Library/Application Support/smartnote` | `~/Library/Logs/smartnote` |
-
-The log holds errors only, without passwords, the sync phrase, keys, note names and texts or the
-connection string. Only one Smartnote runs at a time: a second start brings the open window forward.
-On Linux the logo of the title bar is written to `$XDG_CACHE_HOME/smartnote/icons`
-(`~/.cache/smartnote/icons`), because GTK 4 takes window icons from an icon theme only; it holds
-nothing else and is written again if deleted. The application id is `com.nikchis.smartnote`, and the
-`.deb` and `.rpm` install `com.nikchis.smartnote.desktop` under that name, so Wayland desktops show the logo for
-the window. The interface uses Liberation Sans (`fonts-liberation`), the notes DejaVu Sans Mono 13pt
-(`fonts-dejavu-core`); both are dependencies of the packages. The colors are the dark skin of v1, whatever
-theme the system prefers.
-
-### Server setup
-
-Synchronization is optional: with empty settings Smartnote works locally only. The server needs
-OpenSSH and PostgreSQL; Smartnote connects over SSH and reaches PostgreSQL through the SSH
-connection, so the database never has to listen on a public address.
-
-1. PostgreSQL listens on loopback only (`postgresql.conf`):
-
-   ```
-   listen_addresses = 'localhost'
-   ```
-
-   and `pg_hba.conf` lets the user in from loopback with a password, e.g.
-   `host smartnote smartnote 127.0.0.1/32 scram-sha-256` (and `host smartnote smartnote ::1/128
-   scram-sha-256` for the database host `localhost` or `::1`).
-
-2. Create the user and the database, and either create the schema for the user or let the
-   application create it:
-
-   ```sql
-   CREATE ROLE smartnote LOGIN PASSWORD '...';
-   CREATE DATABASE smartnote OWNER smartnote;
-   -- either: the schema owned by the application user
-   \c smartnote
-   CREATE SCHEMA smartnote AUTHORIZATION smartnote;
-   -- or: the right to create it, so that the first connection does
-   GRANT CREATE ON DATABASE smartnote TO smartnote;
-   ```
-
-   A user who does not own an existing schema needs `GRANT USAGE, CREATE ON SCHEMA smartnote TO smartnote`.
-
-3. SSH access: in **Settings → Keys** generate a key (Ed25519) or import your own, press
-   **Export public**, and add the line to `~/.ssh/authorized_keys` of the SSH user on the server.
-   A password works too; with a key, the password is tried after the key.
-
-4. In **Settings** fill in the SSH server, the database (host `127.0.0.1`, `localhost` or `::1`
-   as seen from the SSH server, port, name, user, password) and the sync phrase; empty ports
-   mean 22 for SSH and 5432 for PostgreSQL, an empty database host means `127.0.0.1`. Press **Test connection**,
-   then **OK**. On the first connection Smartnote asks whether to trust the server's host key
-   and shows its SHA256 fingerprint; compare it with the host keys on the server,
-   `for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done` (with OpenSSH defaults the
-   key offered is usually the ECDSA one).
-
-Every device that shares the notes uses the same sync phrase (at least 16 characters); the local
-passwords may differ. The phrase never leaves the device: the notes are encrypted with a key derived
-from it before they reach the server.
-
-### Threat model
-
-- The local storage is encrypted with a key protected by your password (Argon2id). Without the
-  password the notes cannot be read; a weak password can be guessed offline by anyone who copies
-  `local.db`.
-- The server is trusted for integrity. It cannot read or forge a note, but it sees the number of
-  notes, their UUIDs, dates and approximate sizes. It can delete a note, return an earlier ciphertext
-  of the same note and change `updated`.
-- The owner of the server can try to guess the sync phrase offline, so the phrase must be long.
-- The connection is protected by SSH. The server's host key is checked against the one you trusted;
-  a different key stops the connection, and the trusted key can be reset in Settings.
-
-### Limitations
-
-- Keys and passwords are wiped from memory where possible; the Go runtime may keep copies.
-- Backup and Restore replace the whole set of notes on the other side, as in v1. Before deleting
-  anything they ask, with the number of notes to delete.
-- The sync phrase cannot be changed while the server holds notes.
-- Logging out or shutting down closes Smartnote without the close question, as SIGTERM does:
-  unsaved server backups are not made, the local notes are kept. Back up before logging out.
-
-### Building from source
-
-Tools:
-
-| Tool | Version |
+| System | Package |
 |---|---|
-| Go | 1.27.3 (`toolchain` in `go.mod`) |
-| Node.js | LTS (developed with 24.21.0) |
-| Wails CLI | v3.0.0: `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0` |
-| Task | 3.54.0: `go install github.com/go-task/task/v3/cmd/task@v3.54.0` |
-| golangci-lint | 2.15.0: `make install-lint` puts it in `bin/` |
+| Ubuntu 26.04 (amd64) | `smartnote_<version>_amd64.deb` |
+| Ubuntu desktop (amd64) | `Smartnote-<version>-x86_64.AppImage` |
+| Windows 10/11 | `Smartnote-<version>-windows-amd64-installer.exe` |
+| macOS 12+ on Apple Silicon | `Smartnote-<version>-macos-arm64.dmg` |
 
-On Ubuntu 26.04 the build also needs `build-essential pkg-config libgtk-4-dev
-libwebkitgtk-6.0-dev` (`wails3 doctor` lists what is missing). The Windows installer needs NSIS
-(`makensis`).
+## Documentation
 
-Day-to-day checks run through `make` (`make help` lists the targets); Wails builds and
-packages run through Task, which `make build`, `make package` and `make smoke` call.
+All documents are in [docs/](docs/README.md), in English and Russian.
 
-| Command | Purpose |
-|---|---|
-| `make all` | `dep`, `test` and `lint` |
-| `make test` | Go unit tests with the race detector and total coverage |
-| `make integration` | integration tests against PostgreSQL and OpenSSH in Docker |
-| `make lint` | golangci-lint (installed to `bin/` at the pinned version) and govulncheck |
-| `make fmt`, `make lint-fix` | format the code, apply automatic lint fixes |
-| `npm --prefix frontend run test` | interface unit tests (Vitest) |
-| `npm --prefix frontend run check`, `npm --prefix frontend run lint` | svelte-check and ESLint |
-| `task dev` | run with live reload |
-| `task build` | build `bin/smartnote` |
-| `task package:linux` | `.deb` and AppImage in `bin/` |
-| `task package:windows` | NSIS installer in `bin/` (on Windows) |
-| `task package:darwin` | `.app` and `.dmg` in `bin/` (on macOS) |
-| `task smoke:appimage` | start the AppImage in a clean `ubuntu:26.04` container (needs Docker) |
+- [Installation and upgrade](docs/install.md): per system, and the upgrade from 2.0.x.
+- [Server setup](docs/server-setup.md): PostgreSQL and OpenSSH for synchronization.
+- [Search](docs/search.md): how to search and what the status line means.
+- [Security](docs/security.md): the threat model and what is not protected.
+- [Limitations](docs/limitations.md): behaviour to know before relying on the server.
+- [Building from source](docs/building.md): tools and commands for developers.
 
-`docs/manual-test.md` is the acceptance checklist; `docs/smoke-windows-macos.md` covers the
-unsigned Windows and macOS packages.
+## License
 
-### License
-
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). Third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

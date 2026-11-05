@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata of Smartnote (https://www.freedesktop.org/software/appstream/docs/).
+     The .deb installs it as /usr/share/metainfo/com.nikchis.smartnote.metainfo.xml, the AppImage
+     as usr/share/metainfo/com.nikchis.smartnote.appdata.xml, the name appimagetool looks for. -->
+<component type="desktop-application">
+  <id>com.nikchis.smartnote</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Smartnote</name>
+  <summary>A notepad for private records</summary>
+  <description>
+    <p>
+      Smartnote keeps short private notes encrypted on your computer and, if you want, backs
+      them up to your own PostgreSQL server over SSH.
+    </p>
+    <ul>
+      <li>Notes are encrypted at rest; the key is protected by your password</li>
+      <li>Optional backup and restore through your own server, which cannot read the notes</li>
+      <li>Local search by words, phrases, substrings and meaning; nothing leaves the computer</li>
+    </ul>
+  </description>
+
+  <developer id="com.nikchis">
+    <name>Nikita Chisnikov</name>
+  </developer>
+  <url type="homepage">https://github.com/nikchis/smartnote</url>
+  <url type="bugtracker">https://github.com/nikchis/smartnote/issues</url>
+
+  <launchable type="desktop-id">com.nikchis.smartnote.desktop</launchable>
+  <provides>
+    <binary>smartnote</binary>
+  </provides>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <keywords>
+    <keyword>notes</keyword>
+    <keyword>notepad</keyword>
+    <keyword>encrypted</keyword>
+  </keywords>
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="2.1.0" date="2026-11-05">
+      <description>
+        <p>Local full-text and semantic search across all notes, with a jump to the found line.</p>
+      </description>
+    </release>
+    <release version="2.0.1" date="2026-11-02"/>
+    <release version="2.0.0" date="2026-10-31"/>
+  </releases>
+</component>

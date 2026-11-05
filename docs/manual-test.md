@@ -1,4 +1,9 @@
+**English** | [Русский](manual-test.ru.md)
+
 # Manual acceptance test
+
+The acceptance scenarios of the application and of the search, with the results recorded for each
+package. For testers and developers before a release.
 
 The scenarios of the specification (section 7.4). Run them on a clean Ubuntu 26.04 desktop, once from
 `smartnote.deb` and once from `smartnote-x86_64.AppImage`. The server is a pair of containers: the
@@ -6,7 +11,8 @@ OpenSSH image from `internal/adapter/ssh/testdata/sshd` (user `tester`, password
 forwarding allowed) and `postgres:17-alpine` started with `--network container:<sshd>` and
 `listen_addresses=127.0.0.1`, so the SSH server reaches it as `127.0.0.1`.
 
-Mark each scenario in the **Result** column: `pass`, `fail` (with a note) or `not run`.
+Mark each scenario in the column of its package (`.deb`, AppImage): `pass`, `fail` (with a note) or
+`not run`.
 Remove `~/.local/share/smartnote` before scenario 1 to start without a storage.
 
 | # | Scenario | Steps | Expected | .deb | AppImage |
@@ -85,7 +91,7 @@ Defects found and fixed:
 
 Notes:
 - The trust question shows the key the server offers first, with OpenSSH defaults the ECDSA key;
-  README now says to compare with every host key.
+  the README (now [Server setup](server-setup.md)) says to compare with every host key.
 - WebKitGTK keeps its own `storage` and `mediakeys` directories in the data directory
   (`~/.local/share/smartnote`); the app stores nothing there.
 - After the PR review, rechecked with the AppImage under Xvfb: two starts at the same moment leave

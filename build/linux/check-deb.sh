@@ -16,6 +16,7 @@ check() {
 }
 
 check -rwx /usr/local/bin/smartnote
+check -rw-r--r-- /usr/share/metainfo/com.nikchis.smartnote.metainfo.xml
 check -rwxr-xr-x /usr/local/lib/smartnote/smartnote-search
 check -rw-r--r-- /usr/local/lib/smartnote/libonnxruntime.so.1.31.0
 for file in model.onnx tokenizer.kit manifest.json; do
