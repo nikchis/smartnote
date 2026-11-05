@@ -139,10 +139,23 @@ func NewStore(e Endpoints, tokens usecase.CloudTokenSource, clientID string, pen
 	return s
 }
 
+// FactoryOption changes the stores a factory builds.
+type FactoryOption func(*StoreOptions)
+
+// WithLog makes the stores write the failures of their cleanup to log.
+func WithLog(log *slog.Logger) FactoryOption {
+	return func(o *StoreOptions) { o.Log = log }
+}
+
 // NewStoreFactory builds a Store per operation over the target's token, with
 // the target's client ID or builtinClientID.
-func NewStoreFactory(e Endpoints, builtinClientID string, pending PendingStore) blobremote.StoreFactory {
-	return newStoreFactory(e, builtinClientID, pending, StoreOptions{})
+func NewStoreFactory(e Endpoints, builtinClientID string, pending PendingStore, options ...FactoryOption) blobremote.StoreFactory {
+	var opts StoreOptions
+	for _, o := range options {
+		o(&opts)
+	}
+
+	return newStoreFactory(e, builtinClientID, pending, opts)
 }
 
 // newStoreFactory is NewStoreFactory with the seams of the stores. Its

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -17,8 +18,10 @@ import (
 )
 
 type memSettings struct {
-	s     domain.ConnectionSettings
-	saves int
+	s        domain.ConnectionSettings
+	saves    int
+	token    usecase.CloudToken
+	hasToken bool
 }
 
 func (m *memSettings) LoadSettings(context.Context) (domain.ConnectionSettings, error) {
@@ -39,7 +42,7 @@ func (m *memSettings) SaveConnection(ctx context.Context, s domain.ConnectionSet
 }
 
 func (m *memSettings) LoadCloudToken(context.Context) (usecase.CloudToken, bool, error) {
-	return usecase.CloudToken{}, false, nil
+	return m.token, m.hasToken, nil
 }
 
 func (m *memSettings) SaveCloudToken(context.Context, usecase.CloudToken) error { return nil }
@@ -291,4 +294,110 @@ func TestSaveRejectsAnotherKeyInsteadOfTheSavedOne(t *testing.T) {
 	if store.saves != 0 || store.s.TrustedHostKey != key {
 		t.Errorf("saved trust changed to a key the server never offered")
 	}
+}
+
+func TestSettingsDTONoToken(t *testing.T) {
+	typ := reflect.TypeFor[SettingsDTO]()
+	for f := range typ.Fields() {
+		name := strings.ToLower(f.Name)
+		if strings.Contains(name, "token") || strings.Contains(name, "refresh") || strings.Contains(name, "access") {
+			t.Errorf("SettingsDTO field %s may carry a token", f.Name)
+		}
+	}
+
+	svc, store, _ := newTestConnectionService(t, domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "c"})
+	store.token = usecase.CloudToken{ClientID: "c", Account: "ivan", Access: "ACCESS-SECRET", Refresh: "REFRESH-SECRET"}
+	store.hasToken = true
+
+	dto, err := svc.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, _ := json.Marshal(dto)
+	if s := string(b); strings.Contains(s, "SECRET") || !strings.Contains(s, `"yandexAccount":"ivan"`) || !strings.Contains(s, `"yandexSignedIn":true`) {
+		t.Errorf("Load JSON = %s", s)
+	}
+}
+
+type fakeAuth struct {
+	clientID string
+	login    *fakeLogin
+}
+
+func (a *fakeAuth) BeginLoopback(_ context.Context, clientID string) (usecase.CloudLogin, error) {
+	a.clientID = clientID
+	return a.login, nil
+}
+
+func (a *fakeAuth) BeginManual(_ context.Context, clientID string) (usecase.CloudLogin, error) {
+	a.clientID = clientID
+	return a.login, nil
+}
+
+type fakeLogin struct{}
+
+func (*fakeLogin) URL() string { return "https://oauth.example/authorize" }
+func (*fakeLogin) Wait(context.Context) (usecase.CloudToken, error) {
+	return usecase.CloudToken{ClientID: "form-id", Account: "ivan"}, nil
+}
+func (*fakeLogin) Exchange(context.Context, string) (usecase.CloudToken, error) {
+	return usecase.CloudToken{ClientID: "form-id", Account: "ivan"}, nil
+}
+func (*fakeLogin) Close() error { return nil }
+
+func TestSignInUsesFormClientID(t *testing.T) {
+	svc, auth := newYandexService(t)
+
+	account, err := svc.SignIn(SettingsDTO{Kind: "yandex_disk", YandexClientID: "form-id", SyncPhrase: "sixteen chars ok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if account != "ivan" || auth.clientID != "form-id" {
+		t.Errorf("account = %q, client ID = %q, want ivan and form-id", account, auth.clientID)
+	}
+}
+
+func TestSignInManualAndSubmit(t *testing.T) {
+	svc, auth := newYandexService(t)
+
+	if err := svc.SignInManual(SettingsDTO{Kind: "yandex_disk", YandexClientID: "form-id"}); err != nil {
+		t.Fatal(err)
+	}
+
+	account, err := svc.SubmitCode("code")
+	if err != nil || account != "ivan" || auth.clientID != "form-id" {
+		t.Errorf("SubmitCode = %q, %v; client ID %q", account, err, auth.clientID)
+	}
+
+	svc.SignOut()
+	svc.CancelSignIn()
+}
+
+func TestSignInErrorsAreUIErrors(t *testing.T) {
+	svc, _, _ := newTestConnectionService(t, domain.ConnectionSettings{})
+
+	_, err := svc.SignIn(SettingsDTO{Kind: "yandex_disk"})
+	if code, _ := uiCode(t, err); code != "not_connected" {
+		t.Errorf("code = %q, want not_connected without an authorizer", code)
+	}
+}
+
+func newYandexService(t *testing.T) (*ConnectionService, *fakeAuth) {
+	t.Helper()
+
+	store := &memSettings{}
+	auth := &fakeAuth{login: &fakeLogin{}}
+
+	conn, err := usecase.NewConnection(usecase.ConnectionDeps{
+		Settings: store, Store: store, Tokens: store, Remote: &keyServer{}, Auth: auth,
+		Gate: &usecase.Gate{}, Offer: &usecase.HostKeyOffer{}, Changed: func() {},
+		OpenURL: func(string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return NewConnectionService(Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}, conn), auth
 }

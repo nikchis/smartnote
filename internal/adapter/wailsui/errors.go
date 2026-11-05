@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strconv"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
+	"github.com/nikchis/smartnote/internal/adapter/yadisk"
 	"github.com/nikchis/smartnote/internal/applog"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/usecase"
@@ -59,6 +61,12 @@ const (
 	codeSSH                   = "ssh"
 	codeDatabase              = "database"
 	codeInternal              = "internal"
+	codeReauthRequired        = "reauth_required"
+	codeCloud                 = "cloud"
+	codeRemoteDamaged         = "remote_damaged"
+	codeRemoteTooLarge        = "remote_too_large"
+	codeRemoteOutcomeUnknown  = "remote_outcome_unknown"
+	codeLoopbackUnavailable   = "loopback_unavailable"
 	// codeSearchUnavailable is a search the engine could not run (search
 	// spec §9.1, §11); the interface shows its message in the status line.
 	codeSearchUnavailable = "search_unavailable"
@@ -73,6 +81,9 @@ const (
 	msgBusy                  = "Another operation with the remote storage is in progress."
 	msgTimeout               = "The operation timed out."
 	msgCanceled              = "The operation was canceled."
+	msgNoSpace               = "Not enough space on Yandex Disk."
+	msgFileTooLarge          = "The file is larger than your Yandex Disk plan allows."
+	msgLoopbackUnavailable   = "The local sign-in address is unavailable. Enter the code manually."
 )
 
 // sentinels maps domain and use case errors to their code and text, in the order they are checked.
@@ -90,6 +101,11 @@ var sentinels = []struct {
 	{domain.ErrKeyMissing, codeKeyMissing, "There is no SSH key. Generate or import a key first."},
 	{domain.ErrKeyPassphraseRequired, codeKeyPassphraseRequired, msgKeyPassphraseRequired},
 	{domain.ErrBusy, codeBusy, msgBusy},
+	{domain.ErrReauthRequired, codeReauthRequired, "Sign in to Yandex Disk again."},
+	{domain.ErrRemoteDamaged, codeRemoteDamaged, "Data in the remote storage is damaged."},
+	{domain.ErrRemoteTooLarge, codeRemoteTooLarge, "Notes do not fit into the remote storage (64 MiB)."},
+	{domain.ErrRemoteOutcomeUnknown, codeRemoteOutcomeUnknown, "The result of the backup is unknown. Connect again to check the remote storage."},
+	{domain.ErrLoopbackUnavailable, codeLoopbackUnavailable, msgLoopbackUnavailable},
 	{usecase.ErrSearchUnavailable, codeSearchUnavailable, "Search unavailable"},
 }
 
@@ -129,6 +145,10 @@ func classify(err error) *UIError {
 		return &UIError{Code: codeHostKeyMismatch, Message: hk.Error(), Expected: hk.Expected, Got: hk.Got}
 	}
 
+	if ce, ok := errors.AsType[yadisk.CloudError](err); ok {
+		return &UIError{Code: codeCloud, Message: cloudMessage(ce)}
+	}
+
 	for _, s := range sentinels {
 		if errors.Is(err, s.err) {
 			return &UIError{Code: s.code, Message: s.message}
@@ -142,6 +162,21 @@ func classify(err error) *UIError {
 		return &UIError{Code: codeDatabase, Message: err.Error()}
 	default:
 		return &UIError{Code: codeInternal, Message: err.Error()}
+	}
+}
+
+// cloudMessage is the text of a Yandex Disk error: the two statuses with a
+// known cause, otherwise the status, if any, and the code from the closed list.
+func cloudMessage(ce yadisk.CloudError) string {
+	switch ce.Status {
+	case 507:
+		return msgNoSpace
+	case 413:
+		return msgFileTooLarge
+	case 0:
+		return "Yandex Disk error: " + ce.Code + "."
+	default:
+		return "Yandex Disk error: " + strconv.Itoa(ce.Status) + " " + ce.Code + "."
 	}
 }
 
@@ -162,8 +197,10 @@ func isDatabase(err error) bool {
 
 // LogError writes err to log when its code is worth a record: internal with
 // its text; ssh, database and timeout without it, since those texts name the
-// user, the database and the host (spec §3.5). Codes the interface explains
-// to the user are not logged.
+// user, the database and the host (spec §3.5). A Yandex Disk error is logged
+// by its status and code, and reauth_required, remote_outcome_unknown and
+// remote_damaged by the code alone (spec §9). Codes the interface explains to
+// the user are not logged.
 func LogError(log *slog.Logger, msg string, err error) {
 	if err == nil {
 		return
@@ -176,5 +213,10 @@ func LogError(log *slog.Logger, msg string, err error) {
 		log.Error(msg, "code", ui.Code, applog.Err(err))
 	case codeSSH, codeDatabase, codeTimeout:
 		log.Error(msg, "code", ui.Code, applog.Redacted(err))
+	case codeCloud:
+		ce, _ := errors.AsType[yadisk.CloudError](err)
+		log.Error(msg, "code", ui.Code, "status", ce.Status, "cloud_code", ce.Code)
+	case codeReauthRequired, codeRemoteOutcomeUnknown, codeRemoteDamaged:
+		log.Error(msg, "code", ui.Code)
 	}
 }

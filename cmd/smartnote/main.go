@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,11 +20,15 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"github.com/nikchis/smartnote/frontend"
+	"github.com/nikchis/smartnote/internal/adapter/blobremote"
+	"github.com/nikchis/smartnote/internal/adapter/remote"
 	"github.com/nikchis/smartnote/internal/adapter/sqlite"
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
 	"github.com/nikchis/smartnote/internal/adapter/wailsui"
+	"github.com/nikchis/smartnote/internal/adapter/yadisk"
 	"github.com/nikchis/smartnote/internal/applog"
 	"github.com/nikchis/smartnote/internal/platform"
+	"github.com/nikchis/smartnote/internal/sealbox"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
@@ -235,10 +240,15 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		return nil, err
 	}
 
-	connector, err := ssh.NewConnector(store)
+	sshConnector, err := ssh.NewConnector(store)
 	if err != nil {
 		return nil, err
 	}
+
+	connector := remote.NewRouter(sshConnector, blobremote.NewConnector(
+		yadisk.NewStoreFactory(yadisk.DefaultEndpoints, yadisk.BuiltinClientID, store, yadisk.WithLog(env.Log)),
+		sealbox.DefaultKDF(),
+	))
 
 	syncer, err := usecase.NewSync(usecase.SyncDeps{
 		Local: store, Settings: store, Remote: connector, Changes: changes, IDs: uuid.New, Gate: gate, Offer: offer,
@@ -246,15 +256,18 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		Warn:    func(err error) { wailsui.LogError(env.Log, "sync", err) },
 		Index:   search,
 		Tokens:  store,
+
+		BuiltinClientID: yadisk.BuiltinClientID,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Auth, OpenURL and the built-in client ID come with the Yandex Disk adapter.
 	connection, err := usecase.NewConnection(usecase.ConnectionDeps{
-		Settings: store, Store: store, Tokens: store, Remote: connector, Auth: nil,
-		Gate: gate, Offer: offer, Changed: syncer.ResetConnection, BuiltinClientID: "", OpenURL: nil,
+		Settings: store, Store: store, Tokens: store, Remote: connector,
+		Auth: yadisk.NewAuthorizer(yadisk.DefaultEndpoints, yadisk.AuthOptions{}),
+		Gate: gate, Offer: offer, Changed: syncer.ResetConnection,
+		BuiltinClientID: yadisk.BuiltinClientID, OpenURL: openBrowser,
 	})
 	if err != nil {
 		return nil, err
@@ -275,6 +288,26 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		application.NewService(wailsui.NewSearchService(env, search, searchStatus)),
 		application.NewService(wailsui.NewAppService(lifecycle)),
 	}, nil
+}
+
+// errOpenBrowser replaces the browser's error, whose text may carry the
+// sign-in URL with its state and PKCE challenge.
+var errOpenBrowser = errors.New("open the browser")
+
+// openBrowser opens url in the default browser of the running application.
+func openBrowser(url string) error {
+	return withoutURL(application.Get().Browser.OpenURL)(url)
+}
+
+// withoutURL wraps open so that its error is the fixed errOpenBrowser.
+func withoutURL(open func(string) error) func(string) error {
+	return func(url string) error {
+		if open(url) != nil {
+			return errOpenBrowser
+		}
+
+		return nil
+	}
 }
 
 // emit sends an event to the interface of the running application.

@@ -34,13 +34,61 @@ func NewConnectionService(env Env, c *usecase.Connection) *ConnectionService {
 func (s *ConnectionService) Load() (SettingsDTO, error) {
 	s.setPending(trustedKey{})
 
+	s.conn.DiscardPending()
+
 	settings, err := s.conn.Load(s.env.Ctx)
 	if err != nil {
 		return SettingsDTO{}, s.env.fail("load settings", err)
 	}
 
-	return toSettingsDTO(settings), nil
+	dto := toSettingsDTO(settings)
+
+	dto.YandexAccount, dto.YandexSignedIn, err = s.conn.Account(s.env.Ctx, settings)
+	if err != nil {
+		return SettingsDTO{}, s.env.fail("load settings", err)
+	}
+
+	return dto, nil
 }
+
+// SignIn signs in to Yandex Disk through the browser and the loopback
+// receiver and returns the account. It waits for the browser up to the
+// sign-in's own limit, so it runs on the application context rather than
+// under the operation timeout; CancelSignIn ends it. The token stays pending
+// until Save.
+func (s *ConnectionService) SignIn(settings SettingsDTO) (string, error) {
+	account, err := s.conn.SignIn(s.env.Ctx, settings.settings())
+	if err != nil {
+		return "", s.env.fail("sign in", err)
+	}
+
+	return account, nil
+}
+
+// SignInManual opens the browser for a sign-in by code; SubmitCode finishes it.
+func (s *ConnectionService) SignInManual(settings SettingsDTO) error {
+	return s.env.fail("sign in manually", s.conn.SignInManual(s.env.Ctx, settings.settings()))
+}
+
+// SubmitCode finishes the manual sign-in with the code the user copied and
+// returns the account.
+func (s *ConnectionService) SubmitCode(code string) (string, error) {
+	ctx, cancel := s.env.remote()
+	defer cancel()
+
+	account, err := s.conn.SubmitCode(ctx, code)
+	if err != nil {
+		return "", s.env.fail("submit code", err)
+	}
+
+	return account, nil
+}
+
+// CancelSignIn ends the sign-in in progress, if any.
+func (s *ConnectionService) CancelSignIn() { s.conn.CancelSignIn() }
+
+// SignOut forgets the Yandex Disk token; Save makes it final.
+func (s *ConnectionService) SignOut() { s.conn.SignOut() }
 
 // Test connects with settings without saving them; empty reports that the
 // server has no Smartnote storage yet.
