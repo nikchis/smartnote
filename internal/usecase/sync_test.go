@@ -1264,7 +1264,12 @@ func TestSyncRemembersOffer(t *testing.T) {
 	settings := &fakeSettings{s: completeSettings()}
 	f.sync.d.Settings = settings
 
-	c, err := NewConnection(settings, f.srv, f.gate, f.offer, f.sync.ResetConnection)
+	tokens := &fakeTokenStore{}
+
+	c, err := NewConnection(ConnectionDeps{
+		Settings: settings, Store: &fakeConnectionStore{settings: settings, tokens: tokens}, Tokens: tokens,
+		Remote: f.srv, Gate: f.gate, Offer: f.offer, Changed: f.sync.ResetConnection,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

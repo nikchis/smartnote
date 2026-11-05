@@ -245,7 +245,10 @@ func newMachine(t *testing.T, s domain.ConnectionSettings, key *domain.KeyPair) 
 		t.Fatal(err)
 	}
 
-	conn, err := usecase.NewConnection(store, connector, gate, offer, sync.ResetConnection)
+	conn, err := usecase.NewConnection(usecase.ConnectionDeps{
+		Settings: store, Store: store, Tokens: store, Remote: connector, Gate: gate, Offer: offer,
+		Changed: sync.ResetConnection,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

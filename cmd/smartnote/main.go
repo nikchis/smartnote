@@ -251,7 +251,11 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		return nil, err
 	}
 
-	connection, err := usecase.NewConnection(store, connector, gate, offer, syncer.ResetConnection)
+	// Auth, OpenURL and the built-in client ID come with the Yandex Disk adapter.
+	connection, err := usecase.NewConnection(usecase.ConnectionDeps{
+		Settings: store, Store: store, Tokens: store, Remote: connector, Auth: nil,
+		Gate: gate, Offer: offer, Changed: syncer.ResetConnection, BuiltinClientID: "", OpenURL: nil,
+	})
 	if err != nil {
 		return nil, err
 	}

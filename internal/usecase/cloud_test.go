@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 )
 
 type fakeTokenStore struct {
+	mu      sync.Mutex
 	tok     CloudToken
 	has     bool
 	loadErr error
@@ -22,10 +24,16 @@ type fakeTokenStore struct {
 }
 
 func (f *fakeTokenStore) LoadCloudToken(context.Context) (CloudToken, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	return f.tok, f.has, f.loadErr
 }
 
 func (f *fakeTokenStore) SaveCloudToken(_ context.Context, t CloudToken) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	if f.saveErr != nil {
 		return f.saveErr
 	}

@@ -32,6 +32,18 @@ func (m *memSettings) SaveSettings(_ context.Context, s domain.ConnectionSetting
 	return nil
 }
 
+// SaveConnection saves the settings as SaveSettings does; the token is not
+// kept, these tests never sign in.
+func (m *memSettings) SaveConnection(ctx context.Context, s domain.ConnectionSettings, _ usecase.TokenChange, _ usecase.CloudToken) error {
+	return m.SaveSettings(ctx, s)
+}
+
+func (m *memSettings) LoadCloudToken(context.Context) (usecase.CloudToken, bool, error) {
+	return usecase.CloudToken{}, false, nil
+}
+
+func (m *memSettings) SaveCloudToken(context.Context, usecase.CloudToken) error { return nil }
+
 type emptySession struct{ usecase.RemoteSession }
 
 func (emptySession) Empty() bool  { return true }
@@ -79,7 +91,10 @@ func newTestConnectionService(t *testing.T, saved domain.ConnectionSettings) (*C
 	server := &keyServer{}
 	server.key, server.fp = newHostKey(t)
 
-	conn, err := usecase.NewConnection(store, server, &usecase.Gate{}, &usecase.HostKeyOffer{}, func() {})
+	conn, err := usecase.NewConnection(usecase.ConnectionDeps{
+		Settings: store, Store: store, Tokens: store, Remote: server,
+		Gate: &usecase.Gate{}, Offer: &usecase.HostKeyOffer{}, Changed: func() {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
