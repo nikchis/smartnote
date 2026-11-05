@@ -153,28 +153,32 @@
 
     <fieldset class="storage">
       <legend>Storage</legend>
-      <div class="wide row">
-        <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} disabled={phase !== "idle"} />None (local only)</label>
-        <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} disabled={phase !== "idle"} />Yandex Disk</label>
-        <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
+      <div class="fields">
+        <div class="wide row">
+          <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} disabled={phase !== "idle"} />None (local only)</label>
+          <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} disabled={phase !== "idle"} />Yandex Disk</label>
+          <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
+        </div>
       </div>
     </fieldset>
 
     {#if form.kind === "yandex_disk"}
       <fieldset class="yandex">
         <legend>Yandex account</legend>
-        <div class="wide">
-          <YandexAccount bind:form bind:phase bind:invalid disabled={!!busy} />
+        <div class="fields">
+          <div class="wide">
+            <YandexAccount bind:form bind:phase bind:invalid disabled={!!busy} />
+          </div>
+          <details class="wide" open={invalid === "yandex_client_id" || undefined}>
+            <summary>Advanced</summary>
+            <label class="wide">
+              Own client ID:
+              <input aria-label="Own client ID" bind:value={form.yandexClientId} oninput={clientIdChanged} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
+            </label>
+            <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>How to register</a>
+            <p class="muted">Data of another client ID is a separate, empty storage.</p>
+          </details>
         </div>
-        <details class="wide" open={invalid === "yandex_client_id" || undefined}>
-          <summary>Advanced</summary>
-          <label class="wide">
-            Own client ID:
-            <input aria-label="Own client ID" bind:value={form.yandexClientId} oninput={clientIdChanged} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
-          </label>
-          <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>How to register</a>
-          <p class="muted">Data of another client ID is a separate, empty storage.</p>
-        </details>
       </fieldset>
     {/if}
 
@@ -183,19 +187,23 @@
     <div class="pair">
       <fieldset>
         <legend>SSH server</legend>
-        <label class="wide">Host <input bind:value={form.sshHost} aria-invalid={invalid === "ssh_host"} /></label>
-        <label>Port <input bind:value={form.sshPort} inputmode="numeric" placeholder="22" aria-invalid={invalid === "ssh_port"} /></label>
-        <label>User <input bind:value={form.sshUser} aria-invalid={invalid === "ssh_user"} /></label>
-        <label>Password <input type="password" bind:value={form.sshPassword} autocomplete="off" /></label>
+        <div class="fields">
+          <label class="wide">Host <input bind:value={form.sshHost} aria-invalid={invalid === "ssh_host"} /></label>
+          <label>Port <input bind:value={form.sshPort} inputmode="numeric" placeholder="22" aria-invalid={invalid === "ssh_port"} /></label>
+          <label>User <input bind:value={form.sshUser} aria-invalid={invalid === "ssh_user"} /></label>
+          <label>Password <input type="password" bind:value={form.sshPassword} autocomplete="off" /></label>
+        </div>
       </fieldset>
 
       <fieldset>
         <legend>Database</legend>
-        <label>Host <input bind:value={form.dbHost} placeholder="127.0.0.1" aria-invalid={invalid === "db_host"} /></label>
-        <label>Port <input bind:value={form.dbPort} inputmode="numeric" placeholder="5432" aria-invalid={invalid === "db_port"} /></label>
-        <label>Name <input bind:value={form.dbName} aria-invalid={invalid === "db_name"} /></label>
-        <label>User <input bind:value={form.dbUser} aria-invalid={invalid === "db_user"} /></label>
-        <label>Password <input type="password" bind:value={form.dbPassword} autocomplete="off" /></label>
+        <div class="fields">
+          <label>Host <input bind:value={form.dbHost} placeholder="127.0.0.1" aria-invalid={invalid === "db_host"} /></label>
+          <label>Port <input bind:value={form.dbPort} inputmode="numeric" placeholder="5432" aria-invalid={invalid === "db_port"} /></label>
+          <label>Name <input bind:value={form.dbName} aria-invalid={invalid === "db_name"} /></label>
+          <label>User <input bind:value={form.dbUser} aria-invalid={invalid === "db_user"} /></label>
+          <label>Password <input type="password" bind:value={form.dbPassword} autocomplete="off" /></label>
+        </div>
       </fieldset>
     </div>
     {/if}
@@ -204,30 +212,34 @@
     <fieldset>
       <!-- The v1 group of the salt had the gear too. -->
       <legend><img src={gearIcon} alt="" />Sync phrase</legend>
-      <label class="wide">
-        Phrase (at least {LIMITS.phraseMin} characters, the same on every device)
-        <input type="password" bind:value={form.syncPhrase} autocomplete="off" aria-invalid={invalid === "sync_phrase" || phraseShort} />
-      </label>
-      <div class="wide"><StrengthMeter phrase={form.syncPhrase} /></div>
+      <div class="fields">
+        <label class="wide">
+          Phrase (at least {LIMITS.phraseMin} characters, the same on every device)
+          <input type="password" bind:value={form.syncPhrase} autocomplete="off" aria-invalid={invalid === "sync_phrase" || phraseShort} />
+        </label>
+        <div class="wide"><StrengthMeter phrase={form.syncPhrase} /></div>
+      </div>
     </fieldset>
     {/if}
 
     {#if form.kind === "ssh_postgres"}
     <fieldset>
       <legend>Keys</legend>
-      <div class="wide row">
-        <span class="muted">{hasKey === undefined ? "" : hasKey ? "Client key is set." : "No client key."}</span>
-        <span class="spacer"></span>
-        <button type="button" onclick={generate} disabled={!!busy || !allowed.generate}><img src={gearIcon} alt="" />Generate</button>
-        <button type="button" onclick={exportPublic} disabled={!!busy || !allowed.export}><img src={exportIcon} alt="" />Export public</button>
-        <button type="button" onclick={() => importKey()} disabled={!!busy || !allowed.import}><img src={importIcon} alt="" />Import</button>
-      </div>
-      <div class="wide row">
-        <span class="muted" aria-invalid={invalid === "trusted_host_key"}>
-          Server key: {form.trustedFingerprint || "not trusted yet"}
-        </span>
-        <span class="spacer"></span>
-        <button type="button" onclick={resetTrust} disabled={!!busy || !form.trustedFingerprint}>Reset</button>
+      <div class="fields">
+        <div class="wide row">
+          <span class="muted">{hasKey === undefined ? "" : hasKey ? "Client key is set." : "No client key."}</span>
+          <span class="spacer"></span>
+          <button type="button" onclick={generate} disabled={!!busy || !allowed.generate}><img src={gearIcon} alt="" />Generate</button>
+          <button type="button" onclick={exportPublic} disabled={!!busy || !allowed.export}><img src={exportIcon} alt="" />Export public</button>
+          <button type="button" onclick={() => importKey()} disabled={!!busy || !allowed.import}><img src={importIcon} alt="" />Import</button>
+        </div>
+        <div class="wide row">
+          <span class="muted" aria-invalid={invalid === "trusted_host_key"}>
+            Server key: {form.trustedFingerprint || "not trusted yet"}
+          </span>
+          <span class="spacer"></span>
+          <button type="button" onclick={resetTrust} disabled={!!busy || !form.trustedFingerprint}>Reset</button>
+        </div>
       </div>
     </fieldset>
     {/if}
@@ -285,12 +297,15 @@
     gap: 0.75rem;
   }
   fieldset {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.5rem 0.75rem;
     margin: 0;
     border: 1px solid var(--border);
     border-radius: 4px;
+  }
+  .fields {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem 0.75rem;
+    align-content: start;
   }
   .wide {
     grid-column: 1 / -1;
