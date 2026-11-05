@@ -110,7 +110,14 @@ func (s ConnectionSettings) validateYandexDisk() error {
 		return err
 	}
 
-	if !validYandexClientID(s.YandexClientID) {
+	return ValidateYandexClientID(s.YandexClientID)
+}
+
+// ValidateYandexClientID checks the format of an own client ID: empty (the
+// built-in one) or 1 to 64 characters of [A-Za-z0-9_-]. A bad one is a
+// ValidationError for "yandex_client_id".
+func ValidateYandexClientID(id string) error {
+	if !validYandexClientID(id) {
 		return &ValidationError{Field: "yandex_client_id", Reason: "must be 1 to 64 letters, digits, '_' or '-'"}
 	}
 

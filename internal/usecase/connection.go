@@ -548,8 +548,13 @@ func (c *Connection) clearSignInState(gen uint64) {
 	}
 }
 
-// clientID returns the effective client ID of s.
+// clientID checks the format of the own client ID of s and returns the
+// effective client ID.
 func (c *Connection) clientID(s domain.ConnectionSettings) (string, error) {
+	if err := domain.ValidateYandexClientID(s.YandexClientID); err != nil {
+		return "", err
+	}
+
 	id := EffectiveClientID(s, c.builtin)
 	if id == "" {
 		return "", &domain.ValidationError{Field: "yandex_client_id", Reason: "set your own client ID in Advanced"}

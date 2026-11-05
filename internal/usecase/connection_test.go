@@ -1185,6 +1185,20 @@ func TestSignInPreconditions(t *testing.T) {
 		assertSignInErr(t, f.c, yandexSettings(""), func(err error) { assertField(t, err, "yandex_client_id") })
 	})
 
+	for _, tc := range []struct{ name, id string }{
+		{"own client ID with a space", "bad id"},
+		{"own client ID with a slash", "id/x"},
+		{"own client ID too long", strings.Repeat("a", 65)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertSignInErr(t, f.c, yandexSettings(tc.id), func(err error) { assertField(t, err, "yandex_client_id") })
+
+			if calls := f.auth.beginCalls(); len(calls) != 0 {
+				t.Errorf("Begin calls = %+v, want none", calls)
+			}
+		})
+	}
+
 	t.Run("built-in client ID", func(t *testing.T) {
 		d := f.deps()
 		d.BuiltinClientID = "builtin"
