@@ -83,6 +83,11 @@ type StoreOptions struct {
 	// Progress receives the bytes of each upload and download, at most 10
 	// reports a second by Now and always the last one; nil reports nothing.
 	Progress usecase.ProgressFunc
+
+	// allowLinkHost replaces the check of the hosts of upload and download
+	// links (yandex.ru, yandex.net and their subdomains); only tests set it,
+	// to reach the emulator on 127.0.0.1.
+	allowLinkHost func(hostname string) bool
 }
 
 // Store is the blobremote.ObjectStore over the app folder of Yandex Disk
@@ -110,7 +115,7 @@ type Store struct {
 func NewStore(e Endpoints, tokens usecase.CloudTokenSource, pending PendingStore, opts StoreOptions) *Store {
 	s := &Store{
 		api:      newAPIClient(opts.HTTP, e.API),
-		href:     newHrefClient(opts.Href),
+		href:     newHrefClient(opts.Href, opts.allowLinkHost),
 		tokens:   tokens,
 		pending:  pending,
 		now:      opts.Now,
@@ -817,7 +822,8 @@ func (s *Store) token(ctx context.Context) (usecase.CloudToken, error) {
 
 // meter starts the count of the bytes of one transfer of total bytes in
 // direction; nil when nobody receives the progress. A download whose body
-// is longer than its metadata says counts up to its own length.
+// is longer than its metadata says counts up to its own length; an upload
+// always has the length of its data as Total.
 func (s *Store) meter(direction string, total int64) *meter {
 	if s.progress == nil {
 		return nil
@@ -826,9 +832,13 @@ func (s *Store) meter(direction string, total int64) *meter {
 	report := usecase.ThrottleProgress(s.progress, s.now)
 
 	return startMeter(func(done int64) {
+		if direction == usecase.DirectionDownload {
+			total = max(total, done)
+		}
+
 		report(usecase.TransferProgress{
 			Storage: domain.KindYandexDisk, Direction: direction, Unit: usecase.UnitBytes,
-			Done: done, Total: max(total, done),
+			Done: done, Total: total,
 		})
 	})
 }

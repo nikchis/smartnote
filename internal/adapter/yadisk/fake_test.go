@@ -1,6 +1,7 @@
 package yadisk
 
 import (
+	"cmp"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -112,6 +113,9 @@ type fakeDisk struct {
 	downloadBase   string // base URL of download links; the href server by default
 	downloadPrefix string // path prefix of download links
 	opBase         string // base URL of operation links; the API server by default
+	uploadBase     string // base URL of upload links; the href server by default
+	uploadPrefix   string // path prefix of upload links
+	redirectTo     string // where /redirect/ sends the client instead of the href server's /download/
 	apiRedirect    bool   // the API redirects every request to the href server
 }
 
@@ -130,13 +134,14 @@ func newFakeDisk(t *testing.T, now time.Time) *fakeDisk {
 		nextAccess:     "acc-2",
 		expiresIn:      3600,
 		downloadPrefix: "/download/",
+		uploadPrefix:   "/upload/",
 	}
 
 	d.api = httptest.NewTLSServer(http.HandlerFunc(d.serveAPI))
 	d.href = httptest.NewTLSServer(http.HandlerFunc(d.serveHref))
 	d.oauth = httptest.NewTLSServer(http.HandlerFunc(d.serveOAuth))
 	d.plain = httptest.NewServer(http.HandlerFunc(d.servePlain))
-	d.downloadBase, d.opBase = d.href.URL, d.api.URL
+	d.downloadBase, d.uploadBase, d.opBase = d.href.URL, d.href.URL, d.api.URL
 
 	t.Cleanup(func() {
 		d.api.Close()
@@ -435,7 +440,7 @@ func (d *fakeDisk) uploadLink(w http.ResponseWriter, q url.Values) {
 
 	id := d.id()
 	d.uploads[id] = p
-	writeJSON(w, http.StatusOK, map[string]any{"href": d.href.URL + "/upload/" + id, "method": "PUT", "operation_id": "up-" + id})
+	writeJSON(w, http.StatusOK, map[string]any{"href": d.uploadBase + d.uploadPrefix + id, "method": "PUT", "operation_id": "up-" + id})
 }
 
 func (d *fakeDisk) move(w http.ResponseWriter, q url.Values) {
@@ -539,8 +544,10 @@ func (d *fakeDisk) serveHref(w http.ResponseWriter, r *http.Request) {
 		d.receive(w, r, id)
 	case r.Method == http.MethodGet && dir == "download":
 		d.send(w, id)
+	case r.Method == http.MethodPut && dir == "upload-307":
+		http.Redirect(w, r, d.href.URL+"/upload/"+id, http.StatusTemporaryRedirect)
 	case r.Method == http.MethodGet && dir == "redirect":
-		http.Redirect(w, r, d.href.URL+"/download/"+id, http.StatusFound)
+		http.Redirect(w, r, cmp.Or(d.redirectTo, d.href.URL+"/download/"+id), http.StatusFound)
 	case r.Method == http.MethodGet && dir == "redirect-http":
 		http.Redirect(w, r, d.plain.URL+"/download/"+id, http.StatusFound)
 	default:

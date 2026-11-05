@@ -365,30 +365,79 @@ func roundTrip(hc *http.Client, req *http.Request, step string, out any) (int, e
 // Authorization, follows redirects only to https and drops Authorization on
 // each redirect in case a base client's transport adds one.
 type hrefClient struct {
-	http *http.Client
+	http  *http.Client
+	allow func(hostname string) bool // the hosts a link may point to
 }
 
-func newHrefClient(base *http.Client) hrefClient {
-	return hrefClient{http: withRedirects(base, checkHrefRedirect)}
-}
-
-func checkHrefRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= maxRedirects {
-		return errRedirects
+// newHrefClient returns a client for operation links. allow decides on a
+// lowercased hostname without port; nil takes yandexLinkHost.
+func newHrefClient(base *http.Client, allow func(string) bool) hrefClient {
+	if allow == nil {
+		allow = yandexLinkHost
 	}
 
-	if req.URL.Scheme != schemeHTTPS {
-		return errInsecureLink
+	return hrefClient{
+		http: withRedirects(base, func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return errRedirects
+			}
+
+			if !linkAllowed(req.URL, allow) {
+				return errInsecureLink
+			}
+
+			req.Header.Del("Authorization")
+
+			return nil
+		}),
+		allow: allow,
 	}
-
-	req.Header.Del("Authorization")
-
-	return nil
 }
 
-// secureLink parses a link of an answer and requires https. Its errors are
-// errBadLink and errInsecureLink.
-func secureLink(href string) (string, error) {
+// yandexLinkHost reports whether hostname is yandex.ru or yandex.net or a
+// subdomain of either, at any depth. A name that only ends with these
+// letters, such as evilyandex.net, is not.
+func yandexLinkHost(hostname string) bool {
+	for _, domain := range [...]string{"yandex.ru", "yandex.net"} {
+		if hostname == domain || strings.HasSuffix(hostname, "."+domain) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// linkAllowed reports whether u is an https URL to a host that allow
+// accepts; the host is compared in lower case and without the port.
+func linkAllowed(u *url.URL, allow func(string) bool) bool {
+	if u.Scheme != schemeHTTPS {
+		return false
+	}
+
+	host := strings.ToLower(u.Hostname())
+
+	return host != "" && allow(host)
+}
+
+// secureLink parses a link of an answer and requires https and a host that
+// c.allow accepts. Its errors are errBadLink and errInsecureLink and carry
+// no part of the link.
+func (c hrefClient) secureLink(href string) (string, error) {
+	u, err := url.Parse(href)
+	if err != nil {
+		return "", errBadLink // the parse error quotes the link
+	}
+
+	if !linkAllowed(u, c.allow) {
+		return "", errInsecureLink
+	}
+
+	return u.String(), nil
+}
+
+// httpsLink parses an endpoint of the OAuth server and requires https. Its
+// errors are errBadLink and errInsecureLink.
+func httpsLink(href string) (string, error) {
 	u, err := url.Parse(href)
 	if err != nil {
 		return "", errBadLink // the parse error quotes the link
@@ -406,7 +455,7 @@ func secureLink(href string) (string, error) {
 func (c hrefClient) get(ctx context.Context, href string, limit int64, m *meter) ([]byte, error) {
 	defer m.stop()
 
-	link, err := secureLink(href)
+	link, err := c.secureLink(href)
 	if err != nil {
 		return nil, CloudError{Code: codeOther, Step: stepDownload, err: err}
 	}
@@ -427,7 +476,7 @@ func (c hrefClient) get(ctx context.Context, href string, limit int64, m *meter)
 		return nil, withStep(answerError(resp.StatusCode, body), stepDownload)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(meteredReader{r: resp.Body, m: m}, limit+1))
+	data, err := io.ReadAll(io.LimitReader(m.wrap(resp.Body), limit+1))
 	if err != nil {
 		return nil, withStep(networkError(err), stepDownload)
 	}
@@ -443,12 +492,12 @@ func (c hrefClient) get(ctx context.Context, href string, limit int64, m *meter)
 func (c hrefClient) put(ctx context.Context, href string, data []byte, m *meter) error {
 	defer m.stop() // the transport may read the body after Do returns
 
-	link, err := secureLink(href)
+	link, err := c.secureLink(href)
 	if err != nil {
 		return CloudError{Code: codeOther, Step: stepUpload, err: err}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, link, meteredReader{r: bytes.NewReader(data), m: m})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, link, m.wrap(bytes.NewReader(data)))
 	if err != nil {
 		return CloudError{Code: codeOther, Step: stepUpload, err: errBadLink}
 	}
@@ -458,7 +507,7 @@ func (c hrefClient) put(ctx context.Context, href string, data []byte, m *meter)
 	req.ContentLength = int64(len(data))
 	req.GetBody = func() (io.ReadCloser, error) {
 		m.restart()
-		return io.NopCloser(meteredReader{r: bytes.NewReader(data), m: m}), nil
+		return io.NopCloser(m.wrap(bytes.NewReader(data))), nil
 	}
 
 	if len(data) == 0 {
@@ -484,6 +533,7 @@ type meter struct {
 
 	mu      sync.Mutex
 	done    int64
+	gen     int // the body being sent; restart starts the next one
 	stopped bool
 }
 
@@ -493,7 +543,9 @@ func startMeter(report func(done int64)) *meter {
 	return &meter{report: report}
 }
 
-func (m *meter) add(n int) {
+// add counts n bytes read by a reader of generation gen; bytes of a body
+// that restart has replaced are not counted.
+func (m *meter) add(gen, n int) {
 	if m == nil || n <= 0 {
 		return
 	}
@@ -501,7 +553,7 @@ func (m *meter) add(n int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.stopped {
+	if m.stopped || gen != m.gen {
 		return
 	}
 
@@ -509,7 +561,8 @@ func (m *meter) add(n int) {
 	m.report(m.done)
 }
 
-// restart counts from 0 again: the body is sent anew.
+// restart counts from 0 again: the body is sent anew. A reader of the
+// earlier body, which the transport may still read, adds nothing.
 func (m *meter) restart() {
 	if m == nil {
 		return
@@ -519,6 +572,20 @@ func (m *meter) restart() {
 	defer m.mu.Unlock()
 
 	m.done = 0
+	m.gen++
+}
+
+// wrap returns r counted by the current generation of m; r itself when m is
+// nil.
+func (m *meter) wrap(r io.Reader) io.Reader {
+	if m == nil {
+		return r
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return meteredReader{r: r, m: m, gen: m.gen}
 }
 
 func (m *meter) stop() {
@@ -534,13 +601,14 @@ func (m *meter) stop() {
 
 // meteredReader counts what is read from r with m.
 type meteredReader struct {
-	r io.Reader
-	m *meter
+	r   io.Reader
+	m   *meter
+	gen int
 }
 
 func (r meteredReader) Read(p []byte) (int, error) {
 	n, err := r.r.Read(p)
-	r.m.add(n)
+	r.m.add(r.gen, n)
 
 	return n, err
 }
@@ -565,7 +633,7 @@ func (a tokenAnswer) expiry(now time.Time) time.Time {
 // which must not follow redirects. An error answer is a CloudError with the
 // OAuth error name; so is an answer without access_token.
 func postToken(ctx context.Context, hc *http.Client, endpoint string, form url.Values) (tokenAnswer, error) {
-	link, err := secureLink(endpoint)
+	link, err := httpsLink(endpoint)
 	if err != nil {
 		return tokenAnswer{}, CloudError{Code: codeOther, err: err}
 	}

@@ -1,6 +1,7 @@
 package yadisk
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -79,5 +81,79 @@ func TestDefaultTransportIdleTimeout(t *testing.T) {
 
 	if tr.IdleConnTimeout != 30*time.Second {
 		t.Errorf("IdleConnTimeout = %v, want 30s", tr.IdleConnTimeout)
+	}
+}
+
+func TestHrefClientSecureLink(t *testing.T) {
+	c := newHrefClient(nil, nil)
+
+	tests := []struct {
+		name string
+		href string
+		ok   bool
+	}{
+		{name: "upload host with port", href: "https://uploader1.disk.yandex.net:443/upload-target/x?y=1", ok: true},
+		{name: "download host", href: "https://downloader.disk.yandex.ru/disk/x", ok: true},
+		{name: "storage host", href: "https://mds.storage.yandex.net/get/x", ok: true},
+		{name: "upper case apex", href: "https://YANDEX.NET/x", ok: true},
+		{name: "apex ru", href: "https://yandex.ru/x", ok: true},
+		{name: "no dot before the suffix", href: "https://evilyandex.net/x"},
+		{name: "suffix is not the end", href: "https://yandex.net.evil.com/x"},
+		{name: "other zone", href: "https://yandex.com/x"},
+		{name: "http", href: "http://x.yandex.ru/x"},
+		{name: "userinfo hides the host", href: "https://x.yandex.net@evil.com/x"},
+		{name: "trailing dot", href: "https://yandex.net./x"},
+		{name: "no host", href: "https:///x"},
+		{name: "IP address", href: "https://127.0.0.1/x"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := c.secureLink(tc.href)
+
+			switch {
+			case tc.ok && err != nil:
+				t.Errorf("secureLink = %v, want accepted", err)
+			case !tc.ok && !errors.Is(err, errInsecureLink):
+				t.Errorf("secureLink = %v, want errInsecureLink", err)
+			}
+
+			if err != nil && strings.Contains(err.Error(), "evil") {
+				t.Errorf("the error carries the link: %v", err)
+			}
+		})
+	}
+}
+
+func TestMeterIgnoresReplacedBody(t *testing.T) {
+	var reports []int64
+
+	m := startMeter(func(done int64) { reports = append(reports, done) })
+	old := m.wrap(bytes.NewReader(make([]byte, 100)))
+
+	if _, err := io.CopyN(io.Discard, old, 60); err != nil {
+		t.Fatal(err)
+	}
+
+	m.restart()
+
+	fresh := m.wrap(bytes.NewReader(make([]byte, 100)))
+
+	if _, err := io.CopyN(io.Discard, old, 40); err != nil { // the transport still reads the old body
+		t.Fatal(err)
+	}
+
+	if _, err := io.Copy(io.Discard, fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	if last := reports[len(reports)-1]; last != 100 {
+		t.Errorf("last report = %d, want 100 (reports %v)", last, reports)
+	}
+
+	for _, d := range reports {
+		if d > 100 {
+			t.Errorf("report %d exceeds the body length", d)
+		}
 	}
 }

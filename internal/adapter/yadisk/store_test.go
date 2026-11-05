@@ -74,6 +74,8 @@ func (h *harness) options() StoreOptions {
 		Now:   func() time.Time { return testNow },
 		Sleep: h.sleep,
 		NewID: h.newID,
+
+		allowLinkHost: func(string) bool { return true }, // the emulator is on 127.0.0.1
 	}
 }
 
@@ -1588,5 +1590,170 @@ func TestLoggedSteps(t *testing.T) {
 func withClients(o StoreOptions) FactoryOption {
 	return func(opts *StoreOptions) {
 		opts.HTTP, opts.Href, opts.Now, opts.Sleep, opts.NewID = o.HTTP, o.Href, o.Now, o.Sleep, o.NewID
+		opts.allowLinkHost = o.allowLinkHost
+	}
+}
+
+// recordingClient wraps c so that the hosts of all its requests are kept.
+type recordingClient struct {
+	*http.Client
+
+	mu    sync.Mutex
+	hosts []string
+}
+
+func recordHosts(c *http.Client) *recordingClient {
+	rc := &recordingClient{}
+	rc.Client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		rc.mu.Lock()
+		rc.hosts = append(rc.hosts, r.URL.Host)
+		rc.mu.Unlock()
+
+		return c.Transport.RoundTrip(r)
+	})}
+
+	return rc
+}
+
+func (rc *recordingClient) seen() []string {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	return slices.Clone(rc.hosts)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestLinkHostsRefusedBeforeSending(t *testing.T) {
+	foreign := []string{
+		"https://evilyandex.net", "https://yandex.net.evil.com", "https://yandex.com", "http://x.yandex.ru",
+	}
+
+	for _, base := range foreign {
+		for _, op := range []string{"download", "upload"} {
+			t.Run(op+" "+base, func(t *testing.T) {
+				h := newHarness(t)
+				h.disk.put(container, []byte("container"), testNow)
+				h.disk.set(func(d *fakeDisk) { d.downloadBase, d.uploadBase = base, base })
+
+				opts := h.options()
+				opts.allowLinkHost = nil // the production rule
+				rec := recordHosts(h.disk.href.Client())
+				opts.Href = rec.Client
+				s := NewStore(h.disk.endpoints(), h.tokens, h.pending, opts)
+
+				var err error
+				if op == "download" {
+					err = readErr(t, s)
+				} else {
+					err = s.Write(t.Context(), container, []byte("x"), "")
+				}
+
+				if !errors.Is(err, errInsecureLink) {
+					t.Fatalf("%s: err = %v, want errInsecureLink", op, err)
+				}
+
+				wantCloudError(t, err)
+
+				if strings.Contains(err.Error(), "evil") || strings.Contains(err.Error(), "x.yandex.ru") {
+					t.Errorf("the error carries the link: %v", err)
+				}
+
+				if got := rec.seen(); len(got) != 0 {
+					t.Errorf("requests left for %v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestLinkHostDefaultRefusesLoopback(t *testing.T) {
+	h := newHarness(t)
+	h.disk.put(container, []byte("container"), testNow)
+
+	opts := h.options()
+	opts.allowLinkHost = nil
+
+	err := readErr(t, NewStore(h.disk.endpoints(), h.tokens, h.pending, opts))
+	if !errors.Is(err, errInsecureLink) {
+		t.Fatalf("Read: err = %v, want errInsecureLink", err)
+	}
+
+	if n := len(slices.DeleteFunc(h.disk.reqs(), func(r fakeRequest) bool { return r.server != "href" })); n != 0 {
+		t.Errorf("the href server got %d requests", n)
+	}
+}
+
+func TestRedirectToForeignHostRefused(t *testing.T) {
+	h := newHarness(t)
+	h.disk.put(container, []byte("container"), testNow)
+	h.disk.set(func(d *fakeDisk) {
+		d.downloadPrefix = "/redirect/"
+		d.redirectTo = "https://localhost:1/stolen"
+	})
+
+	opts := h.options()
+	opts.allowLinkHost = func(host string) bool { return host == "127.0.0.1" } // the first hop only
+	rec := recordHosts(h.disk.href.Client())
+	opts.Href = rec.Client
+
+	err := readErr(t, NewStore(h.disk.endpoints(), h.tokens, h.pending, opts))
+	if !errors.Is(err, errInsecureLink) {
+		t.Fatalf("Read: err = %v, want errInsecureLink", err)
+	}
+
+	if strings.Contains(err.Error(), "localhost") || strings.Contains(err.Error(), "stolen") {
+		t.Errorf("the error carries the link: %v", err)
+	}
+
+	for _, host := range rec.seen() {
+		if strings.HasPrefix(host, "localhost") {
+			t.Errorf("a request went to the foreign host %s", host)
+		}
+	}
+}
+
+func TestUploadProgressAfterRedirect307(t *testing.T) {
+	h := newHarness(t)
+	h.disk.set(func(d *fakeDisk) { d.uploadPrefix = "/upload-307/" })
+
+	data := bytes.Repeat([]byte("u"), 300_000)
+
+	var log progressLog
+
+	opts := h.options()
+	opts.Progress, opts.Now = log.add, tickingNow()
+
+	if err := NewStore(h.disk.endpoints(), h.tokens, h.pending, opts).Write(t.Context(), container, data, ""); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	wantContainer(t, h.disk, data)
+
+	redirected := false
+
+	for _, r := range h.disk.reqs() {
+		redirected = redirected || (r.server == "href" && strings.HasPrefix(r.path, "/upload-307/"))
+	}
+
+	if !redirected {
+		t.Fatal("the upload was not redirected")
+	}
+
+	reports := log.list()
+	if len(reports) == 0 {
+		t.Fatal("no reports")
+	}
+
+	for i, p := range reports {
+		if p.Total != int64(len(data)) || p.Done > p.Total {
+			t.Fatalf("report %d = %+v, want Total %d and Done <= Total", i, p, len(data))
+		}
+	}
+
+	if last := reports[len(reports)-1]; last.Done != int64(len(data)) {
+		t.Errorf("last report = %+v, want Done = Total", last)
 	}
 }
