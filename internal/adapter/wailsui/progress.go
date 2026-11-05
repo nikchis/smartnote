@@ -14,7 +14,7 @@ type ProgressDTO struct {
 }
 
 // ProgressFeed sends the progress of the remote storages to the interface.
-// Publish is the usecase.ProgressFunc of the adapters; SyncService calls End
+// Publish is the usecase.ProgressFunc of the adapters; SyncService and ConnectionService.Test call End
 // after each operation. It is a type of its own, not a method of a service,
 // because Wails would let the interface call every exported method of a
 // service.

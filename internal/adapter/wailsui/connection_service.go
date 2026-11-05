@@ -11,8 +11,9 @@ import (
 // trusted server key. The interface names the key only by fingerprint: a key
 // trusted during Test waits here, in pending, until OK saves it (spec §6.1).
 type ConnectionService struct {
-	env  Env
-	conn *usecase.Connection
+	env      Env
+	conn     *usecase.Connection
+	progress *ProgressFeed // Test ends the progress of its transfer here
 
 	mu      sync.Mutex
 	pending trustedKey
@@ -24,9 +25,14 @@ type trustedKey struct {
 	key, addr string
 }
 
-// NewConnectionService returns a ConnectionService over c.
-func NewConnectionService(env Env, c *usecase.Connection) *ConnectionService {
-	return &ConnectionService{env: env, conn: c}
+// NewConnectionService returns a ConnectionService over c that ends the
+// progress of Test in progress; nil sends nothing.
+func NewConnectionService(env Env, c *usecase.Connection, progress *ProgressFeed) *ConnectionService {
+	if progress == nil {
+		progress = NewProgressFeed(nil)
+	}
+
+	return &ConnectionService{env: env, conn: c, progress: progress}
 }
 
 // Load returns the saved settings for the settings dialog; a key trusted in
@@ -99,6 +105,8 @@ func (s *ConnectionService) SignOut() { s.conn.SignOut() }
 // Test connects with settings without saving them; empty reports that the
 // server has no Smartnote storage yet.
 func (s *ConnectionService) Test(settings SettingsDTO) (empty bool, err error) {
+	defer s.progress.End()
+
 	trusted, err := s.withTrust(settings)
 	if err != nil {
 		return false, s.env.fail("test connection", err)

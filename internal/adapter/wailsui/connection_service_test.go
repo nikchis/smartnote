@@ -105,7 +105,7 @@ func newTestConnectionService(t *testing.T, saved domain.ConnectionSettings) (*C
 
 	env := Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}
 
-	return NewConnectionService(env, conn), store, server
+	return NewConnectionService(env, conn, nil), store, server
 }
 
 var filledSettings = domain.ConnectionSettings{
@@ -425,5 +425,49 @@ func newYandexService(t *testing.T) (*ConnectionService, *fakeAuth) {
 		t.Fatal(err)
 	}
 
-	return NewConnectionService(Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}, conn), auth
+	return NewConnectionService(Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}, conn, nil), auth
+}
+
+// Test may run a transfer with the storage: whatever its result, the
+// interface is told that the progress is over, as after the sync operations.
+func TestConnectionTestEndsProgress(t *testing.T) {
+	svc, _, server := newTestConnectionService(t, domain.ConnectionSettings{})
+
+	var log eventLog
+
+	svc.progress = NewProgressFeed(log.emit)
+
+	wantEnd := func(step string) {
+		t.Helper()
+
+		got := log.list()
+		if len(got) == 0 || got[len(got)-1].name != EventSyncProgress || !reflect.DeepEqual(got[len(got)-1].data, []any{ProgressDTO{}}) {
+			t.Errorf("%s: events %+v, want the end of the progress last", step, got)
+		}
+	}
+
+	form := toSettingsDTO(filledSettings)
+
+	if _, err := svc.Test(form); err == nil {
+		t.Fatal("Test with an unknown server key succeeded")
+	}
+
+	wantEnd("failure")
+
+	form, err := svc.TrustOfferedKey(server.fp, form)
+	if err != nil {
+		t.Fatalf("TrustOfferedKey: %v", err)
+	}
+
+	before := len(log.list())
+
+	if _, err := svc.Test(form); err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+
+	if len(log.list()) == before {
+		t.Error("successful Test sent no event")
+	}
+
+	wantEnd("success")
 }

@@ -150,7 +150,7 @@ func TestConnectionServiceTestTimeoutByKind(t *testing.T) {
 			}
 
 			// The saved kind is none: Test must use the kind of the form.
-			svc := NewConnectionService(Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}, conn)
+			svc := NewConnectionService(Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}, conn, nil)
 
 			if _, err := svc.Test(tc.dto); err != nil {
 				t.Fatalf("Test: %v", err)
