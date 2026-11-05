@@ -205,15 +205,17 @@ func (s *Session) refresh(ctx context.Context) error {
 
 func (s *Session) read(ctx context.Context) (file []byte, version string, found bool, err error) {
 	file, version, found, err = s.store.Read(ctx, ContainerName)
-	if errors.Is(err, ErrOutcomeUnknown) {
-		return nil, "", false, fmt.Errorf("read container: %w", domain.ErrRemoteOutcomeUnknown)
-	}
 
-	if err != nil {
+	switch {
+	case err == nil:
+		return file, version, found, nil
+	case errors.Is(err, ErrVersionMismatch):
+		return nil, "", false, fmt.Errorf("read container: %w", domain.ErrRemoteChanged)
+	case errors.Is(err, ErrOutcomeUnknown):
+		return nil, "", false, fmt.Errorf("read container: %w", domain.ErrRemoteOutcomeUnknown)
+	default:
 		return nil, "", false, fmt.Errorf("read container: %w", err)
 	}
-
-	return file, version, found, nil
 }
 
 // write maps the store errors of Write (spec §5.3).

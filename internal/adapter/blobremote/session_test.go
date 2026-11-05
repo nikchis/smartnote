@@ -237,6 +237,36 @@ func TestOpenReadOutcomeUnknown(t *testing.T) {
 	}
 }
 
+// TestOpenReadVersionMismatch: a Read that cannot get a stable version is
+// remote_changed, not a raw store error (spec §9).
+func TestOpenReadVersionMismatch(t *testing.T) {
+	t.Run("open", func(t *testing.T) {
+		f := newFakeStore()
+		mustOpenOver(t, f, usecase.OpenCreate)
+		f.readHook = func(int) error { return ErrVersionMismatch }
+
+		if _, err := openOver(f, testPhrase, usecase.OpenCheck); !errors.Is(err, domain.ErrRemoteChanged) {
+			t.Errorf("err = %v, want ErrRemoteChanged", err)
+		}
+	})
+
+	t.Run("snapshot after backup", func(t *testing.T) {
+		f := newFakeStore()
+		s := mustOpenOver(t, f, usecase.OpenCreate)
+		snap, _ := s.Snapshot(context.Background())
+
+		if _, err := s.Backup(context.Background(), nil, snap.ServerID, snap.Revision); err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+
+		f.readHook = func(int) error { return ErrVersionMismatch }
+
+		if _, err := s.Snapshot(context.Background()); !errors.Is(err, domain.ErrRemoteChanged) {
+			t.Errorf("err = %v, want ErrRemoteChanged", err)
+		}
+	})
+}
+
 func TestCreateWriteOutcomeUnknown(t *testing.T) {
 	f := newFakeStore()
 	f.writeHook = func(int, string, string) error { return ErrOutcomeUnknown }
