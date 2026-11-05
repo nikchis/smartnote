@@ -19,7 +19,7 @@ Disk, `Applications/<app name>/smartnote.v1.bin`.
    Smartnote shows "Waiting for the browser…" for up to 5 minutes; **Cancel** stops the wait.
 3. When the browser reports success, **Settings** shows "Signed in as <login>".
 4. Enter the sync phrase (at least 16 characters; every device that shares the notes uses the same
-   one). Press **Test connection**, then **OK**.
+   one). Press **Test connection**, then **OK**. The sign-in is saved only when you press **OK**; **Cancel** or closing Settings discards it.
 
 The first connection to an empty Disk creates the storage and makes the first Backup. On another
 device choose **Yandex Disk**, sign in with the same account and enter the same phrase: Smartnote
@@ -37,7 +37,7 @@ in progress **Test connection** and **OK** are inactive, and closing Settings ca
 The package carries the client ID of the author's Yandex application, so normally you only press
 **Sign in with Yandex**. If you want the access to go through your own application, register one:
 
-1. Open the Yandex ID developer console (oauth.yandex.com) and create an application:
+1. Open the Yandex ID developer console (oauth.yandex.ru) and create an application:
    - type: for user authorization;
    - platform: Web services;
    - permission: access to the app folder on Disk (`cloud_api:disk.app_folder`) and nothing else;

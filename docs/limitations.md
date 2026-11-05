@@ -21,7 +21,7 @@ search by meaning in [Search](search.md#semantic-search).
   storage (64 MiB)."
 - The sync phrase cannot be changed while the Yandex Disk storage holds notes, as with the server.
 - After "The result of the backup is unknown. Connect again to check the remote storage." press
-  Connect again (**OK** in Settings): Smartnote first settles the unfinished write, and until it
+  **OK** in Settings (or restart Smartnote) to connect again: Smartnote first settles the unfinished write, and until it
   does it does not touch the storage.
 - The warning that the remote storage is older than this device last synchronized with applies to
   both the server and Yandex Disk; see [Yandex Disk](yandex-disk.md#when-the-storage-is-older-than-the-device).
