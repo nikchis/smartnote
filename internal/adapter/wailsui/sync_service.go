@@ -49,16 +49,16 @@ func (s *SyncService) CommitBackup() error {
 }
 
 // PrepareRestore plans a Restore and keeps the plan for CommitRestore.
-func (s *SyncService) PrepareRestore() (CountsDTO, error) {
+func (s *SyncService) PrepareRestore() (RestorePreviewDTO, error) {
 	ctx, cancel := s.env.remote()
 	defer cancel()
 
-	c, err := s.sync.PrepareRestore(ctx)
+	p, err := s.sync.PrepareRestore(ctx)
 	if err != nil {
-		return CountsDTO{}, s.env.fail("prepare restore", err)
+		return RestorePreviewDTO{}, s.env.fail("prepare restore", err)
 	}
 
-	return toCountsDTO(c), nil
+	return toRestorePreviewDTO(p), nil
 }
 
 // CommitRestore runs the planned Restore, from PrepareRestore or Connect.

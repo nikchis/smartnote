@@ -336,6 +336,82 @@ func TestConnectServerIDChanged(t *testing.T) {
 	}
 }
 
+func TestConnectRemoteOlder(t *testing.T) {
+	srv := &fakeServer{serverID: serverA, revision: 3, notes: []domain.Note{note(1, "a", "server")}}
+	local := LocalSnapshot{Notes: []domain.Note{note(1, "a", "local")}, Revision: 5, ServerID: serverA}
+	f := newSyncFixture(t, local, srv)
+
+	out, err := f.sync.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	if out.Status != StatusRemoteOlder {
+		t.Errorf("Status = %q, want remote_older", out.Status)
+	}
+
+	if st := f.sync.State(); !st.Connected || !st.Dirty || !st.RestoreAvailable {
+		t.Errorf("State = %+v, want connected, dirty, restore available", st)
+	}
+
+	if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrNoPendingOperation) {
+		t.Errorf("CommitRestore after remote_older = %v, want ErrNoPendingOperation", err)
+	}
+
+	if f.local.writes() != 0 {
+		t.Errorf("local writes = %d, want 0", f.local.writes())
+	}
+}
+
+func TestConnectOlderSameNotesInSync(t *testing.T) {
+	notes := []domain.Note{note(1, "a", "x")}
+	srv := &fakeServer{serverID: serverA, revision: 3, notes: notes}
+	f := newSyncFixture(t, LocalSnapshot{Notes: notes, Revision: 5, ServerID: serverA}, srv)
+
+	out, err := f.sync.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	if out.Status != StatusInSync {
+		t.Errorf("Status = %q, want in_sync", out.Status)
+	}
+
+	if got := f.local.setCalls; len(got) != 1 || got[0] != (syncStateCall{serverA, 3}) {
+		t.Errorf("SetSyncState calls = %v, want [{A 3}]", got)
+	}
+}
+
+func TestConnectOtherServerLowerRevision(t *testing.T) {
+	srv := &fakeServer{serverID: serverB, revision: 1, notes: []domain.Note{note(1, "a", "server")}}
+	local := LocalSnapshot{Notes: []domain.Note{note(1, "a", "local")}, Revision: 5, ServerID: serverA}
+	f := newSyncFixture(t, local, srv)
+
+	out, err := f.sync.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	if out.Status != StatusRemoteNewer {
+		t.Errorf("Status = %q, want remote_newer (another server compares as revision 0)", out.Status)
+	}
+}
+
+func TestPrepareRestorePreview(t *testing.T) {
+	srv := &fakeServer{serverID: serverA, revision: 3, notes: []domain.Note{note(1, "a", "server")}}
+	local := LocalSnapshot{Notes: []domain.Note{note(1, "a", "local")}, Revision: 5, ServerID: serverA}
+	f := newSyncFixture(t, local, srv)
+
+	p, err := f.sync.PrepareRestore(context.Background())
+	if err != nil {
+		t.Fatalf("PrepareRestore: %v", err)
+	}
+
+	if !p.RemoteOlder || p.Counts != (Counts{Updated: 1}) {
+		t.Errorf("preview = %+v, want RemoteOlder with one update", p)
+	}
+}
+
 func TestServerSwitchKeepsRevision(t *testing.T) {
 	notes := []domain.Note{note(1, "a", "x")}
 	srv := &fakeServer{serverID: serverB, revision: 1, notes: []domain.Note{note(9, "other", "y")}}
@@ -623,13 +699,13 @@ func TestRestore(t *testing.T) {
 	f := diverged(t)
 	ctx := context.Background()
 
-	counts, err := f.sync.PrepareRestore(ctx)
+	preview, err := f.sync.PrepareRestore(ctx)
 	if err != nil {
 		t.Fatalf("PrepareRestore: %v", err)
 	}
 
-	if counts != (Counts{Added: 1, Updated: 1}) {
-		t.Errorf("Counts = %+v, want {Added: 1, Updated: 1}", counts)
+	if preview != (RestorePreview{Counts: Counts{Added: 1, Updated: 1}}) {
+		t.Errorf("preview = %+v, want {Added: 1, Updated: 1} and not older", preview)
 	}
 
 	if f.srv.opens[0] != OpenCheck {

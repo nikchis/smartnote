@@ -148,3 +148,31 @@ func TestPlanRestore(t *testing.T) {
 		t.Errorf("plan = {rev %d, server %v, gen %d}, want {9, %v, 5}", p.Revision, p.ServerID, p.Generation, serverID)
 	}
 }
+
+func TestPlanRestoreRemoteOlder(t *testing.T) {
+	a := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	b := uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+	same := []domain.Note{note(1, "a", "x")}
+	other := []domain.Note{note(1, "a", "y")}
+
+	tests := []struct {
+		name   string
+		local  LocalSnapshot
+		remote RemoteSnapshot
+		want   bool
+	}{
+		{"older and different", LocalSnapshot{Notes: same, Revision: 5, ServerID: a}, RemoteSnapshot{Notes: other, Revision: 3, ServerID: a}, true},
+		{"older and equal", LocalSnapshot{Notes: same, Revision: 5, ServerID: a}, RemoteSnapshot{Notes: same, Revision: 3, ServerID: a}, false},
+		{"same revision", LocalSnapshot{Notes: same, Revision: 5, ServerID: a}, RemoteSnapshot{Notes: other, Revision: 5, ServerID: a}, false},
+		{"newer", LocalSnapshot{Notes: same, Revision: 5, ServerID: a}, RemoteSnapshot{Notes: other, Revision: 6, ServerID: a}, false},
+		{"another server", LocalSnapshot{Notes: same, Revision: 5, ServerID: a}, RemoteSnapshot{Notes: other, Revision: 3, ServerID: b}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PlanRestore(tt.local, tt.remote, seqIDs(), 0).RemoteOlder; got != tt.want {
+				t.Errorf("RemoteOlder = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

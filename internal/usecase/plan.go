@@ -60,16 +60,32 @@ type TextChange struct {
 }
 
 // RestorePlan turns the local set into the server snapshot taken at Revision
-// of ServerID. Rename holds server notes that differ by name only.
+// of ServerID. Rename holds server notes that differ by name only. RemoteOlder
+// reports that the server set is older than the one this device last
+// synchronized with (spec §5.6).
 type RestorePlan struct {
 	Counts
-	Insert     []domain.Note
-	Text       []TextChange
-	Rename     []domain.Note
-	Delete     []uuid.UUID
-	Revision   int64
-	ServerID   uuid.UUID
-	Generation uint64
+	RemoteOlder bool
+	Insert      []domain.Note
+	Text        []TextChange
+	Rename      []domain.Note
+	Delete      []uuid.UUID
+	Revision    int64
+	ServerID    uuid.UUID
+	Generation  uint64
+}
+
+// RestorePreview is what the user is asked about before a Restore: the counts,
+// and whether the server holds an older set than the last synchronized one.
+type RestorePreview struct {
+	Counts
+	RemoteOlder bool
+}
+
+// remoteOlder reports the rollback of the server (spec §5.6): the same server
+// with a lower revision than the stored local one and a different note set.
+func remoteOlder(local LocalSnapshot, remote RemoteSnapshot) bool {
+	return local.ServerID == remote.ServerID && remote.Revision < local.Revision && Diff(local.Notes, remote.Notes)
 }
 
 // PlanBackup plans sending every local note to the server.
@@ -114,7 +130,7 @@ func PlanBackup(local LocalSnapshot, remote RemoteSnapshot, gen uint64) BackupPl
 // keeps the local text as a version created at the local Updated. Notes are
 // visited in ID order, so ids is called in a stable order.
 func PlanRestore(local LocalSnapshot, remote RemoteSnapshot, ids IDGenerator, gen uint64) RestorePlan {
-	p := RestorePlan{Revision: remote.Revision, ServerID: remote.ServerID, Generation: gen}
+	p := RestorePlan{Revision: remote.Revision, ServerID: remote.ServerID, Generation: gen, RemoteOlder: remoteOlder(local, remote)}
 
 	localByID := index(local.Notes)
 	for _, r := range sortedByID(remote.Notes) {

@@ -82,6 +82,7 @@ const (
 	StatusInSync      ConnectStatus = "in_sync"      // no differences
 	StatusDiverged    ConnectStatus = "diverged"     // differences, the server is not newer
 	StatusRemoteNewer ConnectStatus = "remote_newer" // differences, the server is newer: ask to Restore
+	StatusRemoteOlder ConnectStatus = "remote_older" // differences, the same server holds an older revision: warn
 )
 
 // ConnectOutcome is what Connect found; Restore counts the pending Restore of
@@ -375,6 +376,13 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 
 	s.d.Changes.MarkDiverged()
 
+	// The check uses the stored pair: a reset for another server never
+	// counts as a rollback.
+	if remoteOlder(stored, remote) {
+		s.update(func() { s.restoreAvailable = true })
+		return ConnectOutcome{Status: StatusRemoteOlder}, nil
+	}
+
 	if remote.Revision <= local.Revision {
 		s.update(func() { s.restoreAvailable = true })
 		return ConnectOutcome{Status: StatusDiverged}, nil
@@ -507,11 +515,11 @@ func (s *Sync) backup(ctx context.Context, sess RemoteSession, plan BackupPlan) 
 }
 
 // PrepareRestore reads both snapshots, keeps a Restore plan and returns its
-// counts. It never creates the schema: a missing one means the server changed.
-func (s *Sync) PrepareRestore(ctx context.Context) (Counts, error) {
+// counts and whether the server is older than the last synchronization. It never creates the schema: a missing one means the server changed.
+func (s *Sync) PrepareRestore(ctx context.Context) (RestorePreview, error) {
 	end, err := s.begin()
 	if err != nil {
-		return Counts{}, err
+		return RestorePreview{}, err
 	}
 	defer end()
 
@@ -521,12 +529,12 @@ func (s *Sync) PrepareRestore(ctx context.Context) (Counts, error) {
 	s.afterRemote(err)
 
 	if err != nil {
-		return Counts{}, fmt.Errorf("prepare restore: %w", err)
+		return RestorePreview{}, fmt.Errorf("prepare restore: %w", err)
 	}
 
 	s.update(func() { s.pendingRestore = &plan })
 
-	return plan.Counts, nil
+	return RestorePreview{Counts: plan.Counts, RemoteOlder: plan.RemoteOlder}, nil
 }
 
 func (s *Sync) prepareRestore(ctx context.Context) (plan RestorePlan, err error) {

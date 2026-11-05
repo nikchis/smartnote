@@ -53,11 +53,17 @@ type CountsDTO struct {
 }
 
 // ConnectDTO is the result of the connect check: Status is one of offline,
-// created, in_sync, diverged, remote_newer; Restore counts the Restore that
+// created, in_sync, diverged, remote_newer, remote_older; Restore counts the Restore that
 // remote_newer asks about.
 type ConnectDTO struct {
 	Status  string    `json:"status"`
 	Restore CountsDTO `json:"restore"`
+}
+
+// RestorePreviewDTO is what the user is asked about before a Restore.
+type RestorePreviewDTO struct {
+	Counts      CountsDTO `json:"counts"`
+	RemoteOlder bool      `json:"remoteOlder"`
 }
 
 // BackupPreviewDTO is what the user is asked about before a Backup.
@@ -130,6 +136,10 @@ func toSearchStatusDTO(s usecase.SearchStatus) SearchStatusDTO {
 
 func toCountsDTO(c usecase.Counts) CountsDTO {
 	return CountsDTO{Added: c.Added, Updated: c.Updated, Deleted: c.Deleted}
+}
+
+func toRestorePreviewDTO(p usecase.RestorePreview) RestorePreviewDTO {
+	return RestorePreviewDTO{Counts: toCountsDTO(p.Counts), RemoteOlder: p.RemoteOlder}
 }
 
 func toBackupPreviewDTO(p usecase.BackupPreview) BackupPreviewDTO {

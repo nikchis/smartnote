@@ -99,3 +99,12 @@ func TestCountsDTO(t *testing.T) {
 		t.Errorf("toBackupPreviewDTO = %+v, want %+v", got, want)
 	}
 }
+
+func TestRestorePreviewDTO(t *testing.T) {
+	got := toRestorePreviewDTO(usecase.RestorePreview{Counts: usecase.Counts{Added: 1, Updated: 2, Deleted: 3}, RemoteOlder: true})
+
+	want := RestorePreviewDTO{Counts: CountsDTO{Added: 1, Updated: 2, Deleted: 3}, RemoteOlder: true}
+	if got != want {
+		t.Errorf("toRestorePreviewDTO = %+v, want %+v", got, want)
+	}
+}
