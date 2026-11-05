@@ -23,10 +23,14 @@ function megabytes(bytes: number): string {
   return (bytes / 1e6).toFixed(1);
 }
 
-function title(p: Progress): string {
-  const yandex = p.storage === YANDEX_DISK;
-  if (p.direction === "upload") return yandex ? "Uploading to Yandex Disk…" : "Uploading to the server…";
-  return yandex ? "Downloading from Yandex Disk…" : "Downloading from the server…";
+/**
+ * title says what the user is doing: an upload is a Save, a download is
+ * "Downloading" only for the Restore the user started, else a synchronization.
+ */
+function title(p: Progress, restoring: boolean): string {
+  const place = p.storage === YANDEX_DISK ? "Yandex Disk" : "the server";
+  if (p.direction === "upload") return `Uploading to ${place}…`;
+  return restoring ? `Downloading from ${place}…` : `Synchronizing with ${place}…`;
 }
 
 function detail(p: Progress): string {
@@ -36,11 +40,11 @@ function detail(p: Progress): string {
   return `${amount} · ${percent}%`;
 }
 
-/** progressView describes p for the overlay; undefined without a transfer. */
-export function progressView(p: Progress | undefined): ProgressView | undefined {
+/** progressView describes p for the overlay; undefined without a transfer. restoring is the Restore download. */
+export function progressView(p: Progress | undefined, restoring = false): ProgressView | undefined {
   if (!p || p.direction === "") return undefined;
   return {
-    title: title(p),
+    title: title(p, restoring),
     detail: detail(p),
     warning: p.storage === YANDEX_DISK ? SLOW : "",
     done: p.done,

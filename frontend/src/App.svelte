@@ -22,6 +22,8 @@
   let overlay = $state("");
   /** progress is the last sync:progress event of the operation under the overlay. */
   let progress: Progress | undefined = $state();
+  /** restoring is true while the call under the overlay is the Restore download the user started. */
+  let restoring = $state(false);
   let showSettings = $state(false);
   let closing = false;
   let main: ReturnType<typeof Main> | undefined = $state();
@@ -31,14 +33,16 @@
    * or the progress of its transfer once the storage reports one. A progress
    * left from another call (Test in the settings) is dropped.
    */
-  async function withOverlay<T>(text: string, call: () => Promise<T>): Promise<T> {
+  async function withOverlay<T>(text: string, call: () => Promise<T>, restore = false): Promise<T> {
     overlay = text;
     progress = undefined;
+    restoring = restore;
     try {
       return await call();
     } finally {
       overlay = "";
       progress = undefined;
+      restoring = false;
     }
   }
 
@@ -47,7 +51,7 @@
       connect: () => withOverlay(text, () => SyncService.Connect()),
       prepareBackup: () => withOverlay(text, () => SyncService.PrepareBackup()),
       commitBackup: () => withOverlay(text, () => SyncService.CommitBackup()),
-      prepareRestore: () => withOverlay(text, () => SyncService.PrepareRestore()),
+      prepareRestore: () => withOverlay(text, () => SyncService.PrepareRestore(), true),
       commitRestore: () => withOverlay(text, () => SyncService.CommitRestore()),
       cancelPending: () => SyncService.CancelPending(),
       state: () => SyncService.State(),
@@ -135,7 +139,7 @@
 </main>
 
 {#if overlay}
-  <Overlay text={overlay} progress={progressView(progress)} />
+  <Overlay text={overlay} progress={progressView(progress, restoring)} />
 {/if}
 
 <MessageDialog />

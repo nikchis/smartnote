@@ -22,7 +22,7 @@ describe("progressView", () => {
     {
       name: "download from Yandex Disk",
       p: yandex("download", 0, 1_250_000),
-      want: { title: "Downloading from Yandex Disk…", detail: "0.0 of 1.3 MB · 0%", warning: slow, done: 0, total: 1_250_000 },
+      want: { title: "Synchronizing with Yandex Disk…", detail: "0.0 of 1.3 MB · 0%", warning: slow, done: 0, total: 1_250_000 },
     },
     {
       name: "the last byte sent",
@@ -32,7 +32,7 @@ describe("progressView", () => {
     {
       name: "notes from the server",
       p: server("download", 12, 340),
-      want: { title: "Downloading from the server…", detail: "12 of 340 notes · 3%", warning: "", done: 12, total: 340 },
+      want: { title: "Synchronizing with the server…", detail: "12 of 340 notes · 3%", warning: "", done: 12, total: 340 },
     },
     {
       name: "notes to the server",
@@ -42,9 +42,20 @@ describe("progressView", () => {
     {
       name: "an empty snapshot",
       p: server("download", 0, 0),
-      want: { title: "Downloading from the server…", detail: "Finishing…", warning: "", done: 0, total: 0 },
+      want: { title: "Synchronizing with the server…", detail: "Finishing…", warning: "", done: 0, total: 0 },
     },
   ])("$name", ({ p, want }) => {
     expect(progressView(p)).toEqual(want);
+  });
+
+  it.each([
+    { name: "Yandex Disk restore download", p: yandex("download", 0, 1_250_000), restoring: true, title: "Downloading from Yandex Disk…" },
+    { name: "server restore download", p: server("download", 12, 340), restoring: true, title: "Downloading from the server…" },
+    { name: "Yandex Disk other download", p: yandex("download", 0, 1_250_000), restoring: false, title: "Synchronizing with Yandex Disk…" },
+    { name: "server other download", p: server("download", 12, 340), restoring: false, title: "Synchronizing with the server…" },
+    { name: "Yandex Disk upload during restore", p: yandex("upload", 1, 2), restoring: true, title: "Uploading to Yandex Disk…" },
+    { name: "server upload during restore", p: server("upload", 1, 2), restoring: true, title: "Uploading to the server…" },
+  ])("titles $name", ({ p, restoring, title }) => {
+    expect(progressView(p, restoring)?.title).toBe(title);
   });
 });

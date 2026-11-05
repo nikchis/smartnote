@@ -50,7 +50,7 @@ describe("Overlay", () => {
     const el = show("Synchronizing…", { storage: "yandex_disk", direction: "download", unit: "bytes", done: 900, total: 900 });
 
     expect(lines(el)).toEqual([
-      "Downloading from Yandex Disk…",
+      "Synchronizing with Yandex Disk…",
       "Finishing…",
       "This can take several minutes on a slow connection. Do not close Smartnote.",
     ]);
@@ -68,7 +68,7 @@ describe("Overlay", () => {
   it("shows the notes of the server without the Yandex Disk warning", () => {
     const el = show("Connecting…", { storage: "ssh_postgres", direction: "download", unit: "notes", done: 12, total: 340 });
 
-    expect(lines(el)).toEqual(["Downloading from the server…", "12 of 340 notes · 3%"]);
+    expect(lines(el)).toEqual(["Synchronizing with the server…", "12 of 340 notes · 3%"]);
     expect(el.querySelector("progress")?.value).toBe(12);
   });
 });
