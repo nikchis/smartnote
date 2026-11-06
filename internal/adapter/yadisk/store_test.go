@@ -689,8 +689,6 @@ func TestFenceAfterCancel(t *testing.T) {
 		t.Fatalf("Write: err = %v, want context.Canceled", err)
 	}
 
-	wantCloudError(t, err)
-
 	if _, found := h.pending.state(); found {
 		t.Error("cloud_pending kept after a settled outcome")
 	}
@@ -1755,5 +1753,92 @@ func TestUploadProgressAfterRedirect307(t *testing.T) {
 
 	if last := reports[len(reports)-1]; last.Done != int64(len(data)) {
 		t.Errorf("last report = %+v, want Done = Total", last)
+	}
+}
+
+// moveInFlight runs a Write whose operation context ends (by deadline, or
+// by cancel when withDeadline is false) while the move request is in flight.
+// applied tells whether the Disk applies the move anyway.
+func moveInFlight(t *testing.T, applied, withDeadline bool) (*harness, error) {
+	t.Helper()
+
+	h := newHarness(t)
+	old := h.disk.put(container, []byte("old"), testNow)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	if withDeadline {
+		ctx, cancel = context.WithTimeout(t.Context(), 100*time.Millisecond)
+	}
+
+	defer cancel()
+
+	h.disk.set(func(d *fakeDisk) {
+		d.hold = func(ep string) {
+			if ep != epMove {
+				return
+			}
+
+			h.disk.set(func(d *fakeDisk) {
+				d.hold = nil
+				if applied {
+					d.moveFile("app:/"+tempName(1), "app:/"+container)
+				} else {
+					d.fail = map[string]fakeFailure{epMove: {http.StatusInternalServerError, ""}}
+				}
+			})
+
+			if withDeadline {
+				<-ctx.Done()
+			} else {
+				cancel()
+			}
+
+			time.Sleep(50 * time.Millisecond) // the client has given up by now
+		}
+	})
+
+	return h, h.store().Write(ctx, container, []byte("new"), old)
+}
+
+// TestMoveContextEndsAppliedIsFenced: the context ends during the move and
+// the Disk applied it; the fence finds the new md5 and the Write succeeds.
+func TestMoveContextEndsAppliedIsFenced(t *testing.T) {
+	for _, withDeadline := range []bool{false, true} {
+		h, err := moveInFlight(t, true, withDeadline)
+		if err != nil {
+			t.Fatalf("deadline=%v: Write: %v", withDeadline, err)
+		}
+
+		if _, found := h.pending.state(); found {
+			t.Error("cloud_pending kept after a settled outcome")
+		}
+
+		wantContainer(t, h.disk, []byte("new"))
+		wantNoTemps(t, h.disk)
+	}
+}
+
+// TestMoveContextEndsNotAppliedIsFenced: the move was not applied; the fence
+// removes the temporary file and the error stays the context's.
+func TestMoveContextEndsNotAppliedIsFenced(t *testing.T) {
+	for _, tc := range []struct {
+		withDeadline bool
+		want         error
+	}{{true, context.DeadlineExceeded}, {false, context.Canceled}} {
+		h, err := moveInFlight(t, false, tc.withDeadline)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("deadline=%v: Write err = %v, want %v", tc.withDeadline, err, tc.want)
+		}
+
+		if !slices.ContainsFunc(h.disk.eventLog(), func(e string) bool { return strings.HasPrefix(e, "DELETE app:/"+tempName(1)) }) {
+			t.Errorf("events = %v, want the fence's DELETE of the temporary file", h.disk.eventLog())
+		}
+
+		if _, found := h.pending.state(); found {
+			t.Error("cloud_pending kept after a settled outcome")
+		}
+
+		wantContainer(t, h.disk, []byte("old"))
+		wantNoTemps(t, h.disk)
 	}
 }

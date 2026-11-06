@@ -219,3 +219,36 @@ func TestRoundTripCanceledIsContextError(t *testing.T) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
+
+func TestHrefGetTransportTimeoutAndContext(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+
+	base := srv.Client()
+	base.Timeout = 50 * time.Millisecond
+	c := newHrefClient(base, func(string) bool { return true })
+
+	_, err := c.get(t.Context(), srv.URL, 1024, nil)
+
+	ce, ok := errors.AsType[CloudError](err)
+	if !ok || ce.Code != codeNetwork || ce.Net != netTimeout || ce.Step != stepDownload {
+		t.Errorf("live ctx: err = %v, want a network timeout CloudError at download", err)
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Error("live ctx: a transport timeout matches context.DeadlineExceeded")
+	}
+
+	base.Timeout = 0
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err = c.get(ctx, srv.URL, 1024, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expired ctx: err = %v, want context.DeadlineExceeded", err)
+	}
+}

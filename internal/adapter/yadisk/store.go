@@ -475,7 +475,9 @@ func (s *Store) move(ctx context.Context, tmp, path string, create bool) (moveRe
 
 	status, err := s.call(ctx, stepMove, http.MethodPost, u, &l)
 	if err != nil {
-		if mayBeApplied(err) {
+		// The context may end while the request is on the way: the move may
+		// still be applied, so this is an unknown outcome too.
+		if mayBeApplied(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			return moveUnknown, err
 		}
 
@@ -570,7 +572,12 @@ func (s *Store) fence(base context.Context, tmpName, path, sum string, cause err
 		return nil
 	}
 
-	if _, ok := errors.AsType[CloudError](cause); !ok {
+	// An end of the operation's context stays as it is, so that the interface
+	// shows the operation's timeout or cancellation.
+	_, isCloud := errors.AsType[CloudError](cause)
+	isCtx := errors.Is(cause, context.DeadlineExceeded) || errors.Is(cause, context.Canceled)
+
+	if !isCloud && !isCtx {
 		cause = withStep(networkError(cause), stepMove)
 	}
 
