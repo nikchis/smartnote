@@ -32,8 +32,9 @@ search by meaning in [Search](search.md#semantic-search).
 - The warning that the remote storage is older than this device last synchronized with applies to
   both the server and Yandex Disk; see [Yandex Disk](yandex-disk.md#when-the-storage-is-older-than-the-device).
 - Going back from 2.2.0 to 2.1.0 keeps `local.db` readable. But 2.1.0 reads the saved Yandex Disk
-  settings as incomplete PostgreSQL settings, and Connect fails with an SSH error. Clear the fields
-  in the Settings of 2.1.0; the local notes are not affected.
+  settings as incomplete PostgreSQL settings, and Connect fails with the validation error
+  "invalid ssh_host: is required" (not an SSH network error). Clear the fields in the Settings of
+  2.1.0; the local notes are not affected.
 - The storage type **None (local only)** keeps the saved SSH + PostgreSQL fields, so that you can
   switch back without typing them again. After going back to 2.1.0 these fields make a configured
   server again, and 2.1.0 connects to PostgreSQL with them. As usual it compares the notes and asks
