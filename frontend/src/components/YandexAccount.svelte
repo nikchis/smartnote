@@ -151,8 +151,10 @@
   .muted {
     color: var(--muted);
   }
+  /* The global label is a column; the code field stays beside its caption. */
   .code {
     display: flex;
+    flex-direction: row;
     align-items: center;
     gap: 0.5rem;
   }
