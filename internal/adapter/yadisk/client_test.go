@@ -2,6 +2,7 @@ package yadisk
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"syscall"
@@ -155,5 +157,65 @@ func TestMeterIgnoresReplacedBody(t *testing.T) {
 		if d > 100 {
 			t.Errorf("report %d exceeds the body length", d)
 		}
+	}
+}
+
+// stalledRequest sends a GET to a server that never answers, with hc.
+func stalledRequest(ctx context.Context, t *testing.T, hc *http.Client) error {
+	t.Helper()
+
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = roundTrip(hc, req, stepStat, nil)
+
+	return err
+}
+
+func TestRoundTripTransportTimeoutIsCloudError(t *testing.T) {
+	err := stalledRequest(t.Context(), t, &http.Client{Timeout: 50 * time.Millisecond})
+
+	ce, ok := errors.AsType[CloudError](err)
+	if !ok {
+		t.Fatalf("err = %v, want a CloudError", err)
+	}
+
+	if ce.Code != codeNetwork || ce.Net != netTimeout || ce.Step != stepStat {
+		t.Errorf("CloudError = %+v, want network timeout at stat", ce)
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Error("a transport timeout matches context.DeadlineExceeded")
+	}
+}
+
+func TestRoundTripContextDeadlineIsContextError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+
+	err := stalledRequest(ctx, t, &http.Client{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	}
+
+	if _, ok := errors.AsType[CloudError](err); ok {
+		t.Errorf("err = %v, a context deadline became a CloudError", err)
+	}
+}
+
+func TestRoundTripCanceledIsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	if err := stalledRequest(ctx, t, &http.Client{}); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }

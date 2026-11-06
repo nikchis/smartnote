@@ -115,6 +115,8 @@ var (
 	errRedirects    = errors.New("too many redirects")
 	errTooLarge     = errors.New("object exceeds the size limit")
 	errNoAccess     = errors.New("token answer without access_token")
+
+	errTransportTimeout = errors.New("request timed out")
 )
 
 // CloudError is an error answer of Yandex Disk or OAuth (Status is the HTTP
@@ -176,7 +178,27 @@ func networkError(err error) CloudError {
 		err = ue.Err
 	}
 
-	return CloudError{Code: codeNetwork, Net: netClass(err), err: err}
+	class := netClass(err)
+	if errors.Is(err, context.DeadlineExceeded) {
+		// A timeout of the transport, not of the operation: the cause must
+		// not match the deadline of a context, or the interface would show
+		// it as the operation's own timeout.
+		err = errTransportTimeout
+	}
+
+	return CloudError{Code: codeNetwork, Net: class, err: err}
+}
+
+// requestError is the error of a request of step that got no answer. When
+// the context of the request is done, the operation's own limit or a
+// cancellation is the cause, and the context error is returned; otherwise it
+// is a network CloudError.
+func requestError(ctx context.Context, err error, step string) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return fmt.Errorf("%s: %w", step, cerr)
+	}
+
+	return withStep(networkError(err), step)
 }
 
 // netClass is the class of the cause of a request without an answer, for
@@ -339,13 +361,13 @@ func roundTrip(hc *http.Client, req *http.Request, step string, out any) (int, e
 
 	resp, err := hc.Do(req)
 	if err != nil {
-		return fail(networkError(err))
+		return 0, requestError(req.Context(), err, step)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer))
 	if err != nil {
-		return fail(networkError(err))
+		return 0, requestError(req.Context(), err, step)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -467,7 +489,7 @@ func (c hrefClient) get(ctx context.Context, href string, limit int64, m *meter)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, withStep(networkError(err), stepDownload)
+		return nil, requestError(ctx, err, stepDownload)
 	}
 	defer resp.Body.Close()
 
@@ -478,7 +500,7 @@ func (c hrefClient) get(ctx context.Context, href string, limit int64, m *meter)
 
 	data, err := io.ReadAll(io.LimitReader(m.wrap(resp.Body), limit+1))
 	if err != nil {
-		return nil, withStep(networkError(err), stepDownload)
+		return nil, requestError(ctx, err, stepDownload)
 	}
 
 	if int64(len(data)) > limit {

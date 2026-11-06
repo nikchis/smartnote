@@ -306,3 +306,21 @@ func TestLogErrorCloud(t *testing.T) {
 		}
 	}
 }
+
+func TestTransportTimeoutIsCloudError(t *testing.T) {
+	err := fmt.Errorf("upload: %w", yadisk.CloudError{Code: "network", Step: "upload", Net: "timeout"})
+
+	if ui := classify(err); ui.Code != codeCloud || ui.Message != "Yandex Disk error: network." {
+		t.Errorf("classify = %q %q, want cloud \"Yandex Disk error: network.\"", ui.Code, ui.Message)
+	}
+
+	var buf bytes.Buffer
+
+	LogError(slog.New(slog.NewTextHandler(&buf, nil)), "backup", err)
+
+	for _, want := range []string{"code=cloud", "step=upload", "net=timeout"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("log %q lacks %q", buf.String(), want)
+		}
+	}
+}

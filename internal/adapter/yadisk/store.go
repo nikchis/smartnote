@@ -571,7 +571,7 @@ func (s *Store) fence(base context.Context, tmpName, path, sum string, cause err
 	}
 
 	if _, ok := errors.AsType[CloudError](cause); !ok {
-		cause = CloudError{Code: codeNetwork, Step: stepMove, Net: netClass(cause), err: cause}
+		cause = withStep(networkError(cause), stepMove)
 	}
 
 	return fmt.Errorf("move: %w", cause)
