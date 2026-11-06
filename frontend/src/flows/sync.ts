@@ -97,7 +97,7 @@ export async function connectFlow(api: SyncApi, d: Dialogs, hooks: ConnectHooks 
   }
 
   if (out.status === "remote_older") {
-    await d.info(olderWarning);
+    await d.warning(olderWarning);
     return;
   }
 

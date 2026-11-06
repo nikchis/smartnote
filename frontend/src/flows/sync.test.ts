@@ -59,6 +59,9 @@ class FakeDialogs implements Dialogs {
   async info(msg: string) {
     this.log.push(`info: ${msg}`);
   }
+  async warning(msg: string) {
+    this.log.push(`warning: ${msg}`);
+  }
   async error(msg: string) {
     this.log.push(`error: ${msg}`);
   }
@@ -106,7 +109,7 @@ describe("connectFlow", () => {
     await connectFlow(api, d);
 
     expect(d.log).toEqual([
-      "info: The remote storage holds an older version of the data than this device last synchronized with. It may have been restored from an earlier copy. Use Backup to overwrite it, or Restore to replace your notes with it.",
+      "warning: The remote storage holds an older version of the data than this device last synchronized with. It may have been restored from an earlier copy. Use Backup to overwrite it, or Restore to replace your notes with it.",
     ]);
     expect(api.calls).toEqual(["connect"]);
   });

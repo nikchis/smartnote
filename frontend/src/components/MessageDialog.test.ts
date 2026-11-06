@@ -23,7 +23,38 @@ afterEach(() => {
 const buttons = () => [...target.querySelectorAll("button")].map((b) => b.textContent);
 const focused = () => (document.activeElement as HTMLElement | null)?.textContent;
 
+const show = {
+  info: () => dialogs.info("Data successfully saved."),
+  warning: () => dialogs.warning("The copy is older."),
+  error: () => dialogs.error("Failed."),
+  ask: () => dialogs.ask("Delete?"),
+  choose: () => dialogs.choose("Save?"),
+} as const;
+
 describe("MessageDialog", () => {
+  it.each([
+    ["info", "success", null],
+    ["warning", "warning", "Warning"],
+    ["error", "error", "Error"],
+    ["ask", "question", "Question"],
+    ["choose", "question", "Question"],
+  ] as const)("shows a %s with the %s mark and title %s", (kind, mark, title) => {
+    void show[kind]();
+    flushSync();
+
+    expect(target.querySelector("svg.mark")?.getAttribute("data-mark")).toBe(mark);
+    expect(target.querySelector("h2")?.textContent ?? null).toBe(title);
+    expect(target.querySelector("img")).toBeNull();
+  });
+
+  it("names a dialog without a title by its message", () => {
+    void dialogs.info("Data successfully saved.");
+    flushSync();
+
+    const id = target.querySelector('[role="alertdialog"]')?.getAttribute("aria-labelledby");
+    expect(id && document.getElementById(id)?.textContent).toBe("Data successfully saved.");
+  });
+
   it("focuses Yes of a question", () => {
     void dialogs.ask("Are you sure you want to remove this note?");
     flushSync();

@@ -6,6 +6,15 @@ afterEach(() => {
 });
 
 describe("dialogs", () => {
+  it("warning shows a warning with OK and resolves on OK", async () => {
+    let done = false;
+    const result = dialogs.warning("The copy is older.").then(() => (done = true));
+    expect(currentDialog()).toEqual({ kind: "warning", message: "The copy is older." });
+    answer("yes");
+    await result;
+    expect(done).toBe(true);
+  });
+
   it("choose shows Yes, No and Cancel and resolves to the button pressed", async () => {
     for (const pressed of ["yes", "no", "cancel"] as const) {
       const result = dialogs.choose("Save?");
