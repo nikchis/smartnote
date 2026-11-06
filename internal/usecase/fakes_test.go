@@ -272,6 +272,7 @@ func (f *fakeSyncState) LocalSnapshot(ctx context.Context) (LocalSnapshot, error
 	hook, notes, snapErr := f.onSnapshot, f.notes, f.snapErr
 	snap := f.snap
 	snap.Notes = slices.Clone(snap.Notes)
+	snap.Synced = maps.Clone(snap.Synced)
 	f.mu.Unlock()
 
 	if hook != nil {
@@ -328,7 +329,7 @@ func (f *fakeSyncState) ApplyRestore(_ context.Context, p RestorePlan, revision 
 	defer f.mu.Unlock()
 
 	f.restores = append(f.restores, p)
-	f.snap.Revision, f.snap.ServerID = revision, serverID
+	f.synced(serverID, revision)
 
 	return nil
 }
@@ -343,9 +344,20 @@ func (f *fakeSyncState) SetSyncState(ctx context.Context, serverID uuid.UUID, re
 	}
 
 	f.setCalls = append(f.setCalls, syncStateCall{serverID, revision})
-	f.snap.Revision, f.snap.ServerID = revision, serverID
+	f.synced(serverID, revision)
 
 	return nil
+}
+
+// synced stores the pair as the current one and in the history, as the
+// local database does; f.mu is held.
+func (f *fakeSyncState) synced(serverID uuid.UUID, revision int64) {
+	f.snap.Revision, f.snap.ServerID = revision, serverID
+	if f.snap.Synced == nil {
+		f.snap.Synced = map[uuid.UUID]int64{}
+	}
+
+	f.snap.Synced[serverID] = revision
 }
 
 func (f *fakeSyncState) writes() int {

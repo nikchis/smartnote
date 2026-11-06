@@ -201,7 +201,7 @@ func (s *Store) buildStorage(ctx context.Context, tmp, password string) (dek []b
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
-	if err := ensureCloudTables(ctx, db); err != nil {
+	if err := ensureOptionalTables(ctx, db); err != nil {
 		return nil, err
 	}
 
@@ -418,7 +418,7 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 		}
 	}
 
-	if err := ensureCloudTables(ctx, s.db); err != nil {
+	if err := ensureOptionalTables(ctx, s.db); err != nil {
 		sealbox.Wipe(dek)
 		return nil, err
 	}
@@ -426,11 +426,12 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 	return dek, nil
 }
 
-// ensureCloudTables creates the cloud tables if they are missing.
-func ensureCloudTables(ctx context.Context, db *sql.DB) error {
-	for _, ddl := range []string{cloudAuthDDL, cloudPendingDDL} {
+// ensureOptionalTables creates the tables that a database of 2.1.0 lacks
+// if they are missing: the cloud tables and sync_server.
+func ensureOptionalTables(ctx context.Context, db *sql.DB) error {
+	for _, ddl := range []string{cloudAuthDDL, cloudPendingDDL, syncServerDDL} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
-			return fmt.Errorf("create cloud tables: %w", mapOpenError(err))
+			return fmt.Errorf("create optional tables: %w", mapOpenError(err))
 		}
 	}
 

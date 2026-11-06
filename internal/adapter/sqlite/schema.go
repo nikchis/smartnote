@@ -86,6 +86,15 @@ const (
 );`
 )
 
+// syncServerDDL is the revision this device last synchronized with each
+// server, so that a server it returns to is compared with its own revision.
+// The current pair stays in connection, which 2.1.0 reads. Like the cloud
+// tables it is created on every Create and Unlock and is not required.
+const syncServerDDL = `CREATE TABLE IF NOT EXISTS sync_server (
+	sync_server_uuid TEXT PRIMARY KEY,
+	revision         INTEGER NOT NULL
+);`
+
 // requiredTablesV1 and requiredTablesV2 are checked on Unlock, so a damaged
 // schema reads as a corrupt storage rather than as a later "no such table".
 var (

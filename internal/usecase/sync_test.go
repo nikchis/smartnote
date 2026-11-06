@@ -485,6 +485,97 @@ func TestServerSwitchKeepsRevision(t *testing.T) {
 	}
 }
 
+// Connect to a server this device synchronized with before another one
+// compares with that server's own revision.
+func TestConnectKnownServer(t *testing.T) {
+	tests := []struct {
+		name     string
+		revision int64
+		want     ConnectStatus
+	}{
+		{name: "unchanged since: the device is newer", revision: 4, want: StatusDiverged},
+		{name: "changed by another device", revision: 6, want: StatusRemoteNewer},
+		{name: "rolled back", revision: 2, want: StatusRemoteOlder},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := &fakeServer{serverID: serverB, revision: tt.revision, notes: []domain.Note{note(1, "a", "old")}}
+			local := LocalSnapshot{
+				Notes: []domain.Note{note(1, "a", "new")}, Revision: 9, ServerID: serverA,
+				Synced: map[uuid.UUID]int64{serverA: 9, serverB: 4},
+			}
+			f := newSyncFixture(t, local, srv)
+
+			out, err := f.sync.Connect(context.Background())
+			if err != nil {
+				t.Fatalf("Connect: %v", err)
+			}
+
+			if out.Status != tt.want {
+				t.Errorf("Status = %q, want %q", out.Status, tt.want)
+			}
+
+			if f.local.writes() != 0 {
+				t.Errorf("local writes = %d, want 0", f.local.writes())
+			}
+		})
+	}
+}
+
+// Save to a server unchanged since this device last synchronized with it
+// does not ask about overwriting fresher data.
+func TestPrepareBackupKnownServer(t *testing.T) {
+	srv := &fakeServer{serverID: serverB, revision: 4, notes: []domain.Note{note(1, "a", "old")}}
+	local := LocalSnapshot{
+		Notes: []domain.Note{note(1, "a", "new")}, Revision: 9, ServerID: serverA,
+		Synced: map[uuid.UUID]int64{serverA: 9, serverB: 4},
+	}
+	f := newSyncFixture(t, local, srv)
+
+	p, err := f.sync.PrepareBackup(context.Background())
+	if err != nil {
+		t.Fatalf("PrepareBackup: %v", err)
+	}
+
+	if p.RemoteNewer || p.Counts != (Counts{Updated: 1}) {
+		t.Errorf("preview = %+v, want one update and RemoteNewer false", p)
+	}
+}
+
+// After a Restore from B the device returns to A, unchanged since the last
+// synchronization with it: A is not offered as fresher data.
+func TestServerSwitchRemembersEachServer(t *testing.T) {
+	aNotes := []domain.Note{note(1, "a", "x")}
+	srv := &fakeServer{serverID: serverB, revision: 1, notes: []domain.Note{note(9, "other", "y")}}
+	f := newSyncFixture(t, LocalSnapshot{Notes: aNotes, Revision: 5, ServerID: serverA, Synced: map[uuid.UUID]int64{serverA: 5}}, srv)
+	ctx := context.Background()
+
+	if out, err := f.sync.Connect(ctx); err != nil || out.Status != StatusRemoteNewer {
+		t.Fatalf("Connect to B = %+v, %v; want remote_newer", out, err)
+	}
+
+	if err := f.sync.CommitRestore(ctx); err != nil {
+		t.Fatalf("CommitRestore from B: %v", err)
+	}
+
+	f.local.mu.Lock()
+	f.local.snap.Notes = []domain.Note{note(9, "other", "y")}
+	f.local.mu.Unlock()
+
+	srv.mu.Lock()
+	srv.serverID, srv.revision, srv.notes = serverA, 5, aNotes
+	srv.mu.Unlock()
+
+	out, err := f.sync.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect back to A: %v", err)
+	}
+
+	if out.Status != StatusDiverged {
+		t.Errorf("Connect back to A = %q, want diverged: A is unchanged since revision 5", out.Status)
+	}
+}
+
 func TestConnectInSyncAlignsRevision(t *testing.T) {
 	notes := []domain.Note{note(1, "a", "x")}
 	srv := &fakeServer{serverID: serverA, revision: 5, notes: notes}

@@ -82,10 +82,11 @@ type RestorePreview struct {
 	RemoteOlder bool
 }
 
-// remoteOlder reports the rollback of the server (spec §5.6): the same server
-// with a lower revision than the stored local one and a different note set.
+// remoteOlder reports the rollback of the server (spec §5.6): a lower
+// revision than the one this device last synchronized with it, and a
+// different note set.
 func remoteOlder(local LocalSnapshot, remote RemoteSnapshot) bool {
-	return local.ServerID == remote.ServerID && remote.Revision < local.Revision && Diff(local.Notes, remote.Notes)
+	return remote.Revision < local.Toward(remote.ServerID).Revision && Diff(local.Notes, remote.Notes)
 }
 
 // PlanBackup plans sending every local note to the server.
@@ -97,13 +98,8 @@ func PlanBackup(local LocalSnapshot, remote RemoteSnapshot, gen uint64) BackupPl
 		Generation:       gen,
 	}
 
-	// A revision of another server says nothing about this one, as in the connect check.
-	localRevision := local.Revision
-	if local.ServerID != remote.ServerID {
-		localRevision = 0
-	}
-
-	p.RemoteNewer = remote.Revision > localRevision && Diff(local.Notes, remote.Notes)
+	// Compared with this server's own revision, as in the connect check.
+	p.RemoteNewer = remote.Revision > local.Toward(remote.ServerID).Revision && Diff(local.Notes, remote.Notes)
 
 	remoteByID := index(remote.Notes)
 	for _, l := range local.Notes {

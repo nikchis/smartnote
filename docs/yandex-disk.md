@@ -89,5 +89,26 @@ replaced until you choose. The Restore question then starts with the same warnin
 warning exists for SSH + PostgreSQL. It appears only when the two sets of notes differ; with equal
 sets there is nothing to lose and Smartnote continues quietly.
 
+## Switching between Yandex Disk and SSH + PostgreSQL
+
+Smartnote synchronizes with one storage at a time, the one chosen in **Settings**. You can switch
+between them: the fields of the other type are kept. The device remembers the revision it last
+synchronized with in each storage, so after switching back:
+
+- a storage that has not changed since then is not offered as fresher data: the device is newer,
+  and **Save** brings the storage up to date;
+- a storage that another device changed since then is offered for **Restore**, as usual;
+- a storage that holds an older version than this device last synchronized with gets the warning
+  above.
+
+Smartnote 2.2.0 starts remembering revisions from the storage this device is synchronized with
+when it is updated; storages it synchronized with only before that are compared as new.
+
+A storage this device never synchronized with is compared as new: if it holds other notes,
+Smartnote offers to restore them. Answer **No** and press **Save** if you want the storage to get
+the notes of this device instead; **Save** then asks once more before it overwrites them.
+Smartnote does not merge the two storages: **Save** and **Restore** always copy the whole set of
+notes in one direction.
+
 See also [Security](security.md#yandex-disk) for what Yandex can see and do, and
 [Limitations](limitations.md) for the file size limit and other restrictions.

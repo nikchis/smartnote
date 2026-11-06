@@ -35,6 +35,11 @@ search by meaning in [Search](search.md#semantic-search).
   settings as incomplete PostgreSQL settings, and Connect fails with the validation error
   "invalid ssh_host: is required" (not an SSH network error). Clear the fields in the Settings of
   2.1.0; the local notes are not affected.
+- After going back to 2.1.0 and returning to 2.2.0, the revisions Smartnote remembers for storages
+  that 2.1.0 switched away from may be out of date. Usually that only means such a storage is
+  compared as new. In a rare case (2.1.0 restored from a storage that had been rolled back, then
+  switched to another one) Smartnote may warn that the storage is older when it is not, or not
+  notice that another device saved to it, so that **Save** overwrites that data without asking.
 - The storage type **None (local only)** keeps the saved SSH + PostgreSQL fields, so that you can
   switch back without typing them again. After going back to 2.1.0 these fields make a configured
   server again, and 2.1.0 connects to PostgreSQL with them. As usual it compares the notes and asks

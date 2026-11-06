@@ -14,10 +14,26 @@ import (
 
 // LocalSnapshot is the local note set with the revision and server it was last
 // synchronized with; ServerID is uuid.Nil before the first synchronization.
+// Synced holds the revision this device last synchronized with each server
+// it ever synchronized with, the current one included.
 type LocalSnapshot struct {
 	Notes    []domain.Note
 	Revision int64
 	ServerID uuid.UUID
+	Synced   map[uuid.UUID]int64
+}
+
+// Toward returns l as it stands toward server: ServerID is server and
+// Revision the revision this device last synchronized with it, 0 for a
+// server it never synchronized with.
+func (l LocalSnapshot) Toward(server uuid.UUID) LocalSnapshot {
+	if l.ServerID == server {
+		return l
+	}
+
+	l.ServerID, l.Revision = server, l.Synced[server]
+
+	return l
 }
 
 // RemoteSnapshot is the server note set read in one consistent transaction.
@@ -380,13 +396,12 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 		return ConnectOutcome{Status: StatusCreated}, nil
 	}
 
-	// Another server: compare as if never synchronized with it. The reset
-	// stays in memory until a Backup, a Restore or an in-sync result writes
-	// the new pair, so a short visit to another server keeps the old revision.
+	// Another server: compare with the revision this device last
+	// synchronized with it, 0 if never. The pair stays in memory until a
+	// Backup, a Restore or an in-sync result writes it, so a short visit to
+	// another server keeps the stored one.
 	stored := local
-	if local.ServerID != remote.ServerID {
-		local.ServerID, local.Revision = remote.ServerID, 0
-	}
+	local = local.Toward(remote.ServerID)
 
 	if !Diff(local.Notes, remote.Notes) {
 		if stored.ServerID != remote.ServerID || stored.Revision != remote.Revision {
@@ -403,9 +418,9 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 
 	s.d.Changes.MarkDiverged()
 
-	// The check uses the stored pair: a reset for another server never
-	// counts as a rollback.
-	if remoteOlder(stored, remote) {
+	// The check uses the pair of this server: a server never synchronized
+	// with has revision 0 and is never older.
+	if remoteOlder(local, remote) {
 		s.update(func() { s.restoreAvailable = true })
 		return ConnectOutcome{Status: StatusRemoteOlder}, nil
 	}
