@@ -4,12 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/nikchis/smartnote/internal/applog"
 	"github.com/nikchis/smartnote/internal/domain"
+	"github.com/nikchis/smartnote/internal/platform"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
@@ -149,12 +152,19 @@ func readKeyFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-// WailsFiles opens the dialogs and the clipboard of the running Wails application.
-type WailsFiles struct{}
+// WailsFiles opens the dialogs and the clipboard of the running Wails
+// application. Log receives the failure to harden the process again after a
+// file dialog.
+type WailsFiles struct {
+	Log *slog.Logger
+}
 
-// OpenFile asks for a file to open.
-func (WailsFiles) OpenFile(title string) (string, error) {
-	path, err := application.Get().Dialog.OpenFile().SetTitle(title).PromptForSingleSelection()
+// OpenFile asks for a file to open, in a dialog over the active window.
+func (f WailsFiles) OpenFile(title string) (string, error) {
+	path, err := f.whileDialog(func() (string, error) {
+		app := application.Get()
+		return app.Dialog.OpenFile().SetTitle(title).AttachToWindow(app.Window.Current()).PromptForSingleSelection()
+	})
 	if err != nil {
 		return "", fmt.Errorf("open file dialog: %w", err)
 	}
@@ -162,14 +172,39 @@ func (WailsFiles) OpenFile(title string) (string, error) {
 	return path, nil
 }
 
-// SaveFile asks for a file to save, suggesting filename.
-func (WailsFiles) SaveFile(title, filename string) (string, error) {
-	path, err := application.Get().Dialog.SaveFile().SetMessage(title).SetFilename(filename).PromptForSingleSelection()
+// SaveFile asks for a file to save, suggesting filename, in a dialog over the
+// active window.
+func (f WailsFiles) SaveFile(title, filename string) (string, error) {
+	path, err := f.whileDialog(func() (string, error) {
+		app := application.Get()
+		d := app.Dialog.SaveFile()
+		// GTK 4 shows the title and ignores the message of SetMessage.
+		d.SetOptions(&application.SaveFileDialogOptions{Title: title, Filename: filename, Window: app.Window.Current()})
+
+		return d.PromptForSingleSelection()
+	})
 	if err != nil {
 		return "", fmt.Errorf("save file dialog: %w", err)
 	}
 
 	return path, nil
+}
+
+// whileDialog runs show with the process open to xdg-desktop-portal, which
+// draws the file dialogs of GTK 4: a hardened process gets no answer.
+func (f WailsFiles) whileDialog(show func() (string, error)) (string, error) {
+	restore, err := platform.OpenToPortal()
+	if err != nil {
+		return "", err
+	}
+
+	defer func() {
+		if err := restore(); err != nil {
+			f.Log.Error("harden process after file dialog", applog.Err(err))
+		}
+	}()
+
+	return show()
 }
 
 // SetClipboard puts text on the clipboard.

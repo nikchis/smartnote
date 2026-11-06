@@ -301,7 +301,7 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		application.NewService(wailsui.NewNotesService(env, notes)),
 		application.NewService(wailsui.NewSyncService(env, syncer, progress)),
 		application.NewService(wailsui.NewConnectionService(env, connection, progress)),
-		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{})),
+		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{Log: env.Log})),
 		application.NewService(wailsui.NewSearchService(env, search, searchStatus)),
 		application.NewService(wailsui.NewAppService(lifecycle)),
 	}, nil
