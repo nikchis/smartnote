@@ -110,16 +110,16 @@
     fill: var(--mark);
     stroke: none;
   }
-  .success {
+  .mark.success {
     --mark: #7fb37a;
   }
-  .warning {
+  .mark.warning {
     --mark: #df9e25;
   }
-  .error {
+  .mark.error {
     --mark: var(--danger);
   }
-  .question {
+  .mark.question {
     --mark: var(--accent);
   }
   h2 {
