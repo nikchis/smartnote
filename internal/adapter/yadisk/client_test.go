@@ -242,7 +242,10 @@ func TestHrefGetTransportTimeoutAndContext(t *testing.T) {
 		t.Error("live ctx: a transport timeout matches context.DeadlineExceeded")
 	}
 
-	base.Timeout = 0
+	// A client without a transport timeout: only the context can end it.
+	plain := srv.Client()
+	plain.Timeout = 0
+	c = newHrefClient(plain, func(string) bool { return true })
 
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
