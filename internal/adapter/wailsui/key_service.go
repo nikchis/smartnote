@@ -162,8 +162,7 @@ type WailsFiles struct {
 // OpenFile asks for a file to open, in a dialog over the active window.
 func (f WailsFiles) OpenFile(title string) (string, error) {
 	path, err := f.whileDialog(func() (string, error) {
-		app := application.Get()
-		return app.Dialog.OpenFile().SetTitle(title).AttachToWindow(app.Window.Current()).PromptForSingleSelection()
+		return application.Get().Dialog.OpenFile().SetTitle(title).AttachToWindow(activeWindow()).PromptForSingleSelection()
 	})
 	if err != nil {
 		return "", fmt.Errorf("open file dialog: %w", err)
@@ -176,10 +175,12 @@ func (f WailsFiles) OpenFile(title string) (string, error) {
 // active window.
 func (f WailsFiles) SaveFile(title, filename string) (string, error) {
 	path, err := f.whileDialog(func() (string, error) {
-		app := application.Get()
-		d := app.Dialog.SaveFile()
-		// GTK 4 shows the title and ignores the message of SetMessage.
-		d.SetOptions(&application.SaveFileDialogOptions{Title: title, Filename: filename, Window: app.Window.Current()})
+		d := application.Get().Dialog.SaveFile()
+		// GTK 4 shows the title and ignores the message of SetMessage;
+		// SetOptions replaces every option, so the default ones are repeated.
+		d.SetOptions(&application.SaveFileDialogOptions{
+			Title: title, Filename: filename, Window: activeWindow(), CanCreateDirectories: true,
+		})
 
 		return d.PromptForSingleSelection()
 	})
@@ -191,7 +192,9 @@ func (f WailsFiles) SaveFile(title, filename string) (string, error) {
 }
 
 // whileDialog runs show with the process open to xdg-desktop-portal, which
-// draws the file dialogs of GTK 4: a hardened process gets no answer.
+// draws the file dialogs of GTK 4: a hardened process gets no answer. If the
+// hardening cannot be restored, the process stays dumpable and only the log
+// tells.
 func (f WailsFiles) whileDialog(show func() (string, error)) (string, error) {
 	restore, err := platform.OpenToPortal()
 	if err != nil {
@@ -200,11 +203,24 @@ func (f WailsFiles) whileDialog(show func() (string, error)) (string, error) {
 
 	defer func() {
 		if err := restore(); err != nil {
-			f.Log.Error("harden process after file dialog", applog.Err(err))
+			log := f.Log
+			if log == nil {
+				log = slog.Default()
+			}
+
+			log.Error("harden process after file dialog", applog.Err(err))
 		}
 	}()
 
 	return show()
+}
+
+// activeWindow is the window the dialog belongs to. GTK is asked on its own
+// thread; nil, when no window is active, leaves the dialog without a parent.
+func activeWindow() application.Window {
+	app := application.Get()
+
+	return application.InvokeSyncWithResult(app.Window.Current)
 }
 
 // SetClipboard puts text on the clipboard.

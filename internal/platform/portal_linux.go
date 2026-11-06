@@ -21,8 +21,10 @@ var portal struct {
 // non-dumpable process (Harden) keeps from it: the portal then refuses the
 // request and GTK waits for an answer that never comes. The process is made
 // dumpable for the time of the dialog; restore, called when the dialog
-// closes, hardens it again once no other dialog is open. Calling restore
-// more than once has no further effect.
+// closes, hardens it again once no other dialog is open; it must be called
+// on every path, and while the dialog stays open the process stays dumpable.
+// If restore fails, the process stays dumpable. Calling restore more than
+// once has no further effect.
 func OpenToPortal() (restore func() error, err error) {
 	portal.Lock()
 	defer portal.Unlock()

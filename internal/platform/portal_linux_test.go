@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"sync"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -112,5 +113,32 @@ func TestOpenToPortalKeepsAProcessThatWasNotHardened(t *testing.T) {
 
 	if got := dumpable(t); got != 1 {
 		t.Fatalf("dumpable = %d, want 1: the process was not hardened", got)
+	}
+}
+
+func TestOpenToPortalHardensAgainAfterConcurrentDialogs(t *testing.T) {
+	keepDumpable(t)
+	setDumpable(t, 0)
+
+	var wg sync.WaitGroup
+
+	for range 16 {
+		wg.Go(func() {
+			restore, err := OpenToPortal()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+
+			if err := restore(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if got := dumpable(t); got != 0 {
+		t.Fatalf("dumpable after all dialogs = %d, want 0", got)
 	}
 }
