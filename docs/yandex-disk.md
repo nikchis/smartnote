@@ -62,6 +62,11 @@ next operation shows "Sign in to Yandex Disk again." and, after Connect, opens *
 Uploads to Yandex Disk can be slow (about 120 KB/s was measured), so a large set of notes can take
 minutes to back up over a slow connection. An operation with Yandex Disk is limited to 10 minutes.
 
+Each upload goes to an upload server that Yandex picks for it. If the connection to that server
+fails (it is dropped, or not accepted in time), Smartnote uploads once more by a new link, usually
+to another server. If that fails too, it shows an error such as "Yandex Disk error: network.";
+press **Save** again, or, when the error came on Connect, press **OK** in **Settings** first.
+
 Smartnote cannot see or empty the trash of your Disk: the access to the application folder does not
 cover it. If earlier copies of the container land in the trash, they take space there and can be
 deleted by hand in the Yandex Disk web interface.

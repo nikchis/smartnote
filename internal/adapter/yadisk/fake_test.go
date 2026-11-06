@@ -108,6 +108,9 @@ type fakeDisk struct {
 	dropPollAfter  int    // the n-th and later operation polls drop the connection; 0 never
 	polls          int    //
 	deleteFail     bool   // DELETE drops the connection
+	dropPuts       int    // the next n PUTs drop the connection without an answer
+	dropStored     int    // the next n PUTs store the file, then drop the connection without an answer
+	putHook        func() // called on every PUT before it is served, under the lock
 	delete202      bool   // DELETE answers 202 with a successful operation
 	fail           map[string]fakeFailure
 	downloadBase   string // base URL of download links; the href server by default
@@ -556,6 +559,18 @@ func (d *fakeDisk) serveHref(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *fakeDisk) receive(w http.ResponseWriter, r *http.Request, id string) {
+	if d.putHook != nil {
+		d.putHook()
+	}
+
+	if d.dropPuts > 0 {
+		d.dropPuts--
+
+		dropConnection(w)
+
+		return
+	}
+
 	if f, ok := d.fail[epPut]; ok {
 		http.Error(w, "upload refused: "+fakeDescription, f.status)
 		return
@@ -586,6 +601,15 @@ func (d *fakeDisk) receive(w http.ResponseWriter, r *http.Request, id string) {
 	}
 
 	d.addFile(p, f)
+
+	if d.dropStored > 0 {
+		d.dropStored--
+
+		dropConnection(w)
+
+		return
+	}
+
 	w.WriteHeader(status)
 }
 

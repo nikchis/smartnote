@@ -54,6 +54,15 @@ const (
 	// idleConnTimeout closes a kept connection that no request used for this
 	// long: a long-idle connection may already be dropped by the network.
 	idleConnTimeout = 30 * time.Second
+
+	// dialTimeout bounds the name lookup and TCP connection of every request
+	// (to the proxy, when there is one). An upload node that does not accept
+	// a connection fails the PUT within it, and the upload is retried with a
+	// new link (Store.upload).
+	dialTimeout = 10 * time.Second
+
+	// dialKeepAlive is the TCP keep-alive period, as in the standard transport.
+	dialKeepAlive = 30 * time.Second
 )
 
 // Steps of the Store, CloudError.Step: the request that failed.
@@ -277,6 +286,7 @@ var defaultHTTP = sync.OnceValue(func() *http.Client {
 
 	t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	t.IdleConnTimeout = idleConnTimeout
+	t.DialContext = (&net.Dialer{Timeout: dialTimeout, KeepAlive: dialKeepAlive}).DialContext
 
 	return &http.Client{Transport: t}
 })

@@ -352,9 +352,40 @@ func (s *Store) stage(ctx context.Context, tmp, path string, data []byte, sum, e
 	return s.checkVersion(ctx, path, expect)
 }
 
+// upload puts data to tmp. A PUT that failed with a network error, such as
+// a connection the upload node lost or did not accept, gets one more upload
+// with a new link, which usually leads to another node (spec §5.4, §9). The
+// failed PUT may have stored the file all the same, so the retry may
+// overwrite tmp: it is the Write's own file with the same data.
 func (s *Store) upload(ctx context.Context, tmp string, data []byte) error {
+	err := s.uploadTo(ctx, tmp, data, false)
+	if !lostUpload(ctx, err) {
+		return err
+	}
+
+	s.log.Warn("yandex disk: upload retried with a new link", applog.Err(err))
+
+	return s.uploadTo(ctx, tmp, data, true)
+}
+
+// lostUpload reports whether err is a network error of the PUT to the
+// upload link while the operation still runs.
+func lostUpload(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+
+	ce, ok := errors.AsType[CloudError](err)
+
+	return ok && ce.Code == codeNetwork && ce.Step == stepUpload
+}
+
+// uploadTo gets an upload link of tmp and puts data to it.
+func (s *Store) uploadTo(ctx context.Context, tmp string, data []byte, overwrite bool) error {
 	var l link
-	if err := s.get(ctx, stepUploadLink, uploadPath, url.Values{qPath: {tmp}, qOverwrite: {"false"}}, &l); err != nil {
+
+	q := url.Values{qPath: {tmp}, qOverwrite: {strconv.FormatBool(overwrite)}}
+	if err := s.get(ctx, stepUploadLink, uploadPath, q, &l); err != nil {
 		return fmt.Errorf("upload link: %w", err)
 	}
 

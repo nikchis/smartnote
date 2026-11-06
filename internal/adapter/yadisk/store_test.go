@@ -510,6 +510,142 @@ func TestUploadMD5Mismatch(t *testing.T) {
 	wantNoTemps(t, h.disk)
 }
 
+// uploadOverwrites returns the overwrite parameter of each upload link request.
+func uploadOverwrites(d *fakeDisk) []string {
+	var out []string
+
+	for _, r := range d.reqs() {
+		if r.server == "api" && r.path == "/v1/disk/resources/upload" {
+			out = append(out, r.query.Get("overwrite"))
+		}
+	}
+
+	return out
+}
+
+// An upload node that drops the connection costs one more upload with a new
+// link, which may overwrite the Write's own temporary file.
+func TestUploadRetriedOnceAfterNetworkError(t *testing.T) {
+	h := newHarness(t)
+	old := h.disk.put(container, []byte("old"), testNow)
+	h.disk.set(func(d *fakeDisk) { d.dropPuts = 1 })
+
+	if err := h.store().Write(t.Context(), container, []byte("new"), old); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if got, want := uploadOverwrites(h.disk), []string{"false", "true"}; !slices.Equal(got, want) {
+		t.Errorf("upload links overwrite = %v, want %v", got, want)
+	}
+
+	wantContainer(t, h.disk, []byte("new"))
+	wantNoTemps(t, h.disk)
+}
+
+// The lost PUT stored the file all the same: the retry overwrites it.
+func TestUploadRetryOverwritesStoredTemp(t *testing.T) {
+	h := newHarness(t)
+	old := h.disk.put(container, []byte("old"), testNow)
+	h.disk.set(func(d *fakeDisk) { d.dropStored = 1 })
+
+	if err := h.store().Write(t.Context(), container, []byte("new"), old); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if got := len(uploadOverwrites(h.disk)); got != 2 {
+		t.Errorf("upload links = %d, want 2", got)
+	}
+
+	wantContainer(t, h.disk, []byte("new"))
+	wantNoTemps(t, h.disk)
+}
+
+func TestLostUpload(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	network := CloudError{Code: codeNetwork, Step: stepUpload}
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want bool
+	}{
+		{name: "no error", ctx: t.Context(), err: nil},
+		{name: "network at upload", ctx: t.Context(), err: fmt.Errorf("upload: %w", network), want: true},
+		{name: "operation over", ctx: canceled, err: network},
+		{name: "network at upload link", ctx: t.Context(), err: CloudError{Code: codeNetwork, Step: stepUploadLink}},
+		{name: "answer of the node", ctx: t.Context(), err: CloudError{Status: http.StatusInsufficientStorage, Code: codeOther, Step: stepUpload}},
+		{name: "context error", ctx: t.Context(), err: context.DeadlineExceeded},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := lostUpload(tc.ctx, tc.err); got != tc.want {
+				t.Errorf("lostUpload = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUploadNotRetriedTwice(t *testing.T) {
+	h := newHarness(t)
+	old := h.disk.put(container, []byte("old"), testNow)
+	h.disk.set(func(d *fakeDisk) { d.dropPuts = 2 })
+
+	err := h.store().Write(t.Context(), container, []byte("new"), old)
+	if ce := cloudError(t, err); ce.Code != codeNetwork || ce.Step != stepUpload {
+		t.Errorf("error = %+v, want a network error of step upload", ce)
+	}
+
+	if got := len(uploadOverwrites(h.disk)); got != 2 {
+		t.Errorf("upload links = %d, want 2", got)
+	}
+
+	if len(moveQueries(h.disk)) != 0 {
+		t.Error("move was sent after a failed upload")
+	}
+
+	wantContainer(t, h.disk, []byte("old"))
+	wantNoTemps(t, h.disk)
+}
+
+// An answer of the upload node is not a lost connection: no retry.
+func TestUploadAnswerNotRetried(t *testing.T) {
+	h := newHarness(t)
+	h.disk.set(func(d *fakeDisk) { d.fail[epPut] = fakeFailure{status: http.StatusInternalServerError} })
+
+	err := h.store().Write(t.Context(), container, []byte("new"), "")
+	if ce := cloudError(t, err); ce.Status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", ce.Status)
+	}
+
+	if got := len(uploadOverwrites(h.disk)); got != 1 {
+		t.Errorf("upload links = %d, want 1", got)
+	}
+}
+
+// When the operation ends during the upload, its own error is returned and
+// nothing is retried.
+func TestUploadNotRetriedAfterCancel(t *testing.T) {
+	h := newHarness(t)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	defer cancel()
+
+	h.disk.set(func(d *fakeDisk) { d.dropPuts, d.putHook = 1, cancel })
+
+	err := h.store().Write(ctx, container, []byte("new"), "")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+
+	if got := len(uploadOverwrites(h.disk)); got != 1 {
+		t.Errorf("upload links = %d, want 1", got)
+	}
+}
+
 func TestMove202PollSuccess(t *testing.T) {
 	h := newHarness(t)
 	old := h.disk.put(container, []byte("old"), testNow)
