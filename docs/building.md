@@ -21,7 +21,8 @@ requires `go 1.26.0`; both mean the same language version.
 
 On Ubuntu 26.04 the build also needs `build-essential pkg-config libgtk-4-dev
 libwebkitgtk-6.0-dev` (`wails3 doctor` lists what is missing; developed with GTK 4.22.4 and
-WebKitGTK 2.52.6). The Windows installer needs NSIS (`makensis`).
+WebKitGTK 2.52.6). The Windows package needs the WiX Toolset v6 (`dotnet tool install --global wix
+--version 6.0.2`).
 
 Some commands need more: Docker for `make integration` and `task smoke:appimage`; `gdb` and
 `strace` for `make search-test`; `cargo-deny` for `make search-lint`; a nightly Rust toolchain for
@@ -49,7 +50,7 @@ packages run through Task, which `make build`, `make package` and `make smoke` c
 | `task build` | build `bin/smartnote` |
 | `task search:files` | build the search worker and fetch the model and the ONNX Runtime library ([Packaging](packaging.md)) |
 | `task package:linux` | `.deb` and AppImage in `bin/` |
-| `task package:windows` | NSIS installer in `bin/` (on Windows) |
+| `task package:windows` | per-user MSI package in `bin/` (on Windows) |
 | `task package:darwin` | `.app` and `.dmg` in `bin/` (on macOS) |
 | `task smoke:appimage` | start the AppImage in a clean `ubuntu:26.04` container (needs Docker) |
 

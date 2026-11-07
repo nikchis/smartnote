@@ -26,8 +26,15 @@ bubblewrap xdg-dbus-proxy`, which every Ubuntu desktop has.
 
 ## Windows
 
-Windows 10/11, file `Smartnote-<version>-windows-amd64-installer.exe`. SmartScreen shows "Windows protected your PC":
-choose **More info**, then **Run anyway**.
+Windows 10/11, file `Smartnote-<version>-windows-amd64.msi`. SmartScreen shows "Windows protected
+your PC": choose **More info**, then **Run anyway**.
+
+The package installs Smartnote for the current user into `%LOCALAPPDATA%\Programs\Smartnote`,
+without administrator rights, and adds shortcuts to the Start menu and the desktop. It needs the
+Microsoft Edge WebView2 Runtime, which Windows 11 and an updated Windows 10 have; without it the
+package refuses to install and names the page to download the Runtime from. A newer package
+replaces the installed version. Smartnote is removed in **Settings → Apps**; the notes
+(`%APPDATA%\smartnote`) and the data of WebView2 (`%APPDATA%\smartnote.exe`) stay.
 
 Semantic search needs the Microsoft Visual C++ Redistributable (x64), which most systems have;
 without it only full-text search works.

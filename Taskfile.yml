@@ -46,7 +46,7 @@ tasks:
       - task: check:deb
 
   package:windows:
-    summary: Builds the NSIS installer (on Windows, with makensis on PATH)
+    summary: Builds the per-user MSI package (on Windows, with wix of the WiX Toolset v6 on PATH)
     cmds:
       - task: windows:package
 

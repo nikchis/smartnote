@@ -11,12 +11,13 @@
 
 - Метаданные пакетов (имя, поставщик, версия, авторские права, описание) хранятся в
   `build/config.yml`; `wails3 task common:update:build-assets` копирует их в
-  `build/darwin/*.plist`, `build/windows/info.json`, `build/windows/nsis/wails_tools.nsh`,
+  `build/darwin/*.plist`, `build/windows/info.json`,
   `build/linux/desktop` и `build/linux/nfpm/nfpm.yaml`. Эта задача переписывает `nfpm.yaml` из
   шаблона Wails и сбрасывает `maintainer` (в `${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>`,
   пустое в CI) и `homepage` (в `https://wails.io`): после её запуска верните их. `build/windows/msix/*.xml`
   не генерируется и поддерживается вручную. Задача также создаёт `build/ios/`, который проекту не
-  нужен и не хранится.
+  нужен и не хранится, и `build/windows/nsis/`, который не используется со времени перехода на
+  MSI: удалите оба.
 - Исходник значка — `build/appicon.svg`; `build/appicon.png` — его отрисовка 1024×1024, и
   `common:generate:icons` строит из этого PNG `windows/icon.ico` и `darwin/icons.icns`.
   `Assets.car` из Icon Composer нет: на macOS с actool 26 Wails пересобрал бы его, а вместе с ним
@@ -41,7 +42,7 @@
 
 - `task search:files` готовит эти файлы и является зависимостью `linux:create:appimage`,
   `linux:create:deb` (и `create:rpm`, `create:aur`), `darwin:create:app:bundle` и
-  `windows:create:nsis:installer` (установщика из `windows:package`), поэтому `task package:<os>`
+  `windows:create:msi` (пакета из `windows:package`), поэтому `task package:<os>`
   работает из чистой копии репозитория. Она запускает `search:build`, `model:fetch` и `ort:fetch`;
   `notices:build` задачи упаковки запускают сами, когда приложение уже собрано, потому что
   `go list` нужен `frontend/dist` (`go:embed`). Каждая из них выполняется один раз за вызов `task`.
@@ -53,13 +54,13 @@
   учитываются. Cargo запускается каждый раз. `GOOS`, отличный от системы сборки, или платформа без
   воркера останавливают задачу с сообщением: воркер не собирается кросс-компиляцией. На Windows
   воркер компонуется со статической средой выполнения C (`search/.cargo/config.toml`,
-  `-C target-feature=+crt-static`; переменная `RUSTFLAGS` заменила бы этот флаг): установщик не
+  `-C target-feature=+crt-static`; переменная `RUSTFLAGS` заменила бы этот флаг): пакет не
   содержит Visual C++ Redistributable. Официальная `onnxruntime.dll` всё же импортирует
   `MSVCP140.dll`, `MSVCP140_1.dll`, `VCRUNTIME140.dll` и `VCRUNTIME140_1.dll`; без Redistributable
   она не загружается, семантический поиск недоступен («semantic search unavailable: loading the
   ONNX Runtime library failed» в журнале), а полнотекстовый поиск работает (это проверяет
   `ort_load_failure_keeps_full_text_search` в `tests/e2e.rs` со сломанной зависимостью библиотеки на
-  Linux). Эти DLL в установщик не копируются: это были бы незакреплённые двоичные файлы.
+  Linux). Эти DLL в пакет не копируются: это были бы незакреплённые двоичные файлы.
 - `task ort:fetch` загружает библиотеку для `GOOS`/`ARCH` и извлекает из архива выпуска ещё
   `LICENSE` и `ThirdPartyNotices.txt` (`notices` из `ort.lock.json`; SHA-256 архива покрывает и их,
   повторный запуск только проверяет, что они на месте) в `build/ort`. Платформа без закреплённой
@@ -89,10 +90,19 @@
   добавляются в AppDir, который Wails оставляет в `build/linux/appimage/build`, и AppDir заново
   упаковывает `linuxdeploy-plugin-appimage` из того же AppImage linuxdeploy (распакованного через
   `--appimage-extract`), который только упаковывает. AppRun от Wails сохраняется.
-- Windows: `project.nsi` устанавливает файлы рядом с `smartnote.exe` (`model\`, `licenses\`), а
-  деинсталлятор удаляет поимённо только эти файлы, затем каждую папку, только если она пуста: в
-  выбранной для установки папке могут быть другие файлы, и они остаются. Новый файл в пакете
-  требует и строки `Delete` в секции удаления.
+- Windows: `build/windows/wix/smartnote.wxs` описывает MSI для одного пользователя (WiX Toolset v6),
+  который кладёт файлы в `%LOCALAPPDATA%\Programs\Smartnote` (`model\`, `licenses\` рядом со
+  `smartnote.exe`) без прав администратора, берёт версию из ресурса версии `smartnote.exe`
+  (`build/windows/info.json`) и заменяет более старую версию (`MajorUpgrade`, постоянный
+  `UpgradeCode`). Все компоненты лежат в профиле пользователя, поэтому ключ каждого — значение в
+  `HKCU\Software\nikchis\Smartnote`, а у каждой папки есть `RemoveFolder`; `wix msi validate`
+  выполняет проверки ICE. Новый файл в пакете требует элемента `File` в одном из компонентов. У
+  пакета нет custom actions и собственных диалогов, WebView2 Runtime он не ставит: условие запуска
+  отказывает в установке без него (значение `pv` в `HKLM` или `HKCU`). Приложение Go для Windows
+  компонуется без `-s -w`, с таблицами символов. Оба решения направлены против срабатывания
+  машинного обучения Microsoft Defender `Trojan:Win32/Wacatac`, которое блокировало скачивание
+  неподписанного установщика NSIS версии 2.2.0: по сообщениям, его вызывают урезанные
+  исполняемые файлы Go и установщики NSIS, хотя доказанной причиной ни то ни другое не является.
 
 Файлы модели готовятся и публикуются так, как описано в
 [tools/model/README.md](../tools/model/README.md); файл уведомлений —
@@ -134,6 +144,9 @@ entitlement `com.apple.security.cs.disable-library-validation` для ворке
 Задание CI `package` ставит набор инструментов из `search/rust-toolchain.toml`, кэширует cargo
 (`Swatinem/rust-cache`), `build/model` и `build/ort` с ключами задания `search`, затем запускает
 `task package:<os>`. На macOS и Windows оно запускает `cmd/searchsmoke` против упакованного воркера
-(на macOS — в подписанном пакете) с `ORT_DISABLE_TELEMETRY=1`. Выпуск модели `model-e5s-1` должен
+(на macOS — в подписанном пакете) с `ORT_DISABLE_TELEMETRY=1`. На Windows оно сначала ставит MSI
+через `msiexec /qn`, проверяет установленные файлы, ярлык в меню «Пуск» и запись для удаления,
+запускает `searchsmoke` против установленных файлов, затем удаляет пакет и проверяет, что папки
+больше нет. Выпуск модели `model-e5s-1` должен
 быть опубликован, прежде чем `task model:fetch` заработает в CI; локально `MODEL_BASE_URL=file:///…/`
 направляет его в каталог.
