@@ -11,6 +11,9 @@ search by meaning in [Search](search.md#semantic-search).
 - The sync phrase cannot be changed while the server holds notes.
 - Logging out or shutting down closes Smartnote without the close question, as SIGTERM does:
   unsaved server backups are not made, the local notes are kept. Back up before logging out.
+- Linux: the file dialogs of **Import** and **Export public** are GTK's own, not the desktop's
+  (xdg-desktop-portal), so they may look different from other dialogs of the desktop. The portal
+  would need the process memory open to other programs of the user.
 - Yandex Disk: two Backups made almost at the same moment from two devices can lose one of them.
   Both get the same revision, so the warning about an older storage does not notice it. Do not use
   two devices at the same time.
@@ -29,6 +32,9 @@ search by meaning in [Search](search.md#semantic-search).
 - After "The result of the backup is unknown. Connect again to check the remote storage." press
   **OK** in Settings (or restart Smartnote) to connect again: Smartnote first settles the unfinished write, and until it
   does it does not touch the storage.
+- Yandex Disk: **Sign out** keeps the record of such an unfinished write, and the next sign-in to the
+  same account settles it. Signing in to another account or with another client ID drops the
+  record, because Smartnote cannot tell accounts apart; sign in to the same account first.
 - The warning that the remote storage is older than this device last synchronized with applies to
   both the server and Yandex Disk; see [Yandex Disk](yandex-disk.md#when-the-storage-is-older-than-the-device).
 - Going back from 2.2.0 to 2.1.0 keeps `local.db` readable. But 2.1.0 reads the saved Yandex Disk
@@ -39,7 +45,7 @@ search by meaning in [Search](search.md#semantic-search).
   that 2.1.0 switched away from may be out of date. Usually that only means such a storage is
   compared as new. In a rare case (2.1.0 restored from a storage that had been rolled back, then
   switched to another one) Smartnote may warn that the storage is older when it is not, or not
-  notice that another device saved to it, so that **Save** overwrites that data without asking.
+  notice that another device saved to it, so that **Backup** overwrites that data without asking.
 - The storage type **None (local only)** keeps the saved SSH + PostgreSQL fields, so that you can
   switch back without typing them again. After going back to 2.1.0 these fields make a configured
   server again, and 2.1.0 connects to PostgreSQL with them. As usual it compares the notes and asks

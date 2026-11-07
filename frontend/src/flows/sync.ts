@@ -20,8 +20,18 @@ export type SyncApi = {
   trustHostKey(fingerprint: string): Promise<void>;
 };
 
+/**
+ * DiscardDraft asks whether the unsaved input of the note editor may be lost;
+ * it is true when there is none or the user discards it.
+ */
+export type DiscardDraft = () => Promise<boolean>;
+
+const noDraft: DiscardDraft = async () => true;
+
 /** ConnectHooks are what the connect check may ask of the screen. */
 export type ConnectHooks = {
+  /** discardDraft runs after yes to a Restore, which replaces the editor's fields; false cancels the Restore. */
+  discardDraft?: DiscardDraft;
   /** openSettings opens the settings after a wrong sync phrase or a refused Yandex sign-in. */
   openSettings?: () => void;
   /** restored runs after a Restore, to read the notes again. */
@@ -103,7 +113,7 @@ export async function connectFlow(api: SyncApi, d: Dialogs, hooks: ConnectHooks 
 
   if (out.status !== "remote_newer") return;
 
-  if (!(await d.ask(`${fresher} ${restoreQuestion(out.restore)}`))) {
+  if (!(await d.ask(`${fresher} ${restoreQuestion(out.restore)}`)) || !(await (hooks.discardDraft ?? noDraft)())) {
     await api.cancelPending();
     return;
   }
@@ -144,11 +154,15 @@ export async function backupFlow(api: SyncApi, d: Dialogs): Promise<boolean> {
   return true;
 }
 
-/** restoreFlow is scenario 3 started by the Restore button; it returns whether the Restore ran. */
-export async function restoreFlow(api: SyncApi, d: Dialogs): Promise<boolean> {
+/**
+ * restoreFlow is scenario 3 started by the Restore button; it returns whether
+ * the Restore ran. After yes, discardDraft may still keep the editor's draft
+ * and cancel the Restore.
+ */
+export async function restoreFlow(api: SyncApi, d: Dialogs, discardDraft: DiscardDraft = noDraft): Promise<boolean> {
   try {
     const preview = await api.prepareRestore();
-    if (!(await d.ask(restoreQuestion(preview.counts, preview.remoteOlder)))) {
+    if (!(await d.ask(restoreQuestion(preview.counts, preview.remoteOlder))) || !(await discardDraft())) {
       await api.cancelPending();
       return false;
     }
@@ -173,19 +187,22 @@ async function commitRestore(api: SyncApi, d: Dialogs): Promise<boolean> {
 }
 
 /**
- * closeFlow is scenario 4: with unsaved changes and a connection it offers a
- * Backup, asking again only when the Backup deletes notes on the server or
- * overwrites newer data. Cancel on the offer keeps the window open. A failed
- * Backup asks "Close anyway?".
+ * closeFlow is scenario 4. An unsaved draft of the editor is asked about
+ * first; keeping it keeps the window open. Then, with unsaved changes and a
+ * connection, it offers a Backup, asking again only when the Backup deletes
+ * notes on the server or overwrites newer data. Cancel on the offer keeps the
+ * window open. A failed Backup asks "Close anyway?".
  */
-export async function closeFlow(api: SyncApi, d: Dialogs, quit: () => Promise<void>): Promise<void> {
+export async function closeFlow(api: SyncApi, d: Dialogs, quit: () => Promise<void>, discardDraft: DiscardDraft = noDraft): Promise<void> {
+  if (!(await discardDraft())) return;
+
   const st = await api.state();
   if (!st.dirty || !st.connected) {
     await quit();
     return;
   }
 
-  const save = await d.choose("Would you like to save your data changes to remote database?");
+  const save = await d.choose("Would you like to save your data changes to remote storage?");
   if (save === "cancel") return;
   if (save === "no") {
     await quit();

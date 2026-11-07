@@ -38,9 +38,14 @@
   let textField: HTMLTextAreaElement | undefined = $state();
   const mac = navigator.userAgent.includes("Mac");
 
-  /** reload reads the notes again, after a Restore; an unsaved edit is lost. */
+  /** reload reads the notes again, after a Restore; ask discardDraft before it, or an unsaved edit is lost. */
   export function reload(): Promise<void> {
     return editor.load();
+  }
+
+  /** discardDraft asks before a Restore or closing loses an unsaved edit; true when there is none or it is discarded. */
+  export function discardDraft(): Promise<boolean> {
+    return editor.discardDraft();
   }
 
   /**
@@ -130,6 +135,14 @@
 
 <div class="main">
   <div class="find">
+    <div class="notes">
+      <button title="Add a new note" onclick={() => void editor.startNew()} disabled={!b.new}>
+        <img src={newIcon} alt="" />New
+      </button>
+      <button title="Remove current note" onclick={() => editor.remove()} disabled={!b.delete}>
+        <img src={removeIcon} alt="" />Remove
+      </button>
+    </div>
     <SearchBar bind:this={searchBar} box={search} {nameOf} onOpen={(hit) => void openHit(hit)} />
   </div>
   <div class="content">
@@ -168,22 +181,14 @@
       <textarea bind:this={textField} bind:value={editor.info} maxlength={LIMITS.info} disabled={editor.locked} aria-label="Text"></textarea>
       <div class="actions">
         <button class="apply" type="submit" onclick={() => editor.apply()} disabled={!b.apply}>Apply changes</button>
-        <div class="center">
-          <button title="Add a new note" onclick={() => editor.startNew()} disabled={!b.new}>
-            <img src={newIcon} alt="" />New
-          </button>
-          <button title="Remove current note" onclick={() => editor.remove()} disabled={!b.delete}>
-            <img src={removeIcon} alt="" />Remove
-          </button>
-        </div>
         <button class="cancel" onclick={() => editor.cancel()} disabled={!b.cancel}>Cancel changes</button>
       </div>
     </section>
   </div>
 
   <footer class="bar">
-    <button title="Save data to remote storage" onclick={onBackup} disabled={!sync.connected || !sync.dirty || sync.busy}>
-      <img class="mono" src={saveIcon} alt="" />Save
+    <button title="Back up data to remote storage" onclick={onBackup} disabled={!sync.connected || !sync.dirty || sync.busy}>
+      <img class="mono" src={saveIcon} alt="" />Backup
     </button>
     <button title="Restore data from remote storage" onclick={onRestore} disabled={!sync.connected || !sync.restoreAvailable || sync.busy}>
       <img class="mono" src={restoreIcon} alt="" />Restore
@@ -222,13 +227,24 @@
     display: grid;
     grid-template-rows: auto 1fr auto;
   }
-  .find {
-    padding: 0.75rem 0.75rem 0;
-  }
+  /* The top row shares the columns of the list and the editor below it:
+     New and Remove over the list, the search over the editor. */
+  .find,
   .content {
     display: grid;
     grid-template-columns: 13.6rem 1fr;
     gap: 0.75rem;
+  }
+  .find {
+    align-items: stretch;
+    padding: 0.75rem 0.75rem 0;
+  }
+  .notes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+  }
+  .content {
     min-height: 0;
     padding: 0.75rem;
   }
@@ -295,7 +311,7 @@
     outline-offset: -2px;
   }
 
-  /* The editor group: fields, text, Apply | New Remove | Cancel. */
+  /* The editor group: fields, text, Apply | Cancel. */
   .editor {
     display: flex;
     flex-direction: column;
@@ -343,20 +359,10 @@
     font: var(--note-font);
   }
   .actions {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    display: flex;
+    justify-content: space-between;
     align-items: center;
     gap: 0.5rem;
-  }
-  .apply {
-    justify-self: start;
-  }
-  .center {
-    display: flex;
-    gap: 0.5rem;
-  }
-  .cancel {
-    justify-self: end;
   }
 
   /* The status bar. */

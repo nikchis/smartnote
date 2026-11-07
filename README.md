@@ -26,7 +26,7 @@ packages are not signed. Steps and requirements are in
 | Ubuntu 26.04 (amd64) | `smartnote_<version>_amd64.deb` |
 | Ubuntu desktop (amd64) | `Smartnote-<version>-x86_64.AppImage` |
 | Windows 10/11 | `Smartnote-<version>-windows-amd64-installer.exe` |
-| macOS 12+ on Apple Silicon | `Smartnote-<version>-macos-arm64.dmg` |
+| macOS 13+ on Apple Silicon | `Smartnote-<version>-macos-arm64.dmg` |
 
 ## Documentation
 

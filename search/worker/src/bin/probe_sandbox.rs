@@ -113,6 +113,14 @@ mod linux {
             ("socketpair", outcome(UnixStream::pair())),
             ("io_uring_setup", outcome(io_uring_setup())),
             ("setxattr", outcome(set_xattr(&existing))),
+            // Metadata changes that Landlock does not restrict (audit of 2f51241, item 3): the
+            // `fd_*` ones go through a descriptor opened for reading after the sandbox.
+            ("chmod", outcome(chmod_same(&existing))),
+            ("fd_chmod", outcome(fd_chmod_same(&existing))),
+            ("fd_chown", outcome(fd_chown_same(&existing))),
+            ("fd_set_times", outcome(fd_set_times(&existing))),
+            ("removexattr", outcome(remove_xattr(&existing))),
+            ("fd_removexattr", outcome(fd_remove_xattr(&existing))),
             ("read_file", outcome(fs::read(&existing))),
         ];
         let socket_reported =
@@ -153,6 +161,7 @@ mod linux {
                 Some(libc::EPERM) => "EPERM".to_owned(),
                 Some(libc::ECONNREFUSED) => "ECONNREFUSED".to_owned(),
                 Some(libc::ENOTSUP) => "ENOTSUP".to_owned(),
+                Some(libc::ENODATA) => "ENODATA".to_owned(),
                 Some(code) => format!("errno{code}"),
                 None => format!("error({err})"),
             },
@@ -218,6 +227,55 @@ mod linux {
                 0,
             )
         };
+        check(rc.into()).map(drop)
+    }
+
+    /// Sets the mode of `path` to the one it has: allowed without the sandbox, and nothing
+    /// changes either way.
+    fn chmod_same(path: &Path) -> io::Result<()> {
+        let mode = fs::metadata(path)?.permissions();
+        fs::set_permissions(path, mode)
+    }
+
+    /// [`chmod_same`] through a descriptor open for reading (`fchmod`).
+    fn fd_chmod_same(path: &Path) -> io::Result<()> {
+        let file = File::open(path)?;
+        let mode = file.metadata()?.permissions();
+        file.set_permissions(mode)
+    }
+
+    /// Sets the owner of `path` to the one it has (`fchown` through a read descriptor).
+    fn fd_chown_same(path: &Path) -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let file = File::open(path)?;
+        let meta = file.metadata()?;
+        std::os::unix::fs::fchown(&file, Some(meta.uid()), Some(meta.gid()))
+    }
+
+    /// Sets the modification time of `path` to the one it has (`utimensat` through a read
+    /// descriptor): the time could carry bytes of a note.
+    fn fd_set_times(path: &Path) -> io::Result<()> {
+        let file = File::open(path)?;
+        let modified = file.metadata()?.modified()?;
+        file.set_modified(modified)
+    }
+
+    /// Removes the extended attribute `user.smartnote.probe` of `path`; without the
+    /// attribute the file system answers `ENODATA` (or `ENOTSUP`).
+    fn remove_xattr(path: &Path) -> io::Result<()> {
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other)?;
+        // SAFETY: `path` and the name are NUL-terminated strings that outlive the call and are
+        // only read.
+        let rc = unsafe { libc::removexattr(path.as_ptr(), c"user.smartnote.probe".as_ptr()) };
+        check(rc.into()).map(drop)
+    }
+
+    /// [`remove_xattr`] through a descriptor open for reading (`fremovexattr`).
+    fn fd_remove_xattr(path: &Path) -> io::Result<()> {
+        let file = File::open(path)?;
+        // SAFETY: `file` is an open descriptor for the whole call; the name is a NUL-terminated
+        // string that outlives the call and is only read.
+        let rc = unsafe { libc::fremovexattr(file.as_raw_fd(), c"user.smartnote.probe".as_ptr()) };
         check(rc.into()).map(drop)
     }
 

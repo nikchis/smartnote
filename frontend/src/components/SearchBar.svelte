@@ -120,8 +120,8 @@
   <input
     bind:this={field}
     value={box.query}
-    placeholder="Search notes"
-    aria-label="Search notes"
+    placeholder="Search records"
+    aria-label="Search records"
     maxlength={MAX_QUERY}
     role="combobox"
     aria-autocomplete="list"

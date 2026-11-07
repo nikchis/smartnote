@@ -34,7 +34,7 @@ PC»: выберите **More info**, затем **Run anyway**.
 
 ## macOS
 
-macOS 12+ на Apple Silicon (arm64), файл `Smartnote-<версия>-macos-arm64.dmg`. Пакета для Mac на Intel нет: библиотека
+macOS 13+ на Apple Silicon (arm64), файл `Smartnote-<версия>-macos-arm64.dmg`. Пакета для Mac на Intel нет: библиотека
 ONNX Runtime для поиска закреплена только для Apple Silicon ([Упаковка](packaging.ru.md)).
 
 Gatekeeper не открывает неподписанное приложение: перетащите Smartnote в Applications, затем либо

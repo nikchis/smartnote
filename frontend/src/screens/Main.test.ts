@@ -2,6 +2,7 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NoteDTO, SearchHitDTO } from "../lib/api";
+import { answer as answerDialog, currentDialog } from "../lib/dialogs.svelte";
 
 // Main talks to Go through the generated bindings and the Wails events: both
 // are replaced; the notes and the answers of the search come from state.
@@ -60,7 +61,7 @@ afterEach(async () => {
   target.remove();
 });
 
-const field = () => target.querySelector<HTMLInputElement>('input[aria-label="Search notes"]')!;
+const field = () => target.querySelector<HTMLInputElement>('input[aria-label="Search records"]')!;
 const text = () => target.querySelector("textarea")!;
 
 async function search(q: string): Promise<void> {
@@ -76,6 +77,44 @@ function enter(): void {
 }
 
 describe("Main", () => {
+  // New and Remove act on the list of notes, so they sit above it, left of
+  // the search, in a column as wide as the list; the editor keeps Apply and
+  // Cancel (decision of 2026-11-07).
+  it("New and Remove sit above the list, left of the search", () => {
+    const top = target.querySelector(".find")!;
+    const notes = top.querySelector(".notes")!;
+    expect([...notes.querySelectorAll("button")].map((b) => b.getAttribute("title"))).toEqual(["Add a new note", "Remove current note"]);
+    expect(notes.compareDocumentPosition(top.querySelector('[role="search"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(field().placeholder).toBe("Search records");
+    expect([...target.querySelectorAll(".editor .actions button")].map((b) => b.textContent?.trim())).toEqual(["Apply changes", "Cancel changes"]);
+  });
+
+  // The footer button sends the data to the remote storage: it is named
+  // after the Backup it runs, not Save, which the editor's Apply does.
+  it("the footer names the remote copy Backup", () => {
+    const labels = [...target.querySelectorAll("footer button")].map((b) => [b.textContent?.trim(), b.getAttribute("title")]);
+    expect(labels).toContainEqual(["Backup", "Back up data to remote storage"]);
+    expect(labels.map(([text]) => text)).not.toContain("Save");
+  });
+
+  // Master audit 2026-11-07, item 1: App asks through discardDraft before a
+  // Restore or closing replaces the editor's fields.
+  it("discardDraft asks about an edited note; Cancel keeps the draft", async () => {
+    await expect((screen as { discardDraft(): Promise<boolean> }).discardDraft()).resolves.toBe(true);
+    expect(currentDialog()).toBeUndefined();
+
+    text().value = "first, edited";
+    text().dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+
+    const kept = (screen as { discardDraft(): Promise<boolean> }).discardDraft();
+    await settle();
+    expect(currentDialog()?.message).toBe("Discard unsaved changes in the editor?");
+    answerDialog("no");
+    await expect(kept).resolves.toBe(false);
+    expect(text().value).toBe("first, edited");
+  });
+
   // From the review of PR 6: the jump to an outdated hit of note a searches
   // again; meanwhile the user opens a hit of note b. The late answer for a
   // must not take the selection, the focus or the scroll of b.

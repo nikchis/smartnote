@@ -319,7 +319,8 @@ func TestPendingTempRoundTrip(t *testing.T) {
 		t.Errorf("LoadPendingTemp after clear = %v, %v", ok, err)
 	}
 
-	// TokenDelete clears the pending name, TokenKeep does not.
+	// Neither TokenKeep nor TokenDelete clears the pending name: a move sent
+	// before a Sign out is fenced after the next sign-in.
 	if err := s.SavePendingTemp(ctx, "tmp-3"); err != nil {
 		t.Fatal(err)
 	}
@@ -336,8 +337,8 @@ func TestPendingTempRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, ok, _ := s.LoadPendingTemp(ctx); ok {
-		t.Error("TokenDelete left the pending name")
+	if name, ok, _ := s.LoadPendingTemp(ctx); !ok || name != "tmp-3" {
+		t.Errorf("after TokenDelete LoadPendingTemp = %q, %v; want tmp-3", name, ok)
 	}
 
 	// A format 2 storage without the table gets it on unlock.

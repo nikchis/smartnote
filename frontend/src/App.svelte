@@ -60,9 +60,11 @@
   }
 
   const reload = () => main?.reload();
+  // Without the Main screen there is no editor, so no draft.
+  const discardDraft = async () => (main ? main.discardDraft() : true);
 
   async function connect() {
-    await connectFlow(syncApi("Connecting…"), dialogs, { openSettings: () => (showSettings = true), restored: reload });
+    await connectFlow(syncApi("Connecting…"), dialogs, { openSettings: () => (showSettings = true), discardDraft, restored: reload });
   }
 
   async function unlocked() {
@@ -75,7 +77,7 @@
   }
 
   async function restore() {
-    if (await restoreFlow(syncApi("Synchronizing…"), dialogs)) await reload();
+    if (await restoreFlow(syncApi("Synchronizing…"), dialogs, discardDraft)) await reload();
   }
 
   async function settingsSaved() {
@@ -87,7 +89,7 @@
     if (closing) return;
     closing = true;
     try {
-      await closeFlow(syncApi("Synchronizing…"), dialogs, () => AppService.ConfirmQuit());
+      await closeFlow(syncApi("Synchronizing…"), dialogs, () => AppService.ConfirmQuit(), discardDraft);
     } catch (e) {
       await dialogs.error(parseError(e).message);
     } finally {

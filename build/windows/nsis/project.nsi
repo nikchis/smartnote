@@ -124,14 +124,23 @@ Section "uninstall"
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
 
-    # The search files, named as the installer put them (RMDir /r $INSTDIR below removes the rest).
+    # Only the files the installer put, by name: the user may have chosen a folder that holds
+    # other files too, and RMDir /r would delete them (audit 2026-11-07). Each folder goes
+    # without /r, so it stays when anything else is left in it.
+    Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"
     Delete "$INSTDIR\smartnote-search.exe"
     Delete "$INSTDIR\onnxruntime.dll"
     Delete "$INSTDIR\THIRD_PARTY_NOTICES.md"
-    RMDir /r "$INSTDIR\model"
-    RMDir /r "$INSTDIR\licenses"
-
-    RMDir /r $INSTDIR
+    Delete "$INSTDIR\model\model.onnx"
+    Delete "$INSTDIR\model\tokenizer.kit"
+    Delete "$INSTDIR\model\manifest.json"
+    RMDir "$INSTDIR\model"
+    Delete "$INSTDIR\licenses\rust-crates.txt"
+    Delete "$INSTDIR\licenses\go-modules.txt"
+    Delete "$INSTDIR\licenses\onnxruntime\LICENSE"
+    Delete "$INSTDIR\licenses\onnxruntime\ThirdPartyNotices.txt"
+    RMDir "$INSTDIR\licenses\onnxruntime"
+    RMDir "$INSTDIR\licenses"
 
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
     Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"
@@ -140,4 +149,6 @@ Section "uninstall"
     !insertmacro wails.unassociateCustomProtocols
 
     !insertmacro wails.deleteUninstaller
+
+    RMDir $INSTDIR
 SectionEnd

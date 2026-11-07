@@ -78,11 +78,17 @@ func run(logger *slog.Logger) error {
 		func() { application.Get().Quit() },
 	)
 
+	// Before GTK starts: GTK draws the file dialogs itself, so the hardened
+	// process needs no xdg-desktop-portal. Once GTK has opened the display
+	// the variable is put back for the programs the app starts.
+	restoreGDK := platform.KeepGTKOffPortals()
+
 	// Wails' protection against a second instance comes first: a second
 	// instance brings the running window forward and ends here. Taking the
 	// data lock first would let a losing process claim Wails' name before the
 	// winner and end both.
 	app := newApp(lifecycle, assets, logger)
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { restoreGDK() })
 
 	// The lock comes before anything touches the storage files. It still
 	// fails if the protection above is unavailable or the previous instance
@@ -301,7 +307,7 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		application.NewService(wailsui.NewNotesService(env, notes)),
 		application.NewService(wailsui.NewSyncService(env, syncer, progress)),
 		application.NewService(wailsui.NewConnectionService(env, connection, progress)),
-		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{Log: env.Log})),
+		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{})),
 		application.NewService(wailsui.NewSearchService(env, search, searchStatus)),
 		application.NewService(wailsui.NewAppService(lifecycle)),
 	}, nil

@@ -883,48 +883,28 @@ func TestFenceRetriedOnSameStore(t *testing.T) {
 	}
 }
 
-// TestFenceRememberedWithoutRecord: when neither the pending record nor the
-// DELETE succeeds, the stores of the same factory still fence the file.
-func TestFenceRememberedWithoutRecord(t *testing.T) {
+// TestWriteWithoutRecordSendsNoMove: a move whose temporary file could not
+// be recorded could not be fenced after a crash, so it is not sent; the
+// temporary file is deleted and the Backup fails as a local error (master
+// audit 2026-11-07, item 3).
+func TestWriteWithoutRecordSendsNoMove(t *testing.T) {
 	h := newHarness(t)
 	old := h.disk.put(container, []byte("old"), testNow)
-	h.disk.set(func(d *fakeDisk) { d.deferMove, d.dropPollAfter, d.deleteFail = true, 1, true })
 	h.pending.saveErr = errors.New("disk I/O error")
 
-	f := h.factory()
-
-	if err := h.fromFactory(f).Write(t.Context(), container, []byte("new"), old); !errors.Is(err, blobremote.ErrOutcomeUnknown) {
-		t.Fatalf("Write: err = %v, want ErrOutcomeUnknown", err)
+	err := h.store().Write(t.Context(), container, []byte("new"), old)
+	if _, ok := errors.AsType[usecase.LocalError](err); !ok || errors.Is(err, blobremote.ErrOutcomeUnknown) {
+		t.Fatalf("Write: err = %v, want LocalError", err)
 	}
 
-	if _, found := h.pending.state(); found {
-		t.Fatal("the failing pending store kept a record")
-	}
-
-	h.disk.set(func(d *fakeDisk) { d.deleteFail, d.requests = false, nil })
-
-	if _, _, _, err := h.fromFactory(f).Read(t.Context(), container); err != nil {
-		t.Fatalf("Read: %v", err)
-	}
-
-	reqs := h.disk.reqs()
-	if len(reqs) == 0 || reqs[0].method != http.MethodDelete || reqs[0].query.Get("path") != "app:/"+tempName(1) {
-		t.Fatalf("first request of the next store = %+v, want the DELETE of the temporary file", reqs)
+	if n := h.disk.count("api", http.MethodPost, movePath); n != 0 {
+		t.Errorf("move sent %d times without the record", n)
 	}
 
 	wantNoTemps(t, h.disk)
 
-	// Settled: the next store does not fence again.
-	h.disk.set(func(d *fakeDisk) { d.requests = nil })
-
-	if _, _, _, err := h.fromFactory(f).Read(t.Context(), container); err != nil {
-		t.Fatalf("third Read: %v", err)
-	}
-
-	for _, r := range h.disk.reqs() {
-		if r.method == http.MethodDelete {
-			t.Errorf("the settled file was fenced again: %v", r.query)
-		}
+	if data, _, _ := mustRead(t, h.store()); string(data) != "old" {
+		t.Errorf("container = %q, want the old one", data)
 	}
 }
 

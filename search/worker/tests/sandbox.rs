@@ -70,6 +70,12 @@ fn sandbox_blocks_writes_and_network() {
         ("socketpair", "EPERM"),
         ("io_uring_setup", "EPERM"),
         ("setxattr", "EPERM"),
+        ("chmod", "EPERM"),
+        ("fd_chmod", "EPERM"),
+        ("fd_chown", "EPERM"),
+        ("fd_set_times", "EPERM"),
+        ("removexattr", "EPERM"),
+        ("fd_removexattr", "EPERM"),
         ("read_file", "ok"),
         ("thread_create_file", "EACCES"),
         ("thread_udp_socket", "EPERM"),
@@ -104,6 +110,10 @@ fn sandbox_control_without_apply() {
         "udp_socket",
         "socketpair",
         "io_uring_setup",
+        "chmod",
+        "fd_chmod",
+        "fd_chown",
+        "fd_set_times",
         "read_file",
         "thread_create_file",
         "thread_udp_socket",
@@ -127,6 +137,15 @@ fn sandbox_control_without_apply() {
         matches!(xattr, Some("ok" | "ENOTSUP")),
         "setxattr: {xattr:?}"
     );
+    // The attribute set above is removed once (ok), then missing (ENODATA); a file system
+    // without user extended attributes answers ENOTSUP.
+    for name in ["removexattr", "fd_removexattr"] {
+        let result = results.get(name).map(String::as_str);
+        assert!(
+            matches!(result, Some("ok" | "ENODATA" | "ENOTSUP")),
+            "{name}: {result:?}"
+        );
+    }
     assert!(!results.contains_key("level"), "{results:?}");
     assert!(dir.0.join("new.txt").exists(), "the file was not created");
     assert!(
