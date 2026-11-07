@@ -8,14 +8,16 @@ build, package and test the application. Every document has a Russian version.
 ## For users
 
 - [Installation and upgrade](install.md): packages for Linux, Windows and macOS, what semantic
-  search needs, the one-way upgrade from 2.0.x and how to go back, where the files are.
+  search needs, the upgrade from 2.1.0, the one-way upgrade from 2.0.x and how to go back, where the
+  files are.
 - [Server setup](server-setup.md): PostgreSQL and OpenSSH for backing up and restoring the notes,
   and the sync phrase.
 - [Yandex Disk](yandex-disk.md): sign-in, your own client ID, revoking access.
 - [Search](search.md): words, phrases, fragments of code and search by meaning; the status line.
 - [Security](security.md): the threat model, process hardening, the isolation of the search worker
   and what is not protected.
-- [Limitations](limitations.md): Backup and Restore, the sync phrase and logging out.
+- [Limitations](limitations.md): Backup and Restore, the sync phrase, logging out, Yandex Disk and
+  going back to 2.1.0.
 
 ## For developers
 

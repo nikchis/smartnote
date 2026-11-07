@@ -4,8 +4,9 @@
 
 A notepad for private records on Linux, Windows and macOS. Notes are kept in an encrypted local
 storage; optionally they are backed up to and restored from your own PostgreSQL server reachable
-over SSH. Version 2 is a rewrite of the Delphi application (branch
-[`v1`](https://github.com/nikchis/smartnote/tree/v1)) in Go, Wails v3 and Svelte.
+over SSH or Yandex Disk, which see only ciphertext. Version 2 is a rewrite of the Delphi
+application (branch [`v1`](https://github.com/nikchis/smartnote/tree/v1)) in Go, Wails v3 and
+Svelte.
 
 ## Features
 
@@ -32,12 +33,12 @@ packages are not signed. Steps and requirements are in
 
 All documents are in [docs/](docs/README.md), in English and Russian.
 
-- [Installation and upgrade](docs/install.md): per system, and the upgrade from 2.0.x.
+- [Installation and upgrade](docs/install.md): per system, and the upgrade from 2.1.0 and 2.0.x.
 - [Server setup](docs/server-setup.md): PostgreSQL and OpenSSH for synchronization.
 - [Yandex Disk](docs/yandex-disk.md): sign-in, your own client ID, revoking access.
 - [Search](docs/search.md): how to search and what the status line means.
 - [Security](docs/security.md): the threat model and what is not protected.
-- [Limitations](docs/limitations.md): behaviour to know before relying on the server.
+- [Limitations](docs/limitations.md): behaviour to know before relying on a server or Yandex Disk.
 - [Building from source](docs/building.md): tools and commands for developers.
 
 ## License

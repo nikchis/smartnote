@@ -17,9 +17,9 @@ search by meaning in [Search](search.md#semantic-search).
 - Yandex Disk: two Backups made almost at the same moment from two devices can lose one of them.
   Both get the same revision, so the warning about an older storage does not notice it. Do not use
   two devices at the same time.
-- The data belong to the application whose client ID signed you in. With your own client ID, or a
-  build with another built-in one, the storage is another and empty; the notes under the old one
-  stay there.
+- Yandex Disk: the data belong to the application whose client ID signed you in. With your own
+  client ID, or a build with another built-in one, the storage is another and empty; the notes
+  under the old one stay there.
 - Yandex Disk: the sign-in lasts about a year, then Smartnote asks to sign in again ("Sign in to
   Yandex Disk again."). The account name is not shown, only "Signed in".
 - Yandex Disk: Smartnote cannot see or empty the Disk trash. If earlier copies of the container
