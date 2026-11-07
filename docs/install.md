@@ -3,7 +3,7 @@
 # Installation and upgrade
 
 How to install Smartnote on Linux, Windows and macOS, what semantic search needs from the system,
-how to upgrade from 2.0.x and where the application keeps its files. For users.
+how to upgrade from 2.1.0 and 2.0.x and where the application keeps its files. For users.
 
 The packages are on the [releases page](https://github.com/nikchis/smartnote/releases). They are not
 signed, so Windows and macOS warn before the first start.
@@ -50,15 +50,23 @@ On x86-64 computers semantic search needs a CPU with AVX2; on Windows also the V
 Redistributable (see above). Without them Smartnote works, and full-text search too: the status
 line of the search says `Semantic search unavailable` ([Search](search.md#status-line)).
 
+## Upgrading from 2.1.0
+
+2.2.0 keeps the local storage in format 2, so the upgrade needs no action. The server settings
+stay; **Settings** shows them under **SSH + PostgreSQL**. Going back to 2.1.0 keeps `local.db`
+readable, but settings for Yandex Disk or **None (local only)** may need to be cleared in the
+Settings of 2.1.0: see [Limitations](limitations.md).
+
 ## Upgrading from 2.0.x
 
 2.1.0 adds local search and keeps the local storage in format 2, which holds the encrypted search
-data of the notes. The first unlock with 2.1.0 converts `local.db` for good, and 2.0.x then refuses
-it with "Data was created by a newer version of Smartnote.". There is no conversion back.
+data of the notes. The first unlock with 2.1.0 or later converts `local.db` for good, and 2.0.x
+then refuses it with "Data was created by a newer version of Smartnote.". There is no conversion
+back.
 
 To return to 2.0.x:
 
-1. Back up the notes to your server with 2.1.0 (**Save**).
+1. Back up the notes to your server with 2.1.0 (**Save**) or later (**Backup**).
 2. In 2.0.x start with a new local storage (move `local.db` away).
 3. Set up the connection in **Settings** again. The SSH key is kept in `local.db` as well: import
    your key file, or generate a new key and authorize it on the server.
@@ -89,4 +97,5 @@ nothing else and is written again if deleted.
   (`fonts-dejavu-core`); both are dependencies of the packages.
 - The colors are the dark skin of v1, whatever theme the system prefers.
 
-Next step: [Server setup](server-setup.md), if the notes should be backed up to your server.
+Next step, if the notes should be backed up: [Server setup](server-setup.md) for your own server, or
+[Yandex Disk](yandex-disk.md).
