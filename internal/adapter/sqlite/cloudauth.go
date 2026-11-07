@@ -87,7 +87,8 @@ func putCloudToken(ctx context.Context, q querier, dek []byte, t usecase.CloudTo
 }
 
 // SaveConnection stores the settings and applies the token change in one
-// transaction. TokenDelete also drops the pending temporary file name.
+// transaction. TokenDelete keeps the pending temporary file name, so that
+// the next sign-in fences its move (spec §5.5).
 func (s *Store) SaveConnection(ctx context.Context, settings domain.ConnectionSettings, change usecase.TokenChange, t usecase.CloudToken) error {
 	err := s.unlocked(func(db *sql.DB, dek []byte) error {
 		return inTx(ctx, db, func(tx *sql.Tx) error {
@@ -114,11 +115,8 @@ func (s *Store) SaveConnection(ctx context.Context, settings domain.ConnectionSe
 			case usecase.TokenSet:
 				return putCloudToken(ctx, tx, dek, t)
 			case usecase.TokenDelete:
-				if _, err := tx.ExecContext(ctx, "DELETE FROM cloud_auth"); err != nil {
-					return err
-				}
-
-				_, err := tx.ExecContext(ctx, "DELETE FROM cloud_pending")
+				// cloud_pending stays: the next sign-in fences the move it records.
+				_, err := tx.ExecContext(ctx, "DELETE FROM cloud_auth")
 
 				return err
 			default:

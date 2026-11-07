@@ -34,7 +34,7 @@ without it only full-text search works.
 
 ## macOS
 
-macOS 12+ on Apple Silicon (arm64), file `Smartnote-<version>-macos-arm64.dmg`. There is no package for Intel Macs: the
+macOS 13+ on Apple Silicon (arm64), file `Smartnote-<version>-macos-arm64.dmg`. There is no package for Intel Macs: the
 ONNX Runtime library of the search is pinned for Apple Silicon only ([Packaging](packaging.md)).
 
 Gatekeeper refuses an unsigned app: drag Smartnote to Applications, then either open

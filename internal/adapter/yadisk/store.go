@@ -10,10 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -104,8 +102,6 @@ type Store struct {
 	log      *slog.Logger
 	progress usecase.ProgressFunc
 
-	memory *pendingMemory // temporary files to fence that pending could not record
-
 	settled bool // no temporary file of an earlier Write waits for its fence
 	reauth  bool // the token was refused for good; no more requests
 }
@@ -123,7 +119,6 @@ func NewStore(e Endpoints, tokens usecase.CloudTokenSource, pending PendingStore
 		newID:    opts.NewID,
 		log:      cmp.Or(opts.Log, slog.New(slog.DiscardHandler)),
 		progress: opts.Progress,
-		memory:   &pendingMemory{},
 	}
 
 	if s.now == nil {
@@ -165,11 +160,8 @@ func NewStoreFactory(e Endpoints, pending PendingStore, options ...FactoryOption
 	return newStoreFactory(e, pending, opts)
 }
 
-// newStoreFactory is NewStoreFactory with the seams of the stores. Its
-// stores share one pendingMemory.
+// newStoreFactory is NewStoreFactory with the seams of the stores.
 func newStoreFactory(e Endpoints, pending PendingStore, opts StoreOptions) blobremote.StoreFactory {
-	memory := &pendingMemory{}
-
 	return func(t usecase.RemoteTarget) (blobremote.ObjectStore, error) {
 		if t.Token == nil {
 			return nil, domain.ErrReauthRequired
@@ -179,42 +171,8 @@ func newStoreFactory(e Endpoints, pending PendingStore, opts StoreOptions) blobr
 			return nil, errNoPendingStore
 		}
 
-		s := NewStore(e, t.Token, pending, opts)
-		s.memory = memory
-
-		return s, nil
+		return NewStore(e, t.Token, pending, opts), nil
 	}
-}
-
-// pendingMemory keeps, for the life of the process, the temporary files
-// whose pending record could not be saved, so that a later store fences them
-// when both the record and the DELETE failed (spec §5.5).
-type pendingMemory struct {
-	mu    sync.Mutex
-	names []string
-}
-
-func (m *pendingMemory) add(name string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if !slices.Contains(m.names, name) {
-		m.names = append(m.names, name)
-	}
-}
-
-func (m *pendingMemory) remove(name string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.names = slices.DeleteFunc(m.names, func(n string) bool { return n == name })
-}
-
-func (m *pendingMemory) list() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return slices.Clone(m.names)
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -446,24 +404,30 @@ const (
 // replace moves tmp over path (step 5) and settles an unknown outcome with
 // the fence. The temporary file is recorded before the move is sent, so
 // that an app killed during the move fences it on the next start, and the
-// record is cleared once the outcome is definite.
+// record is cleared once the outcome is definite. Without the record no
+// move is sent: nothing could fence it after a crash.
 func (s *Store) replace(ctx context.Context, tmpName, path, sum string, create bool) error {
 	// The operation's context may end at any moment; the local steps get
 	// their own deadline.
 	base := context.WithoutCancel(ctx)
-	s.recordPending(base, tmpName)
+
+	err := s.withDeadline(base, func(ctx context.Context) error { return s.pending.SavePendingTemp(ctx, tmpName) })
+	if err != nil {
+		s.removeTemp(base, appRoot+tmpName)
+		return fmt.Errorf("record pending temporary file: %w", usecase.LocalError{Err: err})
+	}
 
 	res, err := s.move(ctx, appRoot+tmpName, path, create)
 
 	switch res {
 	case moveDone:
-		s.clearPending(base, tmpName)
+		s.clearPending(base)
 		return nil
 	case moveRejected:
 		// A temporary file left on the Disk keeps its record: the next fence
 		// deletes it.
 		if s.deleteTemp(base, appRoot+tmpName) == nil {
-			s.clearPending(base, tmpName)
+			s.clearPending(base)
 		}
 
 		if create && isStatus(err, http.StatusConflict) {
@@ -476,21 +440,9 @@ func (s *Store) replace(ctx context.Context, tmpName, path, sum string, create b
 	}
 }
 
-// recordPending saves tmpName in the pending store within fenceTimeout.
-// Without the record, the stores of this factory remember the file instead.
-func (s *Store) recordPending(ctx context.Context, tmpName string) {
-	err := s.withDeadline(ctx, func(ctx context.Context) error { return s.pending.SavePendingTemp(ctx, tmpName) })
-	if err != nil {
-		s.memory.add(tmpName)
-		s.log.Error("yandex disk: pending temporary file not recorded", applog.Err(err))
-	}
-}
-
-// clearPending forgets tmpName once no move can take it any more. A stale
-// record only makes the next fence delete a missing file.
-func (s *Store) clearPending(ctx context.Context, tmpName string) {
-	s.memory.remove(tmpName)
-
+// clearPending forgets the recorded temporary file once no move can take
+// it. A stale record only makes the next fence delete a missing file.
+func (s *Store) clearPending(ctx context.Context) {
 	if err := s.withDeadline(ctx, s.pending.ClearPendingTemp); err != nil {
 		s.log.Error("yandex disk: pending temporary file not cleared", applog.Err(err))
 	}
@@ -584,7 +536,7 @@ func (s *Store) fence(base context.Context, tmpName, path, sum string, cause err
 		return err
 	}
 
-	s.clearPending(base, tmpName)
+	s.clearPending(base)
 
 	var (
 		r     resource
@@ -639,14 +591,6 @@ func (s *Store) settle(ctx context.Context) error {
 		if err := s.pending.ClearPendingTemp(ctx); err != nil {
 			return fmt.Errorf("clear pending temporary file: %w", usecase.LocalError{Err: err})
 		}
-	}
-
-	for _, name := range s.memory.list() {
-		if err := s.fenceTemp(ctx, name); err != nil {
-			return err
-		}
-
-		s.memory.remove(name)
 	}
 
 	s.settled = true

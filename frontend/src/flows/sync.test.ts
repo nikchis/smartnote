@@ -79,6 +79,14 @@ class FakeDialogs implements Dialogs {
   }
 }
 
+/** draftAnswer is a discardDraft hook that answers keep (false) or discard (true) and notes each call in asked. */
+function draftAnswer(discard: boolean, asked: string[] = []): () => Promise<boolean> {
+  return async () => {
+    asked.push("draft");
+    return discard;
+  };
+}
+
 let api: FakeApi;
 let d: FakeDialogs;
 
@@ -131,6 +139,38 @@ describe("connectFlow", () => {
     await connectFlow(api, d);
 
     expect(api.calls).toEqual(["connect", "cancelPending"]);
+  });
+
+  it("remote_newer: a kept draft cancels the Restore after yes", async () => {
+    api.connectResults = [{ status: "remote_newer", restore: zero }];
+    d.answers = [true];
+    const asked: string[] = [];
+    let restored = 0;
+
+    await connectFlow(api, d, { discardDraft: draftAnswer(false, asked), restored: () => void restored++ });
+
+    expect(asked).toEqual(["draft"]);
+    expect(api.calls).toEqual(["connect", "cancelPending"]);
+    expect(restored).toBe(0);
+  });
+
+  it("remote_newer: a discarded draft lets the Restore run; no to Restore does not ask about it", async () => {
+    api.connectResults = [{ status: "remote_newer", restore: zero }];
+    d.answers = [true];
+    const asked: string[] = [];
+
+    await connectFlow(api, d, { discardDraft: draftAnswer(true, asked) });
+
+    expect(asked).toEqual(["draft"]);
+    expect(api.calls).toContain("commitRestore");
+
+    api.connectResults = [{ status: "remote_newer", restore: zero }];
+    d.answers = [false];
+    asked.length = 0;
+
+    await connectFlow(api, d, { discardDraft: draftAnswer(true, asked) });
+
+    expect(asked).toEqual([]);
   });
 
   it("host_key_unknown asks with the fingerprint; yes trusts and connects again", async () => {
@@ -272,6 +312,22 @@ describe("restoreFlow", () => {
     expect(d.log).toContain("error: Local data changed during the operation. Please try again.");
   });
 
+  it("a kept draft cancels the Restore after yes", async () => {
+    d.answers = [true];
+    const asked: string[] = [];
+
+    expect(await restoreFlow(api, d, draftAnswer(false, asked))).toBe(false);
+    expect(asked).toEqual(["draft"]);
+    expect(api.calls).toEqual(["prepareRestore", "cancelPending"]);
+  });
+
+  it("a discarded draft lets the Restore run", async () => {
+    d.answers = [true];
+
+    expect(await restoreFlow(api, d, draftAnswer(true))).toBe(true);
+    expect(api.calls).toEqual(["prepareRestore", "commitRestore"]);
+  });
+
   it("no cancels the pending Restore", async () => {
     expect(await restoreFlow(api, d)).toBe(false);
     expect(api.calls).toEqual(["prepareRestore", "cancelPending"]);
@@ -295,6 +351,27 @@ describe("closeFlow", () => {
     expect(quits).toBe(1);
   });
 
+  it("a kept draft keeps the window before any other question", async () => {
+    api.st = { ...api.st, dirty: true };
+    const asked: string[] = [];
+
+    await closeFlow(api, d, quit, draftAnswer(false, asked));
+
+    expect(asked).toEqual(["draft"]);
+    expect(d.log).toEqual([]);
+    expect(quits).toBe(0);
+  });
+
+  it("a discarded draft goes on to the save question", async () => {
+    api.st = { ...api.st, dirty: true };
+    d.answers = [false];
+
+    await closeFlow(api, d, quit, draftAnswer(true));
+
+    expect(d.questions()).toEqual(["Would you like to save your data changes to remote storage?"]);
+    expect(quits).toBe(1);
+  });
+
   it("quits at once when not connected", async () => {
     api.st = { ...api.st, dirty: true, connected: false };
 
@@ -310,7 +387,7 @@ describe("closeFlow", () => {
 
     await closeFlow(api, d, quit);
 
-    expect(d.questions()).toEqual(["Would you like to save your data changes to remote database?"]);
+    expect(d.questions()).toEqual(["Would you like to save your data changes to remote storage?"]);
     expect(api.calls).toEqual(["prepareBackup", "commitBackup"]);
     expect(d.log.at(-1)).toBe("info: Data successfully synchronized.");
     expect(quits).toBe(1);
@@ -322,7 +399,7 @@ describe("closeFlow", () => {
 
     await closeFlow(api, d, quit);
 
-    expect(d.questions()).toEqual(["Would you like to save your data changes to remote database?"]);
+    expect(d.questions()).toEqual(["Would you like to save your data changes to remote storage?"]);
     expect(api.calls).toEqual([]);
     expect(quits).toBe(0);
   });

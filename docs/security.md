@@ -70,7 +70,7 @@ The worker clears every block of memory it frees.
 
 On Linux the worker also isolates itself before it receives the first note, irreversibly: Landlock
 forbids it any change to the file system and TCP connections, seccomp forbids new sockets,
-`io_uring` and writing extended file attributes. The kernel decides how much of it works:
+`io_uring` and changing file metadata (extended attributes, mode, owner and times). The kernel decides how much of it works:
 `sandbox=full` needs Linux 6.10 or newer, Linux 6.7–6.9 gives `partial`, and a lower level is
 written to `smartnote.log` as a warning. The search works at every level.
 

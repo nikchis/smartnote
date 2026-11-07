@@ -76,7 +76,7 @@ function hit(noteId: string, line: number, start: number, text: string): SearchH
   return { noteId, line, start, end: start + text.length, text, snippet: text, marks: [], sources: ["words"] };
 }
 
-const DISCARD = "ask: Discard unsaved changes? [Discard/Cancel]";
+const DISCARD = "ask: Discard unsaved changes in the editor? [Discard/Cancel]";
 
 let api: FakeNotes;
 let d: FakeDialogs;
@@ -104,8 +104,66 @@ describe("Editor", () => {
     expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "first" });
   });
 
+  // Audit of 2f51241, item 9: input typed while the notes are read again
+  // after a Restore was replaced by the late answer of List.
+  it("locks the fields while load reads the notes", async () => {
+    let release!: () => void;
+    const list = api.List.bind(api);
+    api.List = async () => {
+      await new Promise<void>((r) => (release = r));
+      return list();
+    };
+
+    const loading = ed.load();
+    expect(ed.locked).toBe(true);
+    expect(Object.values(ed.buttons).some(Boolean)).toBe(false);
+
+    release();
+    await loading;
+    expect(ed.locked).toBe(false);
+    expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "first" });
+  });
+
+  it("unlocks the fields when load fails", async () => {
+    api.List = async () => {
+      throw new Error("disk I/O error");
+    };
+    await ed.load();
+    expect(ed.locked).toBe(false);
+  });
+
+  it("startNew asks before replacing the draft of the selected note", async () => {
+    ed.info = "first, edited";
+    d.answer = false;
+    await ed.startNew();
+    expect(d.shown).toEqual([DISCARD]);
+    expect(d.labels[0]?.primary).toBe("no");
+    expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "first, edited" });
+
+    d.answer = true;
+    await ed.startNew();
+    expect(ed.state).toMatchObject({ mode: "new", name: "", info: "" });
+  });
+
+  it("startNew without a draft does not ask", async () => {
+    await ed.startNew();
+    expect(d.shown).toEqual([]);
+    expect(ed.state).toMatchObject({ mode: "new", name: "", info: "" });
+  });
+
+  it("discardDraft asks only when there is a draft", async () => {
+    await expect(ed.discardDraft()).resolves.toBe(true);
+    expect(d.shown).toEqual([]);
+
+    ed.name = "alpha, renamed";
+    d.answer = false;
+    await expect(ed.discardDraft()).resolves.toBe(false);
+    expect(d.shown).toEqual([DISCARD]);
+    expect(ed.name).toBe("alpha, renamed");
+  });
+
   it("apply in new mode creates the note and selects it", async () => {
-    ed.startNew();
+    await ed.startNew();
     ed.name = "gamma";
     ed.info = "third";
     await ed.apply();
@@ -199,7 +257,7 @@ describe("Editor", () => {
   });
 
   it("openHit asks before replacing the draft of a new note", async () => {
-    ed.startNew();
+    await ed.startNew();
     ed.info = "draft";
     d.answer = false;
     await expect(ed.openHit(hit("b", 1, 0, "second"))).resolves.toBe("cancelled");
@@ -211,7 +269,7 @@ describe("Editor", () => {
   });
 
   it("openHit from an empty new note does not ask", async () => {
-    ed.startNew();
+    await ed.startNew();
     await expect(ed.openHit(hit("b", 0, 0, "beta"))).resolves.toBe("selected");
     expect(d.shown).toEqual([]);
     expect(ed.place).toEqual({ field: "name", start: 0, end: 4 });
@@ -295,7 +353,7 @@ describe("Editor", () => {
   });
 
   it("select is ignored while a new note is being created", async () => {
-    ed.startNew();
+    await ed.startNew();
     ed.name = "draft";
     await ed.select("a");
 
@@ -317,7 +375,7 @@ describe("Editor", () => {
   });
 
   it("step is ignored while a new note is being created", async () => {
-    ed.startNew();
+    await ed.startNew();
     await ed.step(1);
 
     expect(ed.state.mode).toBe("new");
@@ -326,7 +384,7 @@ describe("Editor", () => {
 
   it("cancel in new mode returns to the previous note", async () => {
     await ed.select("b");
-    ed.startNew();
+    await ed.startNew();
     ed.cancel();
 
     expect(ed.state).toMatchObject({ mode: "edit", name: "beta" });
@@ -377,7 +435,7 @@ describe("Editor", () => {
       await new Promise<void>((r) => releases.push(r));
       return create(name, info);
     };
-    ed.startNew();
+    await ed.startNew();
     ed.name = "gamma";
     ed.info = "third";
     const first = ed.apply();
@@ -403,7 +461,7 @@ describe("Editor", () => {
     expect(ed.locked).toBe(true);
     expect(Object.values(ed.buttons).some(Boolean)).toBe(false);
     await ed.select("b");
-    ed.startNew();
+    await ed.startNew();
     ed.cancel();
     ed.useVersion("old");
     expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "first edit" });

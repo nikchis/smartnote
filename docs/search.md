@@ -11,8 +11,8 @@ searches the names and texts of the current notes, not their history.
 
 ## Searching
 
-- The field `Search notes` is above the list and the editor; `Ctrl+F` (`Cmd+F` on macOS) puts the
-  focus into it.
+- The field `Search records` is above the editor, right of **New** and **Remove**; `Ctrl+F`
+  (`Cmd+F` on macOS) puts the focus into it.
 - The hits appear under the field about 150 ms after typing, at most 10 of them, at most 3 lines of
   one note. A hit shows the note name, `name` or `line N` (the lines of the text count from 1) and
   the line with every match highlighted.
@@ -27,8 +27,9 @@ The note opens and the match is selected: in the text, which scrolls to it, or i
 for a `name` hit.
 
 - If the editor holds unsaved changes, opening any hit, even one in the same note, asks
-  `Discard unsaved changes?` with **Discard** and **Cancel**; **Cancel** has the focus, so `Enter`
-  keeps the draft. Choosing another note in the list asks the same, unlike v1.
+  `Discard unsaved changes in the editor?` with **Discard** and **Cancel**; **Cancel** has the focus, so `Enter`
+  keeps the draft. Choosing another note in the list, **New**, **Restore** and closing the window ask
+  the same, unlike v1.
 - If the text of the note changed after the search, Smartnote searches again and selects the match
   of the same note nearest to the old line; when there is none, the note opens at the top without a
   selection.

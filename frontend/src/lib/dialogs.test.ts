@@ -48,12 +48,12 @@ describe("dialogs", () => {
 
   it("ask with labels shows them and answers like Yes and No", async () => {
     const labels = { yes: "Discard", no: "Cancel", primary: "no" } as const;
-    const discard = dialogs.ask("Discard unsaved changes?", labels);
-    expect(currentDialog()).toEqual({ kind: "ask", message: "Discard unsaved changes?", labels });
+    const discard = dialogs.ask("Discard unsaved changes in the editor?", labels);
+    expect(currentDialog()).toEqual({ kind: "ask", message: "Discard unsaved changes in the editor?", labels });
     answer("yes");
     await expect(discard).resolves.toBe(true);
 
-    const escape = dialogs.ask("Discard unsaved changes?", labels);
+    const escape = dialogs.ask("Discard unsaved changes in the editor?", labels);
     dismiss();
     await expect(escape).resolves.toBe(false);
   });

@@ -27,9 +27,9 @@ Silicon) собирает CI (задание `package`, артефакты `smar
 | 2 | Запустите Smartnote. | Экран New storage открывается в тёмных цветах v1 — и при светлой, и при тёмной теме системы. Логотип Smartnote есть у `smartnote.exe` в Проводнике, в заголовке окна и на панели задач. | | |
 | 3 | Создайте хранилище, добавьте заметку. | «Note has been successfully added.»; `local.db` лежит в `%APPDATA%\smartnote`. | | |
 | 4 | **Settings**: создайте ключ, добавьте открытый ключ на сервер, заполните настройки сервера, **Test connection**, доверьтесь ключу. | «Connection successfully established.» (или «… Remote storage is empty.»). | | |
-| 5 | **OK**, измените заметку, **Save**. | «Data successfully saved.» | | |
+| 5 | **OK**, измените заметку, **Backup**. | «Data successfully saved.» | | |
 | 6 | Войдите вторым пользователем Windows, установите или запустите Smartnote, создайте хранилище, настройте тот же сервер и фразу. | Вопрос о Restore; Yes показывает «Data successfully restored.» и заметки первого пользователя. | | |
-| 7 | Измените заметку, закройте окно. | «Would you like to save your data changes to remote database?»; Yes показывает «Data successfully synchronized.», и приложение закрывается. | | |
+| 7 | Измените заметку, закройте окно. | «Would you like to save your data changes to remote storage?»; Yes показывает «Data successfully synchronized.», и приложение закрывается. | | |
 | 8 | Запустите Smartnote дважды. | Второй запуск выводит открытое окно на передний план. | | |
 | 9 | Измените заметку, выйдите из Windows с открытым Smartnote. | Windows выходит, не дожидаясь Smartnote; после входа заметка на месте. | | |
 | 10 | Добавьте заметку «Pancakes» с текстом «flour, milk, eggs». Нажмите Ctrl+F, введите `milk`, затем `recipe for crepes`. | `smartnote-search.exe` и `onnxruntime.dll` лежат в папке установки вместе с папкой `model`. Не появляется ни «Search unavailable», ни, через несколько секунд после запуска, «Semantic search unavailable»; оба запроса показывают «Pancakes», и Enter на результате переходит к его строке. | | |
@@ -45,7 +45,7 @@ Silicon) собирает CI (задание `package`, артефакты `smar
 | 1 | Откройте `.dmg`, перетащите Smartnote в Applications, запустите; когда Gatekeeper откажет, откройте **System Settings → Privacy & Security** → **Open Anyway** (или `xattr -dr com.apple.quarantine /Applications/smartnote.app`). | Smartnote запускается; логотип Smartnote есть в Dock. | | |
 | 2 | Создайте хранилище, добавьте заметку. | «Note has been successfully added.»; `local.db` лежит в `~/Library/Application Support/smartnote`. | | |
 | 3 | **Settings**: создайте ключ, добавьте открытый ключ на сервер, заполните настройки сервера, **Test connection**, доверьтесь ключу. | «Connection successfully established.» | | |
-| 4 | **OK**, измените заметку, **Save**. | «Data successfully saved.» | | |
+| 4 | **OK**, измените заметку, **Backup**. | «Data successfully saved.» | | |
 | 5 | Войдите вторым пользователем macOS, запустите Smartnote, создайте хранилище, настройте тот же сервер и фразу. | Вопрос о Restore; Yes показывает «Data successfully restored.» | | |
 | 6 | Измените заметку, закройте приложение через Cmd+Q. | Перед закрытием появляется вопрос о сохранении; после Yes — «Data successfully synchronized.» | | |
 | 7 | Снова запустите Smartnote из Applications, пока он работает. | Открытое окно выходит на передний план. | | |

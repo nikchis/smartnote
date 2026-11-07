@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum SandboxLevel {
     /// On every thread of the process: Landlock restricts every file-system change and TCP
-    /// bind and connect, and seccomp denies new sockets, `io_uring_setup` and the `setxattr`
-    /// family (extended attributes are a write to the file system that Landlock does not cover).
+    /// bind and connect, and seccomp denies new sockets, `io_uring_setup` and the calls that
+    /// change file metadata Landlock does not cover: setting and removing extended attributes,
+    /// mode, owner and times.
     Full,
     /// The kernel enforces only part of it (an older kernel or a failed layer).
     Partial,
@@ -67,8 +68,8 @@ pub struct Applied {
 /// Restricts the current process irreversibly (spec §10.2 pp. 2–4): `PR_SET_NO_NEW_PRIVS`,
 /// then Landlock (no file-system changes anywhere, no TCP bind or connect, abstract Unix
 /// sockets and signals scoped to the process), then seccomp (`socket`, `socketpair`,
-/// `io_uring_setup` and the `setxattr` family fail with `EPERM`). Reading files and mapping
-/// them stays allowed.
+/// `io_uring_setup` and the calls that change extended attributes, mode, owner or times of a
+/// file fail with `EPERM`). Reading files and mapping them stays allowed.
 ///
 /// Requires the model files to be read and closed already: descriptors opened before stay
 /// usable (check them with [`extra_open_fds`]). Call it before any other thread exists: the
@@ -122,10 +123,18 @@ mod os {
     /// constant for it.
     const SYS_SETXATTRAT: libc::c_long = 463;
 
+    /// `removexattrat` (Linux 6.13): the same number on every architecture, no libc constant.
+    const SYS_REMOVEXATTRAT: libc::c_long = 466;
+
+    /// `fchmodat2` (Linux 6.6): the same number on every architecture.
+    const SYS_FCHMODAT2: libc::c_long = 452;
+
     /// System calls that fail with `EPERM` under seccomp: Landlock does not restrict UDP and
     /// other socket families, `io_uring` would bypass seccomp for socket operations, and
-    /// Landlock does not restrict extended attributes, which could carry note text to disk.
-    const DENIED_SYSCALLS: [libc::c_long; 7] = [
+    /// Landlock does not restrict the metadata of files — extended attributes, mode, owner and
+    /// times — which could carry note text to disk or open a file to others (audit of 2f51241,
+    /// item 3). Each family is listed with its descriptor and `*at` variants.
+    const DENIED_SYSCALLS: [libc::c_long; 17] = [
         libc::SYS_socket,
         libc::SYS_socketpair,
         libc::SYS_io_uring_setup,
@@ -133,6 +142,28 @@ mod os {
         libc::SYS_lsetxattr,
         libc::SYS_fsetxattr,
         SYS_SETXATTRAT,
+        libc::SYS_removexattr,
+        libc::SYS_lremovexattr,
+        libc::SYS_fremovexattr,
+        SYS_REMOVEXATTRAT,
+        libc::SYS_fchmod,
+        libc::SYS_fchmodat,
+        SYS_FCHMODAT2,
+        libc::SYS_fchown,
+        libc::SYS_fchownat,
+        libc::SYS_utimensat,
+    ];
+
+    /// The path-only variants of the same families that `x86_64` still has; newer
+    /// architectures such as `aarch64` have only the calls of [`DENIED_SYSCALLS`].
+    #[cfg(target_arch = "x86_64")]
+    const DENIED_LEGACY_SYSCALLS: [libc::c_long; 6] = [
+        libc::SYS_chmod,
+        libc::SYS_chown,
+        libc::SYS_lchown,
+        libc::SYS_utime,
+        libc::SYS_utimes,
+        libc::SYS_futimesat,
     ];
 
     /// `__X32_SYSCALL_BIT`: x32 system calls pass the `AUDIT_ARCH_X86_64` check of the filter
@@ -255,8 +286,12 @@ mod os {
 
     /// The numbers of [`DENIED_SYSCALLS`] for the filter, with their x32 aliases on `x86_64`.
     fn denied_syscall_numbers() -> Vec<i64> {
+        #[cfg(target_arch = "x86_64")]
+        let calls = DENIED_SYSCALLS.iter().chain(&DENIED_LEGACY_SYSCALLS);
+        #[cfg(not(target_arch = "x86_64"))]
+        let calls = DENIED_SYSCALLS.iter();
         #[allow(clippy::useless_conversion, reason = "c_long is i32 on 32-bit targets")]
-        let native = DENIED_SYSCALLS.iter().map(|&nr| i64::from(nr));
+        let native = calls.map(|&nr| i64::from(nr));
         #[cfg(target_arch = "x86_64")]
         let native = native.flat_map(|nr| [nr, X32_SYSCALL_BIT | nr]);
         native.collect()
@@ -504,9 +539,9 @@ mod os {
         }
 
         #[test]
-        fn deny_list_covers_sockets_io_uring_and_xattrs() {
+        fn deny_list_covers_sockets_io_uring_and_metadata() {
             let numbers = denied_syscall_numbers();
-            let native = [
+            let mut native = vec![
                 libc::SYS_socket,
                 libc::SYS_socketpair,
                 libc::SYS_io_uring_setup,
@@ -514,8 +549,29 @@ mod os {
                 libc::SYS_lsetxattr,
                 libc::SYS_fsetxattr,
                 SYS_SETXATTRAT,
+                libc::SYS_removexattr,
+                libc::SYS_lremovexattr,
+                libc::SYS_fremovexattr,
+                SYS_REMOVEXATTRAT,
+                libc::SYS_fchmod,
+                libc::SYS_fchmodat,
+                SYS_FCHMODAT2,
+                libc::SYS_fchown,
+                libc::SYS_fchownat,
+                libc::SYS_utimensat,
             ];
-            for nr in native {
+            #[cfg(target_arch = "x86_64")]
+            native.extend([
+                libc::SYS_chmod,
+                libc::SYS_chown,
+                libc::SYS_lchown,
+                libc::SYS_utime,
+                libc::SYS_utimes,
+                libc::SYS_futimesat,
+            ]);
+            for &nr in &native {
+                #[allow(clippy::useless_conversion, reason = "c_long is i32 on 32-bit targets")]
+                let nr = i64::from(nr);
                 assert!(numbers.contains(&nr), "{nr}: {numbers:?}");
                 #[cfg(target_arch = "x86_64")]
                 assert!(
@@ -531,25 +587,20 @@ mod os {
         #[test]
         fn deny_list_matches_kernel_numbers() {
             // From arch/x86/entry/syscalls/syscall_64.tbl; x32 adds 0x4000_0000.
-            assert_eq!(
-                denied_syscall_numbers(),
-                [
-                    41,
-                    0x4000_0029,
-                    53,
-                    0x4000_0035,
-                    425,
-                    0x4000_01a9,
-                    188,
-                    0x4000_00bc,
-                    189,
-                    0x4000_00bd,
-                    190,
-                    0x4000_00be,
-                    463,
-                    0x4000_01cf,
-                ]
-            );
+            let kernel = [
+                41, 53, 425, // socket, socketpair, io_uring_setup
+                188, 189, 190, 463, // setxattr, lsetxattr, fsetxattr, setxattrat
+                197, 198, 199, 466, // removexattr, lremovexattr, fremovexattr, removexattrat
+                91, 268, 452, // fchmod, fchmodat, fchmodat2
+                93, 260, 280, // fchown, fchownat, utimensat
+                90, 92, 94, // chmod, chown, lchown
+                132, 235, 261, // utime, utimes, futimesat
+            ];
+            let expected: Vec<i64> = kernel
+                .into_iter()
+                .flat_map(|nr| [nr, 0x4000_0000 | nr])
+                .collect();
+            assert_eq!(denied_syscall_numbers(), expected);
         }
 
         #[test]

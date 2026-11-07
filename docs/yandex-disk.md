@@ -65,7 +65,7 @@ minutes to back up over a slow connection. An operation with Yandex Disk is limi
 Each upload goes to an upload server that Yandex picks for it. If the connection to that server
 fails (it is dropped, or not accepted in time), Smartnote uploads once more by a new link, usually
 to another server. If that fails too, it shows an error such as "Yandex Disk error: network.";
-press **Save** again, or, when the error came on Connect, press **OK** in **Settings** first.
+press **Backup** again, or, when the error came on Connect, press **OK** in **Settings** first.
 
 Smartnote cannot see or empty the trash of your Disk: the access to the application folder does not
 cover it. If earlier copies of the container land in the trash, they take space there and can be
@@ -96,7 +96,7 @@ between them: the fields of the other type are kept. The device remembers the re
 synchronized with in each storage, so after switching back:
 
 - a storage that has not changed since then is not offered as fresher data: the device is newer,
-  and **Save** brings the storage up to date;
+  and **Backup** brings the storage up to date;
 - a storage that another device changed since then is offered for **Restore**, as usual;
 - a storage that holds an older version than this device last synchronized with gets the warning
   above.
@@ -105,9 +105,9 @@ Smartnote 2.2.0 starts remembering revisions from the storage this device is syn
 when it is updated; storages it synchronized with only before that are compared as new.
 
 A storage this device never synchronized with is compared as new: if it holds other notes,
-Smartnote offers to restore them. Answer **No** and press **Save** if you want the storage to get
-the notes of this device instead; **Save** then asks once more before it overwrites them.
-Smartnote does not merge the two storages: **Save** and **Restore** always copy the whole set of
+Smartnote offers to restore them. Answer **No** and press **Backup** if you want the storage to get
+the notes of this device instead; **Backup** then asks once more before it overwrites them.
+Smartnote does not merge the two storages: **Backup** and **Restore** always copy the whole set of
 notes in one direction.
 
 See also [Security](security.md#yandex-disk) for what Yandex can see and do, and

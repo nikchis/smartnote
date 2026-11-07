@@ -64,7 +64,7 @@ describe("MessageDialog", () => {
   });
 
   it("focuses Cancel of the Discard question, so a repeated Enter keeps the draft", () => {
-    void dialogs.ask("Discard unsaved changes?", { yes: "Discard", no: "Cancel", primary: "no" });
+    void dialogs.ask("Discard unsaved changes in the editor?", { yes: "Discard", no: "Cancel", primary: "no" });
     flushSync();
 
     expect(buttons()).toEqual(["Discard", "Cancel"]);

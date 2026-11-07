@@ -89,7 +89,9 @@ tests and is not shipped), and the licence notices: `THIRD_PARTY_NOTICES.md` wit
   is packed again by `linuxdeploy-plugin-appimage` from the same linuxdeploy AppImage (extracted
   with `--appimage-extract`), which only packs. The AppRun of Wails is kept.
 - Windows: `project.nsi` installs the files beside `smartnote.exe` (`model\`, `licenses\`) and the
-  uninstaller deletes them before removing the folder.
+  uninstaller deletes only these files by name, then each folder only if it is empty: a folder
+  chosen for the installation may hold other files, and they stay. A new file in the package needs
+  a `Delete` line in the uninstall section too.
 
 The model files are prepared and published as [tools/model/README.md](../tools/model/README.md)
 describes; the notices file is [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).

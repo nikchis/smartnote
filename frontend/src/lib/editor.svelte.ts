@@ -32,7 +32,7 @@ export type Jump = "selected" | "unselected" | "cancelled" | "gone";
 
 // Cancel has the focus: the question comes up on Enter in the search field,
 // and a held or repeated Enter must not discard the draft.
-const DISCARD = { message: "Discard unsaved changes?", labels: { yes: "Discard", no: "Cancel", primary: "no" } } as const;
+const DISCARD = { message: "Discard unsaved changes in the editor?", labels: { yes: "Discard", no: "Cancel", primary: "no" } } as const;
 
 export class Editor {
   notes: NoteDTO[] = $state([]);
@@ -44,6 +44,11 @@ export class Editor {
   info = $state("");
   /** busy is set while Apply or Delete waits for Go; the editor is locked meanwhile. */
   busy = $state(false);
+  /**
+   * loading is set while load reads the notes: what is typed meanwhile would
+   * be replaced by the answer (audit of 2f51241, item 9).
+   */
+  loading = $state(false);
 
   readonly state: EditorState = $derived({
     mode: this.mode,
@@ -54,9 +59,13 @@ export class Editor {
     hasVersions: this.versions.length > 0,
     hasNotes: this.notes.length > 0,
   });
-  readonly buttons: Buttons = $derived(this.busy ? NO_BUTTONS : buttons(this.state));
-  /** locked disables the fields: nothing is selected, or an action runs. */
-  readonly locked: boolean = $derived(this.mode === "view" || this.busy);
+  readonly buttons: Buttons = $derived(this.busy || this.loading ? NO_BUTTONS : buttons(this.state));
+  /** blocked: an action or a load runs, and nothing else may change the fields. */
+  private get blocked(): boolean {
+    return this.busy || this.loading;
+  }
+  /** locked disables the fields: nothing is selected, or an action or a load runs. */
+  readonly locked: boolean = $derived(this.mode === "view" || this.busy || this.loading);
 
   constructor(
     private readonly api: NotesApi,
@@ -73,21 +82,24 @@ export class Editor {
   /**
    * load reads the notes, for the first time or after a Restore: an unsaved
    * edit is lost, the selected note stays selected if it still exists,
-   * otherwise the first note is selected.
+   * otherwise the first note is selected. The editor is locked until the
+   * notes are shown.
    */
   async load(): Promise<void> {
+    this.loading = true;
     try {
       this.notes = (await this.api.List()) ?? [];
+      // Without a selection to keep, the first note is shown, as the v1 grid focused it.
+      const keep = (this.selected && this.notes.find((n) => n.id === this.selected?.id)) || this.notes[0];
+      if (keep) {
+        await this.show(keep);
+      } else {
+        this.clear();
+      }
     } catch (e) {
       await this.dialogs.error(parseError(e).message);
-      return;
-    }
-    // Without a selection to keep, the first note is shown, as the v1 grid focused it.
-    const keep = (this.selected && this.notes.find((n) => n.id === this.selected?.id)) || this.notes[0];
-    if (keep) {
-      await this.show(keep);
-    } else {
-      this.clear();
+    } finally {
+      this.loading = false;
     }
   }
 
@@ -98,7 +110,7 @@ export class Editor {
    * draft, a new note is being created (the list is off then) or an action runs.
    */
   async select(id: string): Promise<boolean> {
-    if (this.mode === "new" || this.busy) return false;
+    if (this.mode === "new" || this.blocked) return false;
     const note = this.notes.find((n) => n.id === id);
     if (!note) return false;
     if (note.id === this.selected?.id) return true;
@@ -121,7 +133,7 @@ export class Editor {
     const jump = ++this.jumps;
     const replaced = () => jump !== this.jumps;
     this.place = undefined;
-    if (this.busy) return "cancelled";
+    if (this.blocked) return "cancelled";
     const note = this.notes.find((n) => n.id === hit.noteId);
     if (!note) {
       await this.search.again();
@@ -150,8 +162,9 @@ export class Editor {
     if (next && next.id !== this.selected?.id) await this.select(next.id);
   }
 
-  startNew(): void {
-    if (this.busy) return;
+  /** startNew clears the fields for a new note; with unsaved changes it asks first. */
+  async startNew(): Promise<void> {
+    if (this.blocked || !(await this.discardDraft()) || this.blocked) return;
     this.mode = "new";
     this.name = "";
     this.info = "";
@@ -159,7 +172,7 @@ export class Editor {
 
   /** cancel leaves the new note, or restores the selected note's saved fields. */
   cancel(): void {
-    if (this.busy) return;
+    if (this.blocked) return;
     if (this.selected) {
       this.mode = "edit";
       this.name = this.selected.name;
@@ -193,12 +206,16 @@ export class Editor {
 
   /** useVersion puts an old text into the editor; only Apply saves it. */
   useVersion(info: string): void {
-    if (this.busy) return;
+    if (this.blocked) return;
     this.info = info;
   }
 
-  /** discardDraft asks before unsaved input is replaced; true when there is none or the user discards it. */
-  private async discardDraft(): Promise<boolean> {
+  /**
+   * discardDraft asks before unsaved input is replaced or lost: by New, by a
+   * jump, by a Restore or by closing the window. It is true when there is no
+   * draft or the user discards it.
+   */
+  async discardDraft(): Promise<boolean> {
     return !hasDraft(this.state) || this.dialogs.ask(DISCARD.message, DISCARD.labels);
   }
 
@@ -217,7 +234,7 @@ export class Editor {
    * selected meanwhile is replaced by the answer, then shows done or the error.
    */
   private async exclusive(call: () => Promise<void>, done: string): Promise<void> {
-    if (this.busy) return;
+    if (this.blocked) return;
     this.busy = true;
     let message: string | undefined;
     try {
