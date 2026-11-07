@@ -104,14 +104,15 @@
         <RemoveFolder Id="RemoveOrtLicensesFolder" On="uninstall" />
       </Component>
 
+      <!-- The shortcuts name the folder, not [#SmartnoteExe]: a file of another component (ICE69). -->
       <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder">
         <RegistryValue Root="HKCU" Key="Software\nikchis\Smartnote" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
-        <Shortcut Id="StartMenuSmartnote" Name="Smartnote" Target="[#SmartnoteExe]" WorkingDirectory="INSTALLFOLDER" />
+        <Shortcut Id="StartMenuSmartnote" Name="Smartnote" Target="[INSTALLFOLDER]smartnote.exe" WorkingDirectory="INSTALLFOLDER" />
       </Component>
 
       <Component Id="DesktopShortcut" Directory="DesktopFolder">
         <RegistryValue Root="HKCU" Key="Software\nikchis\Smartnote" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
-        <Shortcut Id="DesktopSmartnote" Name="Smartnote" Target="[#SmartnoteExe]" WorkingDirectory="INSTALLFOLDER" />
+        <Shortcut Id="DesktopSmartnote" Name="Smartnote" Target="[INSTALLFOLDER]smartnote.exe" WorkingDirectory="INSTALLFOLDER" />
       </Component>
     </Feature>
   </Package>
