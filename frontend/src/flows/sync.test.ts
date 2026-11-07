@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Dialogs } from "../lib/dialogs.svelte";
-import { backupFlow, closeFlow, connectFlow, restoreFlow, type BackupPreview, type Counts, type SyncApi, type SyncState } from "./sync";
+import { backupFlow, closeFlow, connectFlow, restoreFlow, type BackupPreview, type Counts, type RestorePreview, type SyncApi, type SyncState } from "./sync";
 
 const zero: Counts = { added: 0, updated: 0, deleted: 0 };
 
@@ -12,7 +12,7 @@ class FakeApi implements SyncApi {
   calls: string[] = [];
   connectResults: Array<{ status: string; restore: Counts } | Error> = [{ status: "in_sync", restore: zero }];
   preview: BackupPreview | Error = { counts: zero, remoteNewer: false };
-  restoreCounts: Counts | Error = zero;
+  restorePreview: RestorePreview | Error = { counts: zero, remoteOlder: false };
   commitBackupError?: Error;
   commitRestoreError?: Error;
   st: SyncState = { connected: true, dirty: false, restoreAvailable: false, busy: false };
@@ -34,8 +34,8 @@ class FakeApi implements SyncApi {
   }
   async prepareRestore() {
     this.calls.push("prepareRestore");
-    if (this.restoreCounts instanceof Error) throw this.restoreCounts;
-    return this.restoreCounts;
+    if (this.restorePreview instanceof Error) throw this.restorePreview;
+    return this.restorePreview;
   }
   async commitRestore() {
     this.calls.push("commitRestore");
@@ -58,6 +58,9 @@ class FakeDialogs implements Dialogs {
   answers: (boolean | "cancel")[] = [];
   async info(msg: string) {
     this.log.push(`info: ${msg}`);
+  }
+  async warning(msg: string) {
+    this.log.push(`warning: ${msg}`);
   }
   async error(msg: string) {
     this.log.push(`error: ${msg}`);
@@ -98,6 +101,17 @@ describe("connectFlow", () => {
     expect(api.calls).toContain("commitRestore");
     expect(d.log).toContain("info: Data successfully restored.");
     expect(restored).toBe(1);
+  });
+
+  it("remote_older shows the warning and asks nothing", async () => {
+    api.connectResults = [{ status: "remote_older", restore: zero }];
+
+    await connectFlow(api, d);
+
+    expect(d.log).toEqual([
+      "warning: The remote storage holds an older version of the data than this device last synchronized with. It may have been restored from an earlier copy. Use Backup to overwrite it, or Restore to replace your notes with it.",
+    ]);
+    expect(api.calls).toEqual(["connect"]);
   });
 
   it("remote_newer without deletions has no deletion line", async () => {
@@ -151,6 +165,14 @@ describe("connectFlow", () => {
     expect(opened).toBe(1);
   });
 
+  it("reauth_required shows the error and then opens the settings", async () => {
+    api.connectResults = [uiError("reauth_required", "Sign in to Yandex Disk again.")];
+
+    await connectFlow(api, d, { openSettings: () => void d.log.push("open settings") });
+
+    expect(d.log).toEqual(["error: Sign in to Yandex Disk again.", "open settings"]);
+  });
+
   it("host_key_mismatch shows both fingerprints", async () => {
     api.connectResults = [uiError("host_key_mismatch", "m", { expected: "SHA256:old", got: "SHA256:new" })];
 
@@ -179,20 +201,23 @@ describe("connectFlow", () => {
 });
 
 describe("backupFlow", () => {
-  it("asks without a deletion line and reports success", async () => {
-    d.answers = [true];
+  it("saves without a question when nothing is deleted and the server is not newer", async () => {
+    api.preview = { counts: { added: 2, updated: 1, deleted: 0 }, remoteNewer: false };
 
     expect(await backupFlow(api, d)).toBe(true);
-    expect(d.questions()).toEqual(["Would you like to save data on remote storage?"]);
+    expect(d.questions()).toEqual([]);
+    expect(api.calls).toEqual(["prepareBackup", "commitBackup"]);
     expect(d.log).toContain("info: Data successfully saved.");
   });
 
-  it("adds the deletion line", async () => {
+  it("asks with the deletion line when the Backup deletes notes on the server", async () => {
     api.preview = { counts: { added: 0, updated: 0, deleted: 3 }, remoteNewer: false };
+    d.answers = [true];
 
-    await backupFlow(api, d);
-
+    expect(await backupFlow(api, d)).toBe(true);
     expect(d.questions()).toEqual(["Would you like to save data on remote storage?\nBackup will delete 3 notes on the server."]);
+    expect(api.calls).toEqual(["prepareBackup", "commitBackup"]);
+    expect(d.log).toContain("info: Data successfully saved.");
   });
 
   it("warns first when the server is newer", async () => {
@@ -205,12 +230,13 @@ describe("backupFlow", () => {
   });
 
   it("no cancels the pending Backup", async () => {
+    api.preview = { counts: { added: 0, updated: 0, deleted: 1 }, remoteNewer: false };
+
     expect(await backupFlow(api, d)).toBe(false);
     expect(api.calls).toEqual(["prepareBackup", "cancelPending"]);
   });
 
   it("remote_changed shows its message", async () => {
-    d.answers = [true];
     api.commitBackupError = uiError("remote_changed", "Remote data changed during the operation. Please try again.");
 
     expect(await backupFlow(api, d)).toBe(false);
@@ -220,12 +246,22 @@ describe("backupFlow", () => {
 
 describe("restoreFlow", () => {
   it("asks, restores and reports success", async () => {
-    api.restoreCounts = { added: 1, updated: 0, deleted: 4 };
+    api.restorePreview = { counts: { added: 1, updated: 0, deleted: 4 }, remoteOlder: false };
     d.answers = [true];
 
     expect(await restoreFlow(api, d)).toBe(true);
     expect(d.questions()).toEqual(["Would you like to restore data from remote storage?\nRestore will delete 4 local notes."]);
     expect(d.log).toContain("info: Data successfully restored.");
+  });
+
+  it("remoteOlder starts the question with the rollback warning", async () => {
+    d.answers = [true];
+    api.restorePreview = { counts: { added: 0, updated: 1, deleted: 2 }, remoteOlder: true };
+
+    expect(await restoreFlow(api, d)).toBe(true);
+    expect(d.questions()).toEqual([
+      "The remote storage holds an older version of the data than this device last synchronized with.\nWould you like to restore data from remote storage?\nRestore will delete 2 local notes.",
+    ]);
   });
 
   it("local_changed shows its message", async () => {

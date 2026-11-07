@@ -10,8 +10,8 @@ info:
   productIdentifier: "com.nikchis.smartnote" # The unique product identifier
   description: "A notepad for private records" # The application description
   copyright: "© 2026, Nikita Chisnikov" # Copyright text
-  comments: "Encrypted notes with backup to your own PostgreSQL server over SSH" # Comments
-  version: "2.1.0" # The application version
+  comments: "Encrypted notes with backup to Yandex Disk or to your own PostgreSQL server over SSH" # Comments
+  version: "2.2.0" # The application version
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"

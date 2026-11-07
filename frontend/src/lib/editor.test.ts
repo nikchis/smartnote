@@ -46,6 +46,9 @@ class FakeDialogs implements Dialogs {
   async info(msg: string) {
     this.shown.push(`info: ${msg}`);
   }
+  async warning(msg: string) {
+    this.shown.push(`warning: ${msg}`);
+  }
   async error(msg: string) {
     this.shown.push(`error: ${msg}`);
   }

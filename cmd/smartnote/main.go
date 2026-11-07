@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,11 +20,16 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"github.com/nikchis/smartnote/frontend"
+	"github.com/nikchis/smartnote/internal/adapter/blobremote"
+	"github.com/nikchis/smartnote/internal/adapter/remote"
 	"github.com/nikchis/smartnote/internal/adapter/sqlite"
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
 	"github.com/nikchis/smartnote/internal/adapter/wailsui"
+	"github.com/nikchis/smartnote/internal/adapter/yadisk"
 	"github.com/nikchis/smartnote/internal/applog"
+	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/platform"
+	"github.com/nikchis/smartnote/internal/sealbox"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
@@ -113,7 +119,7 @@ func run(logger *slog.Logger) error {
 
 	app.OnShutdown(finish)
 
-	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger}, store, lifecycle, searchParts{
+	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger, SavedKind: savedKind(store)}, store, lifecycle, searchParts{
 		engine: engine, status: searchStatus, run: searchRun,
 	})
 	if err != nil {
@@ -205,6 +211,19 @@ type searchParts struct {
 	run    *searchRunner
 }
 
+// savedKind returns what the services use to pick the operation limit: the
+// kind of the settings saved in store.
+func savedKind(store *sqlite.Store) func(context.Context) (domain.StorageKind, error) {
+	return func(ctx context.Context) (domain.StorageKind, error) {
+		s, err := store.LoadSettings(ctx)
+		if err != nil {
+			return "", err
+		}
+
+		return s.Kind(), nil
+	}
+}
+
 // newServices wires the use cases over store into the Wails services.
 func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecycle, sp searchParts) ([]application.Service, error) {
 	// The local storage keeps milliseconds; a finer clock would make a saved
@@ -235,22 +254,38 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		return nil, err
 	}
 
-	connector, err := ssh.NewConnector(store)
+	// Both storages report the progress of their transfers to the interface.
+	progress := wailsui.NewProgressFeed(emit)
+
+	sshConnector, err := ssh.NewConnector(store, ssh.WithProgress(progress.Publish))
 	if err != nil {
 		return nil, err
 	}
+
+	connector := remote.NewRouter(sshConnector, blobremote.NewConnector(
+		yadisk.NewStoreFactory(yadisk.DefaultEndpoints, store, yadisk.WithLog(env.Log), yadisk.WithProgress(progress.Publish)),
+		sealbox.DefaultKDF(),
+	))
 
 	syncer, err := usecase.NewSync(usecase.SyncDeps{
 		Local: store, Settings: store, Remote: connector, Changes: changes, IDs: uuid.New, Gate: gate, Offer: offer,
 		OnState: func(s usecase.State) { emit(wailsui.EventSyncState, wailsui.ToStateDTO(s)) },
 		Warn:    func(err error) { wailsui.LogError(env.Log, "sync", err) },
 		Index:   search,
+		Tokens:  store,
+
+		BuiltinClientID: yadisk.BuiltinClientID,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	connection, err := usecase.NewConnection(store, connector, gate, offer, syncer.ResetConnection)
+	connection, err := usecase.NewConnection(usecase.ConnectionDeps{
+		Settings: store, Store: store, Tokens: store, Remote: connector,
+		Auth: yadisk.NewAuthorizer(yadisk.DefaultEndpoints, yadisk.AuthOptions{}),
+		Gate: gate, Offer: offer, Changed: syncer.ResetConnection,
+		BuiltinClientID: yadisk.BuiltinClientID, OpenURL: openBrowser,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -264,12 +299,32 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		// The search runs from the first opening of the storage until the quit.
 		application.NewService(wailsui.NewVaultService(env, vault, func() { sp.run.start(search) })),
 		application.NewService(wailsui.NewNotesService(env, notes)),
-		application.NewService(wailsui.NewSyncService(env, syncer)),
-		application.NewService(wailsui.NewConnectionService(env, connection)),
-		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{})),
+		application.NewService(wailsui.NewSyncService(env, syncer, progress)),
+		application.NewService(wailsui.NewConnectionService(env, connection, progress)),
+		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{Log: env.Log})),
 		application.NewService(wailsui.NewSearchService(env, search, searchStatus)),
 		application.NewService(wailsui.NewAppService(lifecycle)),
 	}, nil
+}
+
+// errOpenBrowser replaces the browser's error, whose text may carry the
+// sign-in URL with its state and PKCE challenge.
+var errOpenBrowser = errors.New("open the browser")
+
+// openBrowser opens url in the default browser of the running application.
+func openBrowser(url string) error {
+	return withoutURL(application.Get().Browser.OpenURL)(url)
+}
+
+// withoutURL wraps open so that its error is the fixed errOpenBrowser.
+func withoutURL(open func(string) error) func(string) error {
+	return func(url string) error {
+		if open(url) != nil {
+			return errOpenBrowser
+		}
+
+		return nil
+	}
 }
 
 // emit sends an event to the interface of the running application.

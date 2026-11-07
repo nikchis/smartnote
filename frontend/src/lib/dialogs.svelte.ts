@@ -1,10 +1,10 @@
 // Message dialogs of v1 (UDlgMsg): information, error, a yes/no question,
-// and a choice with Cancel. Dialogs queue up and MessageDialog shows the
-// first one.
+// and a choice with Cancel, plus a warning. Dialogs queue up and
+// MessageDialog shows the first one.
 
-export type DialogKind = "info" | "error" | "ask" | "choose";
+export type DialogKind = "info" | "warning" | "error" | "ask" | "choose";
 
-/** Answer is the button pressed; OK of info and error is "yes". */
+/** Answer is the button pressed; OK of info, warning and error is "yes". */
 export type Answer = "yes" | "no" | "cancel";
 
 /**
@@ -23,7 +23,10 @@ function show(kind: DialogKind, message: string, labels?: Labels): Promise<Answe
 
 /** Dialogs is what screens and flows need; tests pass a fake. */
 export type Dialogs = {
+  /** info reports an action that is done, as "Data successfully saved.". */
   info(msg: string): Promise<void>;
+  /** warning reports a state the user should act on; nothing failed. */
+  warning(msg: string): Promise<void>;
   error(msg: string): Promise<void>;
   /** ask asks with Yes and No, or with labels in their place; Escape gives No. */
   ask(msg: string, labels?: Labels): Promise<boolean>;
@@ -34,6 +37,9 @@ export type Dialogs = {
 export const dialogs: Dialogs = {
   async info(msg) {
     await show("info", msg);
+  },
+  async warning(msg) {
+    await show("warning", msg);
   },
   async error(msg) {
     await show("error", msg);

@@ -145,6 +145,7 @@ func TestIsLoopbackHost(t *testing.T) {
 
 func TestConnectionSettings_JSONNames(t *testing.T) {
 	s := ConnectionSettings{
+		StorageKind: KindSSHPostgres, YandexClientID: "c",
 		SSHHost: "h", SSHPort: 1, SSHUser: "u", SSHPassword: "p", DBHost: "::1", DBPort: 2,
 		DBName: "n", DBUser: "d", DBPassword: "q", SyncPhrase: "s", TrustedHostKey: "k", TrustedHostAddr: "h:1",
 	}
@@ -159,7 +160,7 @@ func TestConnectionSettings_JSONNames(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	want := []string{"ssh_host", "ssh_port", "ssh_user", "ssh_password", "db_host", "db_port",
+	want := []string{"kind", "yandex_client_id", "ssh_host", "ssh_port", "ssh_user", "ssh_password", "db_host", "db_port",
 		"db_name", "db_user", "db_password", "sync_phrase", "trusted_host_key", "trusted_host_addr"}
 	if len(got) != len(want) {
 		t.Errorf("got %d keys %v, want %d", len(got), got, len(want))
@@ -268,5 +269,141 @@ func TestConnectionSettings_WithoutStaleTrust(t *testing.T) {
 
 	if got.SSHHost != "other.example.org" {
 		t.Error("WithoutStaleTrust changed other fields")
+	}
+}
+
+func TestKindLegacy(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		want StorageKind
+	}{
+		{name: "2.1.0 with ssh host", json: `{"ssh_host":"h","ssh_port":22}`, want: KindSSHPostgres},
+		{name: "only sync phrase", json: `{"sync_phrase":"x"}`, want: KindSSHPostgres},
+		{name: "empty object", json: `{}`, want: KindNone},
+		{name: "explicit yandex", json: `{"kind":"yandex_disk"}`, want: KindYandexDisk},
+		{name: "explicit none keeps ssh fields", json: `{"kind":"none","ssh_host":"h"}`, want: KindNone},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var s ConnectionSettings
+			if err := json.Unmarshal([]byte(tt.json), &s); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+
+			if got := s.Kind(); got != tt.want {
+				t.Errorf("Kind() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestKindLegacyTrustOnly(t *testing.T) {
+	s := ConnectionSettings{TrustedHostKey: "ssh-ed25519 AAAA", TrustedHostAddr: "h:22"}
+	if got := s.Kind(); got != KindNone {
+		t.Errorf("Kind() = %q, want none", got)
+	}
+
+	if !s.IsEmpty() {
+		t.Error("IsEmpty() = false, want true")
+	}
+}
+
+func TestIsEmptyIgnoresKindAndClientID(t *testing.T) {
+	s := ConnectionSettings{StorageKind: KindSSHPostgres, YandexClientID: "abc"}
+	if !s.IsEmpty() {
+		t.Error("IsEmpty() = false, want true")
+	}
+}
+
+func TestIsEmptyByKind(t *testing.T) {
+	none := validSettings()
+	none.StorageKind = KindNone
+
+	yandex := ConnectionSettings{StorageKind: KindYandexDisk}
+
+	unknown := ConnectionSettings{StorageKind: "google_drive"}
+
+	if !none.IsEmpty() {
+		t.Error("none with SSH fields: IsEmpty() = false, want true")
+	}
+
+	if yandex.IsEmpty() {
+		t.Error("yandex_disk: IsEmpty() = true, want false")
+	}
+
+	if unknown.IsEmpty() {
+		t.Error("unknown kind: IsEmpty() = true, want false")
+	}
+}
+
+func TestValidateYandex(t *testing.T) {
+	tests := []struct {
+		name      string
+		modify    func(*ConnectionSettings)
+		wantField string
+	}{
+		{name: "valid id", modify: func(*ConnectionSettings) {}},
+		{name: "empty id", modify: func(s *ConnectionSettings) { s.YandexClientID = "" }},
+		{name: "short phrase", modify: func(s *ConnectionSettings) { s.SyncPhrase = strings.Repeat("p", MinSyncPhraseLen-1) }, wantField: "sync_phrase"},
+		{name: "space in id", modify: func(s *ConnectionSettings) { s.YandexClientID = "a b" }, wantField: "yandex_client_id"},
+		{name: "slash in id", modify: func(s *ConnectionSettings) { s.YandexClientID = "x/y" }, wantField: "yandex_client_id"},
+		{name: "65 chars", modify: func(s *ConnectionSettings) { s.YandexClientID = strings.Repeat("a", 65) }, wantField: "yandex_client_id"},
+		{name: "64 chars", modify: func(s *ConnectionSettings) { s.YandexClientID = strings.Repeat("a", 64) }},
+		{name: "non-ascii id", modify: func(s *ConnectionSettings) { s.YandexClientID = "абв" }, wantField: "yandex_client_id"},
+		{name: "ssh fields ignored", modify: func(s *ConnectionSettings) { s.SSHPort = -5; s.DBHost = "evil.example" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := ConnectionSettings{
+				StorageKind: KindYandexDisk, YandexClientID: "0123abc_-",
+				SyncPhrase: strings.Repeat("p", MinSyncPhraseLen),
+			}
+			tt.modify(&s)
+			assertValidationField(t, s.Validate(), tt.wantField)
+		})
+	}
+}
+
+func TestValidateUnknownKind(t *testing.T) {
+	assertValidationField(t, ConnectionSettings{StorageKind: "google_drive"}.Validate(), "kind")
+}
+
+func TestValidateNone(t *testing.T) {
+	s := ConnectionSettings{StorageKind: KindNone, SSHPort: 99999, DBHost: "evil.example", SyncPhrase: "x"}
+	assertValidationField(t, s.Validate(), "")
+}
+
+func TestWithDefaultsOnlySSHPostgres(t *testing.T) {
+	for _, s := range []ConnectionSettings{
+		{StorageKind: KindYandexDisk, SyncPhrase: "x"},
+		{StorageKind: KindNone, SSHHost: "h"},
+	} {
+		if got := s.WithDefaults(); got != s {
+			t.Errorf("WithDefaults() changed %q settings: %v", s.StorageKind, got.SSHPort)
+		}
+	}
+}
+
+func TestStringRedactsNewFields(t *testing.T) {
+	s := ConnectionSettings{StorageKind: KindYandexDisk, YandexClientID: "client-id-marker", SyncPhrase: "sync-phrase-marker"}
+
+	var logged bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logged, nil)).Info("x", "settings", s)
+
+	for verb, out := range map[string]string{
+		"%v":   fmt.Sprintf("%v", s), //nolint:gocritic // the fmt path
+		"%#v":  fmt.Sprintf("%#v", s),
+		"slog": logged.String(),
+	} {
+		for _, m := range []string{"client-id-marker", "sync-phrase-marker"} {
+			if strings.Contains(out, m) {
+				t.Errorf("%s output %q contains %q", verb, out, m)
+			}
+		}
+
+		if !strings.Contains(out, "redacted") {
+			t.Errorf("%s output %q lacks redacted", verb, out)
+		}
 	}
 }

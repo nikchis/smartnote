@@ -14,10 +14,26 @@ import (
 
 // LocalSnapshot is the local note set with the revision and server it was last
 // synchronized with; ServerID is uuid.Nil before the first synchronization.
+// Synced holds the revision this device last synchronized with each server
+// it ever synchronized with, the current one included.
 type LocalSnapshot struct {
 	Notes    []domain.Note
 	Revision int64
 	ServerID uuid.UUID
+	Synced   map[uuid.UUID]int64
+}
+
+// Toward returns l as it stands toward server: ServerID is server and
+// Revision the revision this device last synchronized with it, 0 for a
+// server it never synchronized with.
+func (l LocalSnapshot) Toward(server uuid.UUID) LocalSnapshot {
+	if l.ServerID == server {
+		return l
+	}
+
+	l.ServerID, l.Revision = server, l.Synced[server]
+
+	return l
 }
 
 // RemoteSnapshot is the server note set read in one consistent transaction.
@@ -45,10 +61,17 @@ const (
 	OpenCheck
 )
 
+// RemoteTarget is what to open and with which credentials. Token is nil for
+// ssh_postgres.
+type RemoteTarget struct {
+	Settings domain.ConnectionSettings
+	Token    CloudTokenSource
+}
+
 // RemoteConnector opens a session with the server: SSH, PostgreSQL through
 // the tunnel and the sync phrase check. It returns only a ready session.
 type RemoteConnector interface {
-	Open(ctx context.Context, s domain.ConnectionSettings, mode OpenMode) (RemoteSession, error)
+	Open(ctx context.Context, t RemoteTarget, mode OpenMode) (RemoteSession, error)
 }
 
 // RemoteSession is one operation's connection with the server.
@@ -75,6 +98,7 @@ const (
 	StatusInSync      ConnectStatus = "in_sync"      // no differences
 	StatusDiverged    ConnectStatus = "diverged"     // differences, the server is not newer
 	StatusRemoteNewer ConnectStatus = "remote_newer" // differences, the server is newer: ask to Restore
+	StatusRemoteOlder ConnectStatus = "remote_older" // differences, the same server holds an older revision: warn
 )
 
 // ConnectOutcome is what Connect found; Restore counts the pending Restore of
@@ -105,6 +129,11 @@ type SyncDeps struct {
 	OnState  func(State)
 	Warn     func(error)
 	Index    RestoreIndex
+
+	// Tokens and BuiltinClientID serve the cloud storages; both are optional,
+	// and without Tokens the cloud token is domain.ErrReauthRequired.
+	Tokens          CloudTokenStore
+	BuiltinClientID string
 }
 
 // localWriteTimeout bounds the local revision write after a server commit,
@@ -250,7 +279,7 @@ func disconnects(err error) bool {
 	}
 
 	for _, e := range []error{domain.ErrValidation, domain.ErrWrongSyncPhrase, domain.ErrRemoteChanged,
-		domain.ErrUnsupportedFormat, domain.ErrLocalChanged} {
+		domain.ErrUnsupportedFormat, domain.ErrLocalChanged, domain.ErrRemoteDamaged, domain.ErrRemoteTooLarge} {
 		if errors.Is(err, e) {
 			return false
 		}
@@ -305,6 +334,16 @@ func (s *Sync) Connect(ctx context.Context) (ConnectOutcome, error) {
 		return ConnectOutcome{Status: StatusOffline}, nil
 	}
 
+	offline, err := s.noCloudToken(ctx, settings)
+	if err != nil {
+		return ConnectOutcome{}, fmt.Errorf("connect: %w", err)
+	}
+
+	if offline {
+		s.update(func() { s.connected, s.restoreAvailable = false, false })
+		return ConnectOutcome{Status: StatusOffline}, nil
+	}
+
 	out, err := s.connect(ctx, settings)
 	s.afterRemote(err)
 
@@ -315,8 +354,25 @@ func (s *Sync) Connect(ctx context.Context) (ConnectOutcome, error) {
 	return out, nil
 }
 
+// noCloudToken reports whether settings are Yandex Disk without any stored
+// token for their client ID, as after a deliberate Sign out: Connect then
+// stays offline instead of asking to sign in again. A token Yandex rejects
+// is not this case.
+func (s *Sync) noCloudToken(ctx context.Context, settings domain.ConnectionSettings) (bool, error) {
+	if settings.Kind() != domain.KindYandexDisk || s.d.Tokens == nil {
+		return false, nil
+	}
+
+	tok, ok, err := s.d.Tokens.LoadCloudToken(ctx)
+	if err != nil {
+		return false, fmt.Errorf("load cloud token: %w", LocalError{Err: err})
+	}
+
+	return !ok || tok.ClientID != EffectiveClientID(settings, s.d.BuiltinClientID), nil
+}
+
 func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) (out ConnectOutcome, err error) {
-	sess, err := s.d.Remote.Open(ctx, settings, OpenCreate)
+	sess, err := s.d.Remote.Open(ctx, s.target(settings), OpenCreate)
 	if err != nil {
 		return ConnectOutcome{}, err
 	}
@@ -340,13 +396,12 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 		return ConnectOutcome{Status: StatusCreated}, nil
 	}
 
-	// Another server: compare as if never synchronized with it. The reset
-	// stays in memory until a Backup, a Restore or an in-sync result writes
-	// the new pair, so a short visit to another server keeps the old revision.
+	// Another server: compare with the revision this device last
+	// synchronized with it, 0 if never. The pair stays in memory until a
+	// Backup, a Restore or an in-sync result writes it, so a short visit to
+	// another server keeps the stored one.
 	stored := local
-	if local.ServerID != remote.ServerID {
-		local.ServerID, local.Revision = remote.ServerID, 0
-	}
+	local = local.Toward(remote.ServerID)
 
 	if !Diff(local.Notes, remote.Notes) {
 		if stored.ServerID != remote.ServerID || stored.Revision != remote.Revision {
@@ -362,6 +417,13 @@ func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) 
 	}
 
 	s.d.Changes.MarkDiverged()
+
+	// The check uses the pair of this server: a server never synchronized
+	// with has revision 0 and is never older.
+	if remoteOlder(local, remote) {
+		s.update(func() { s.restoreAvailable = true })
+		return ConnectOutcome{Status: StatusRemoteOlder}, nil
+	}
 
 	if remote.Revision <= local.Revision {
 		s.update(func() { s.restoreAvailable = true })
@@ -495,11 +557,11 @@ func (s *Sync) backup(ctx context.Context, sess RemoteSession, plan BackupPlan) 
 }
 
 // PrepareRestore reads both snapshots, keeps a Restore plan and returns its
-// counts. It never creates the schema: a missing one means the server changed.
-func (s *Sync) PrepareRestore(ctx context.Context) (Counts, error) {
+// counts and whether the server is older than the last synchronization. It never creates the schema: a missing one means the server changed.
+func (s *Sync) PrepareRestore(ctx context.Context) (RestorePreview, error) {
 	end, err := s.begin()
 	if err != nil {
-		return Counts{}, err
+		return RestorePreview{}, err
 	}
 	defer end()
 
@@ -509,12 +571,12 @@ func (s *Sync) PrepareRestore(ctx context.Context) (Counts, error) {
 	s.afterRemote(err)
 
 	if err != nil {
-		return Counts{}, fmt.Errorf("prepare restore: %w", err)
+		return RestorePreview{}, fmt.Errorf("prepare restore: %w", err)
 	}
 
 	s.update(func() { s.pendingRestore = &plan })
 
-	return plan.Counts, nil
+	return RestorePreview{Counts: plan.Counts, RemoteOlder: plan.RemoteOlder}, nil
 }
 
 func (s *Sync) prepareRestore(ctx context.Context) (plan RestorePlan, err error) {
@@ -579,6 +641,17 @@ func (s *Sync) CommitRestore(ctx context.Context) error {
 	return nil
 }
 
+// target builds the RemoteTarget of settings; only a Yandex Disk target gets
+// a token source.
+func (s *Sync) target(settings domain.ConnectionSettings) RemoteTarget {
+	t := RemoteTarget{Settings: settings}
+	if settings.Kind() == domain.KindYandexDisk {
+		t.Token = NewStoredTokenSource(s.d.Tokens, EffectiveClientID(settings, s.d.BuiltinClientID))
+	}
+
+	return t
+}
+
 // open loads the settings and opens a session; empty settings return
 // domain.ErrNotConnected.
 func (s *Sync) open(ctx context.Context, mode OpenMode) (RemoteSession, error) {
@@ -591,7 +664,7 @@ func (s *Sync) open(ctx context.Context, mode OpenMode) (RemoteSession, error) {
 		return nil, domain.ErrNotConnected
 	}
 
-	sess, err := s.d.Remote.Open(ctx, settings, mode)
+	sess, err := s.d.Remote.Open(ctx, s.target(settings), mode)
 	if err != nil {
 		return nil, err
 	}

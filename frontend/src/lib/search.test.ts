@@ -321,6 +321,16 @@ describe("SearchBox", () => {
       expect(box.statusLine()).toBe(line);
     });
 
+    it.each([
+      { name: "indexing", status: { ...ready, queued: 380 }, indexing: { done: 120, total: 500 } },
+      { name: "ready", status: ready, indexing: undefined },
+      { name: "semantic loading", status: { ...ready, queued: 500, semantic: "loading" }, indexing: undefined },
+      { name: "lexical unavailable", status: { ...ready, queued: 3, lexical: "unavailable" }, indexing: undefined },
+    ])("indexing numbers come only with the Indexing line: $name", ({ status, indexing }) => {
+      box.follow(status);
+      expect(box.statusInfo().indexing).toEqual(indexing);
+    });
+
     it("No matches for a query without hits, before the indexing status", async () => {
       box.follow({ ...ready, queued: 380 });
       box.input("nothing");

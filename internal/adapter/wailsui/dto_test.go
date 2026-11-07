@@ -64,7 +64,7 @@ func TestSettingsDTORoundTrip(t *testing.T) {
 	}
 
 	s := domain.ConnectionSettings{
-		SSHHost: "example.org", SSHPort: 22, SSHUser: "u", SSHPassword: "pw", DBHost: "127.0.0.1", DBPort: 5432,
+		StorageKind: domain.KindSSHPostgres, SSHHost: "example.org", SSHPort: 22, SSHUser: "u", SSHPassword: "pw", DBHost: "127.0.0.1", DBPort: 5432,
 		DBName: "db", DBUser: "dbu", DBPassword: "dbpw", SyncPhrase: "sixteen chars ok",
 		TrustedHostKey:  strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))),
 		TrustedHostAddr: "example.org:22",
@@ -97,5 +97,35 @@ func TestCountsDTO(t *testing.T) {
 	want := BackupPreviewDTO{Counts: CountsDTO{Added: 1, Updated: 2, Deleted: 3}, RemoteNewer: true}
 	if got != want {
 		t.Errorf("toBackupPreviewDTO = %+v, want %+v", got, want)
+	}
+}
+
+func TestRestorePreviewDTO(t *testing.T) {
+	got := toRestorePreviewDTO(usecase.RestorePreview{Counts: usecase.Counts{Added: 1, Updated: 2, Deleted: 3}, RemoteOlder: true})
+
+	want := RestorePreviewDTO{Counts: CountsDTO{Added: 1, Updated: 2, Deleted: 3}, RemoteOlder: true}
+	if got != want {
+		t.Errorf("toRestorePreviewDTO = %+v, want %+v", got, want)
+	}
+}
+
+func TestSettingsDTOYandex(t *testing.T) {
+	s := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "my-client", SyncPhrase: "sixteen chars ok"}
+
+	dto := toSettingsDTO(s)
+	if dto.Kind != "yandex_disk" || dto.YandexClientID != "my-client" {
+		t.Errorf("dto = %+v, want kind and client ID", dto)
+	}
+
+	dto.YandexAccount, dto.YandexSignedIn = "ivan", true
+
+	if got := dto.settings(); got != s {
+		t.Errorf("settings() = %+v, want %+v: account and signed-in are output only", got, s)
+	}
+}
+
+func TestSettingsDTOKindNormalized(t *testing.T) {
+	if got := toSettingsDTO(domain.ConnectionSettings{SSHHost: "h"}).Kind; got != "ssh_postgres" {
+		t.Errorf("Kind of a 2.1.0 settings = %q, want ssh_postgres", got)
 	}
 }

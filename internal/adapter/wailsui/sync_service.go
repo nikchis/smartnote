@@ -3,20 +3,29 @@ package wailsui
 import "github.com/nikchis/smartnote/internal/usecase"
 
 // SyncService runs the connect check, Backup and Restore. Every operation
-// with the server gets operationTimeout.
+// with the server is bounded by the limit of the saved storage kind and ends
+// with ProgressFeed.End, so that the interface hides the progress.
 type SyncService struct {
-	env  Env
-	sync *usecase.Sync
+	env      Env
+	sync     *usecase.Sync
+	progress *ProgressFeed
 }
 
-// NewSyncService returns a SyncService over s.
-func NewSyncService(env Env, s *usecase.Sync) *SyncService {
-	return &SyncService{env: env, sync: s}
+// NewSyncService returns a SyncService over s that ends the progress of its
+// operations in progress; nil sends nothing.
+func NewSyncService(env Env, s *usecase.Sync, progress *ProgressFeed) *SyncService {
+	if progress == nil {
+		progress = NewProgressFeed(nil)
+	}
+
+	return &SyncService{env: env, sync: s, progress: progress}
 }
 
 // Connect runs the connect check (spec §6.3, scenario 1).
 func (s *SyncService) Connect() (ConnectDTO, error) {
-	ctx, cancel := s.env.remote()
+	defer s.progress.End()
+
+	ctx, cancel := s.env.remoteSaved()
 	defer cancel()
 
 	out, err := s.sync.Connect(ctx)
@@ -29,7 +38,9 @@ func (s *SyncService) Connect() (ConnectDTO, error) {
 
 // PrepareBackup plans a Backup and keeps the plan for CommitBackup.
 func (s *SyncService) PrepareBackup() (BackupPreviewDTO, error) {
-	ctx, cancel := s.env.remote()
+	defer s.progress.End()
+
+	ctx, cancel := s.env.remoteSaved()
 	defer cancel()
 
 	p, err := s.sync.PrepareBackup(ctx)
@@ -42,28 +53,34 @@ func (s *SyncService) PrepareBackup() (BackupPreviewDTO, error) {
 
 // CommitBackup runs the planned Backup.
 func (s *SyncService) CommitBackup() error {
-	ctx, cancel := s.env.remote()
+	defer s.progress.End()
+
+	ctx, cancel := s.env.remoteSaved()
 	defer cancel()
 
 	return s.env.fail("backup", s.sync.CommitBackup(ctx))
 }
 
 // PrepareRestore plans a Restore and keeps the plan for CommitRestore.
-func (s *SyncService) PrepareRestore() (CountsDTO, error) {
-	ctx, cancel := s.env.remote()
+func (s *SyncService) PrepareRestore() (RestorePreviewDTO, error) {
+	defer s.progress.End()
+
+	ctx, cancel := s.env.remoteSaved()
 	defer cancel()
 
-	c, err := s.sync.PrepareRestore(ctx)
+	p, err := s.sync.PrepareRestore(ctx)
 	if err != nil {
-		return CountsDTO{}, s.env.fail("prepare restore", err)
+		return RestorePreviewDTO{}, s.env.fail("prepare restore", err)
 	}
 
-	return toCountsDTO(c), nil
+	return toRestorePreviewDTO(p), nil
 }
 
 // CommitRestore runs the planned Restore, from PrepareRestore or Connect.
 func (s *SyncService) CommitRestore() error {
-	ctx, cancel := s.env.remote()
+	defer s.progress.End()
+
+	ctx, cancel := s.env.remoteSaved()
 	defer cancel()
 
 	return s.env.fail("restore", s.sync.CommitRestore(ctx))

@@ -148,3 +148,87 @@ func TestPlanRestore(t *testing.T) {
 		t.Errorf("plan = {rev %d, server %v, gen %d}, want {9, %v, 5}", p.Revision, p.ServerID, p.Generation, serverID)
 	}
 }
+
+func TestPlanRestoreRemoteOlder(t *testing.T) {
+	a := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	b := uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+	same := []domain.Note{note(1, "a", "x")}
+	other := []domain.Note{note(1, "a", "y")}
+
+	tests := []struct {
+		name   string
+		local  LocalSnapshot
+		remote RemoteSnapshot
+		want   bool
+	}{
+		{"older and different", LocalSnapshot{Notes: same, Revision: 5, ServerID: a}, RemoteSnapshot{Notes: other, Revision: 3, ServerID: a}, true},
+		{"older and equal", LocalSnapshot{Notes: same, Revision: 5, ServerID: a}, RemoteSnapshot{Notes: same, Revision: 3, ServerID: a}, false},
+		{"same revision", LocalSnapshot{Notes: same, Revision: 5, ServerID: a}, RemoteSnapshot{Notes: other, Revision: 5, ServerID: a}, false},
+		{"newer", LocalSnapshot{Notes: same, Revision: 5, ServerID: a}, RemoteSnapshot{Notes: other, Revision: 6, ServerID: a}, false},
+		{"another server", LocalSnapshot{Notes: same, Revision: 5, ServerID: a}, RemoteSnapshot{Notes: other, Revision: 3, ServerID: b}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PlanRestore(tt.local, tt.remote, seqIDs(), 0).RemoteOlder; got != tt.want {
+				t.Errorf("RemoteOlder = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLocalSnapshotToward(t *testing.T) {
+	known := map[uuid.UUID]int64{serverA: 5, serverB: 2}
+	serverC := uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+	tests := []struct {
+		name   string
+		local  LocalSnapshot
+		server uuid.UUID
+		want   int64
+	}{
+		{name: "current server", local: LocalSnapshot{Revision: 5, ServerID: serverA, Synced: known}, server: serverA, want: 5},
+		{name: "known server", local: LocalSnapshot{Revision: 5, ServerID: serverA, Synced: known}, server: serverB, want: 2},
+		{name: "unknown server", local: LocalSnapshot{Revision: 5, ServerID: serverA, Synced: known}, server: serverC, want: 0},
+		{name: "no history", local: LocalSnapshot{Revision: 5, ServerID: serverA}, server: serverB, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.local.Toward(tt.server)
+			if got.ServerID != tt.server || got.Revision != tt.want {
+				t.Errorf("Toward = (%v, %d), want (%v, %d)", got.ServerID, got.Revision, tt.server, tt.want)
+			}
+		})
+	}
+}
+
+// A server this device synchronized with earlier is compared with its own
+// revision, not with 0: an unchanged one is not newer, a rolled back one is older.
+func TestPlansKnownServer(t *testing.T) {
+	localNotes := []domain.Note{note(1, "a", "local")}
+	remoteNotes := []domain.Note{note(1, "a", "server")}
+	local := LocalSnapshot{Notes: localNotes, Revision: 9, ServerID: serverA, Synced: map[uuid.UUID]int64{serverA: 9, serverB: 4}}
+
+	tests := []struct {
+		name                 string
+		revision             int64
+		wantNewer, wantOlder bool
+	}{
+		{name: "unchanged since", revision: 4},
+		{name: "changed by another device", revision: 6, wantNewer: true},
+		{name: "rolled back", revision: 2, wantOlder: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			remote := RemoteSnapshot{Notes: remoteNotes, Revision: tt.revision, ServerID: serverB}
+
+			if got := PlanBackup(local, remote, 0).RemoteNewer; got != tt.wantNewer {
+				t.Errorf("PlanBackup RemoteNewer = %v, want %v", got, tt.wantNewer)
+			}
+
+			if got := PlanRestore(local, remote, seqIDs(), 0).RemoteOlder; got != tt.wantOlder {
+				t.Errorf("PlanRestore RemoteOlder = %v, want %v", got, tt.wantOlder)
+			}
+		})
+	}
+}

@@ -5,6 +5,7 @@ import { parseError, type UIError } from "../lib/errors";
 
 export type Counts = { added: number; updated: number; deleted: number };
 export type BackupPreview = { counts: Counts; remoteNewer: boolean };
+export type RestorePreview = { counts: Counts; remoteOlder: boolean };
 export type SyncState = { connected: boolean; dirty: boolean; restoreAvailable: boolean; busy: boolean };
 
 /** SyncApi is what the scenarios need from SyncService and ConnectionService. */
@@ -12,7 +13,7 @@ export type SyncApi = {
   connect(): Promise<{ status: string; restore: Counts }>;
   prepareBackup(): Promise<BackupPreview>;
   commitBackup(): Promise<void>;
-  prepareRestore(): Promise<Counts>;
+  prepareRestore(): Promise<RestorePreview>;
   commitRestore(): Promise<void>;
   cancelPending(): Promise<void>;
   state(): Promise<SyncState>;
@@ -21,7 +22,7 @@ export type SyncApi = {
 
 /** ConnectHooks are what the connect check may ask of the screen. */
 export type ConnectHooks = {
-  /** openSettings opens the settings after a wrong sync phrase. */
+  /** openSettings opens the settings after a wrong sync phrase or a refused Yandex sign-in. */
   openSettings?: () => void;
   /** restored runs after a Restore, to read the notes again. */
   restored?: () => void | Promise<void>;
@@ -33,8 +34,16 @@ function lines(...parts: string[]): string {
   return parts.filter((p) => p !== "").join("\n");
 }
 
-function restoreQuestion(c: Counts): string {
-  return lines("Would you like to restore data from remote storage?", c.deleted > 0 ? `Restore will delete ${c.deleted} local notes.` : "");
+const olderPrefix = "The remote storage holds an older version of the data than this device last synchronized with.";
+const olderWarning = `${olderPrefix} It may have been restored from an earlier copy. Use Backup to overwrite it, or Restore to replace your notes with it.`;
+
+function restoreQuestion(c: Counts, remoteOlder = false): string {
+  return lines(remoteOlder ? olderPrefix : "", "Would you like to restore data from remote storage?", c.deleted > 0 ? `Restore will delete ${c.deleted} local notes.` : "");
+}
+
+/** needsBackupQuestion: a Backup is confirmed only when it deletes notes on the server or overwrites newer data. */
+function needsBackupQuestion(p: BackupPreview): boolean {
+  return p.counts.deleted > 0 || p.remoteNewer;
 }
 
 function backupQuestion(p: BackupPreview): string {
@@ -74,7 +83,7 @@ export function trustQuestion(err: UIError): string {
 /**
  * connectFlow is scenario 1: it runs after unlocking and after OK in the
  * settings. An unknown server key is asked about once; a newer server is
- * offered for Restore in one question.
+ * offered for Restore in one question; an older one only gets a warning.
  */
 export async function connectFlow(api: SyncApi, d: Dialogs, hooks: ConnectHooks = {}): Promise<void> {
   let out: { status: string; restore: Counts };
@@ -83,7 +92,12 @@ export async function connectFlow(api: SyncApi, d: Dialogs, hooks: ConnectHooks 
   } catch (e) {
     const err = parseError(e);
     await report(d, err);
-    if (err.code === "wrong_sync_phrase") hooks.openSettings?.();
+    if (err.code === "wrong_sync_phrase" || err.code === "reauth_required") hooks.openSettings?.();
+    return;
+  }
+
+  if (out.status === "remote_older") {
+    await d.warning(olderWarning);
     return;
   }
 
@@ -109,11 +123,14 @@ async function connectTrusting(api: SyncApi, d: Dialogs): Promise<{ status: stri
   }
 }
 
-/** backupFlow is scenario 2; it returns whether the Backup ran. */
+/**
+ * backupFlow is scenario 2; it returns whether the Backup ran. It asks only
+ * when the Backup deletes notes on the server or overwrites newer data.
+ */
 export async function backupFlow(api: SyncApi, d: Dialogs): Promise<boolean> {
   try {
     const preview = await api.prepareBackup();
-    if (!(await d.ask(backupQuestion(preview)))) {
+    if (needsBackupQuestion(preview) && !(await d.ask(backupQuestion(preview)))) {
       await api.cancelPending();
       return false;
     }
@@ -130,8 +147,8 @@ export async function backupFlow(api: SyncApi, d: Dialogs): Promise<boolean> {
 /** restoreFlow is scenario 3 started by the Restore button; it returns whether the Restore ran. */
 export async function restoreFlow(api: SyncApi, d: Dialogs): Promise<boolean> {
   try {
-    const counts = await api.prepareRestore();
-    if (!(await d.ask(restoreQuestion(counts)))) {
+    const preview = await api.prepareRestore();
+    if (!(await d.ask(restoreQuestion(preview.counts, preview.remoteOlder)))) {
       await api.cancelPending();
       return false;
     }
@@ -177,7 +194,7 @@ export async function closeFlow(api: SyncApi, d: Dialogs, quit: () => Promise<vo
 
   try {
     const preview = await api.prepareBackup();
-    if ((preview.counts.deleted > 0 || preview.remoteNewer) && !(await d.ask(backupQuestion(preview)))) {
+    if (needsBackupQuestion(preview) && !(await d.ask(backupQuestion(preview)))) {
       await api.cancelPending();
       return;
     }

@@ -6,6 +6,9 @@ import { parseError } from "./errors";
 /** SearchApi is the part of SearchService the search bar uses. */
 export type SearchApi = { Search(q: string): Promise<SearchHitDTO[] | null> };
 
+/** StatusInfo is the status line; indexing has its numbers while notes wait for their embeddings. */
+export type StatusInfo = { text: string; indexing?: { done: number; total: number } };
+
 /** MAX_HITS is the most hits shown; Go returns no more either. */
 const MAX_HITS = 10;
 
@@ -125,14 +128,22 @@ export class SearchBox {
    * their embeddings), Semantic search unavailable.
    */
   statusLine(): string {
+    return this.statusInfo().text;
+  }
+
+  /** statusInfo is the status line with, for Indexing N of M, its numbers for the bar next to it. */
+  statusInfo(): StatusInfo {
     const s = this.status;
-    if (this.failed || s?.lexical === "unavailable") return "Search unavailable";
-    if (this.answered !== undefined && this.answered.trim() !== "" && this.hits.length === 0) return "No matches";
-    if (!s) return "";
-    if (s.semantic === "loading") return "Semantic search is loading";
-    if (s.queued > 0) return `Indexing ${s.notes - s.queued} of ${s.notes}`;
-    if (s.semantic === "unavailable") return "Semantic search unavailable";
-    return "";
+    if (this.failed || s?.lexical === "unavailable") return { text: "Search unavailable" };
+    if (this.answered !== undefined && this.answered.trim() !== "" && this.hits.length === 0) return { text: "No matches" };
+    if (!s) return { text: "" };
+    if (s.semantic === "loading") return { text: "Semantic search is loading" };
+    if (s.queued > 0) {
+      const done = s.notes - s.queued;
+      return { text: `Indexing ${done} of ${s.notes}`, indexing: { done, total: s.notes } };
+    }
+    if (s.semantic === "unavailable") return { text: "Semantic search unavailable" };
+    return { text: "" };
   }
 
   private async run(q: string, n: number): Promise<SearchHitDTO[]> {

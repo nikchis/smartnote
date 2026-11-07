@@ -42,6 +42,11 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.2.0" date="2026-11-05">
+      <description>
+        <p>Yandex Disk as a second remote storage next to SSH and PostgreSQL, with sign-in through the browser.</p>
+      </description>
+    </release>
     <release version="2.1.0" date="2026-11-05">
       <description>
         <p>Local full-text and semantic search across all notes, with a jump to the found line.</p>

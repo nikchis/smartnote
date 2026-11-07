@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/nikchis/smartnote/internal/adapter/remotecrypto"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/sealbox"
 	"github.com/nikchis/smartnote/internal/usecase"
@@ -20,12 +21,16 @@ import (
 // Options configure NewSession. KDF is used only when the storage is
 // created. Abort tears down the transport (the SSH client) when a context
 // ends, since an SSH channel has no deadlines; it is called at most once, and
-// nil means nothing to tear down.
+// nil means nothing to tear down. Progress receives the notes read by
+// Snapshot and written by Backup, at most 10 reports a second by Now
+// (default time.Now) and always the last one; nil reports nothing.
 type Options struct {
-	Mode   usecase.OpenMode
-	Phrase string
-	KDF    sealbox.KDFParams
-	Abort  func()
+	Mode     usecase.OpenMode
+	Phrase   string
+	KDF      sealbox.KDFParams
+	Abort    func()
+	Progress usecase.ProgressFunc
+	Now      func() time.Time
 }
 
 // closeTimeout bounds the goodbye message to the server on Close.
@@ -34,11 +39,13 @@ const closeTimeout = 2 * time.Second
 // Session is one operation's connection with the remote storage. It
 // implements usecase.RemoteSession. It is not safe for concurrent use.
 type Session struct {
-	conn    *pgx.Conn
-	abort   func()
-	key     []byte
-	created bool
-	empty   bool
+	conn     *pgx.Conn
+	abort    func()
+	key      []byte
+	created  bool
+	empty    bool
+	progress usecase.ProgressFunc
+	now      func() time.Time
 
 	closeOnce sync.Once
 	closeErr  error
@@ -60,7 +67,12 @@ func NewSession(ctx context.Context, conn *pgx.Conn, o Options) (*Session, error
 		abort = func() {}
 	}
 
-	s := &Session{conn: conn, abort: sync.OnceFunc(abort)}
+	now := o.Now
+	if now == nil {
+		now = time.Now
+	}
+
+	s := &Session{conn: conn, abort: sync.OnceFunc(abort), progress: o.Progress, now: now}
 
 	stop := context.AfterFunc(ctx, s.abort)
 	defer stop()
@@ -84,7 +96,7 @@ func (s *Session) open(ctx context.Context, o Options) error {
 			return nil
 		}
 
-		s.key, err = m.unlock(o.Phrase)
+		s.key, err = m.Unlock(o.Phrase)
 
 		return err
 	}
@@ -99,7 +111,7 @@ func (s *Session) open(ctx context.Context, o Options) error {
 		return nil
 	}
 
-	s.key, err = m.unlock(o.Phrase)
+	s.key, err = m.Unlock(o.Phrase)
 
 	return err
 }
@@ -107,7 +119,7 @@ func (s *Session) open(ctx context.Context, o Options) error {
 // ensureStorage creates the schema, the tables and the meta row where they
 // are missing, under the advisory lock, so that two devices connecting at
 // once share one meta row. When it creates meta it also returns the key.
-func (s *Session) ensureStorage(ctx context.Context, o Options) (m meta, key []byte, created bool, err error) {
+func (s *Session) ensureStorage(ctx context.Context, o Options) (m remotecrypto.Meta, key []byte, created bool, err error) {
 	err = inTx(ctx, s.conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", schemaLockKey); err != nil {
 			return fmt.Errorf("lock schema: %w", err)
@@ -149,7 +161,7 @@ func (s *Session) ensureStorage(ctx context.Context, o Options) (m meta, key []b
 			return err
 		}
 
-		m, key, err = newMeta(o.Phrase, o.KDF)
+		m, key, err = remotecrypto.NewMeta(o.Phrase, o.KDF)
 		if err != nil {
 			return err
 		}
@@ -170,7 +182,7 @@ func (s *Session) ensureStorage(ctx context.Context, o Options) (m meta, key []b
 	})
 	if err != nil {
 		sealbox.Wipe(key)
-		return meta{}, nil, false, err
+		return remotecrypto.Meta{}, nil, false, err
 	}
 
 	return m, key, created, nil
@@ -193,14 +205,14 @@ func missingTables(ctx context.Context, tx pgx.Tx) ([]string, error) {
 
 // readMetaIfAny reads meta without creating anything; a missing schema,
 // table or row is not an error.
-func (s *Session) readMetaIfAny(ctx context.Context) (meta, bool, error) {
+func (s *Session) readMetaIfAny(ctx context.Context) (remotecrypto.Meta, bool, error) {
 	var exists bool
 	if err := s.conn.QueryRow(ctx, "SELECT to_regclass('smartnote.meta') IS NOT NULL").Scan(&exists); err != nil {
-		return meta{}, false, fmt.Errorf("check tables: %w", err)
+		return remotecrypto.Meta{}, false, fmt.Errorf("check tables: %w", err)
 	}
 
 	if !exists {
-		return meta{}, false, nil
+		return remotecrypto.Meta{}, false, nil
 	}
 
 	return readMeta(ctx, s.conn)
@@ -211,9 +223,9 @@ type queryRower interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-func readMeta(ctx context.Context, q queryRower) (meta, bool, error) {
+func readMeta(ctx context.Context, q queryRower) (remotecrypto.Meta, bool, error) {
 	var (
-		m        meta
+		m        remotecrypto.Meta
 		serverID string
 		kdf      []byte
 	)
@@ -221,19 +233,19 @@ func readMeta(ctx context.Context, q queryRower) (meta, bool, error) {
 	err := q.QueryRow(ctx, `SELECT server_uuid::text, format_version, kdf_params::text, kdf_salt, key_check
 		FROM smartnote.meta WHERE meta_id = 1`).Scan(&serverID, &m.FormatVersion, &kdf, &m.Salt, &m.KeyCheck)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return meta{}, false, nil
+		return remotecrypto.Meta{}, false, nil
 	}
 
 	if err != nil {
-		return meta{}, false, fmt.Errorf("read meta: %w", err)
+		return remotecrypto.Meta{}, false, fmt.Errorf("read meta: %w", err)
 	}
 
 	if m.ServerID, err = uuid.Parse(serverID); err != nil {
-		return meta{}, false, fmt.Errorf("%w: server id %q", domain.ErrUnsupportedFormat, serverID)
+		return remotecrypto.Meta{}, false, fmt.Errorf("%w: server id %q", domain.ErrUnsupportedFormat, serverID)
 	}
 
 	if m.KDF, err = parseKDF(kdf); err != nil {
-		return meta{}, false, err
+		return remotecrypto.Meta{}, false, err
 	}
 
 	return m, true, nil
@@ -247,7 +259,8 @@ func (s *Session) Empty() bool { return s.empty }
 
 // Snapshot reads the revision, the server ID and all notes in one REPEATABLE
 // READ transaction and decrypts every note; any row that does not open fails
-// the whole snapshot.
+// the whole snapshot. With Progress it counts the notes first, in the same
+// transaction, and reports each row read.
 func (s *Session) Snapshot(ctx context.Context) (usecase.RemoteSnapshot, error) {
 	if s.key == nil {
 		return usecase.RemoteSnapshot{}, errNoStorage
@@ -280,7 +293,12 @@ func (s *Session) Snapshot(ctx context.Context) (usecase.RemoteSnapshot, error) 
 			s.snapshotHook()
 		}
 
-		snap.Notes, err = s.readNotes(ctx, tx)
+		report, err := s.downloadMeter(ctx, tx)
+		if err != nil {
+			return err
+		}
+
+		snap.Notes, err = s.readNotes(ctx, tx, report)
 
 		return err
 	})
@@ -291,7 +309,41 @@ func (s *Session) Snapshot(ctx context.Context) (usecase.RemoteSnapshot, error) 
 	return snap, nil
 }
 
-func (s *Session) readNotes(ctx context.Context, tx pgx.Tx) ([]domain.Note, error) {
+// downloadMeter counts the notes of the snapshot in tx and returns the
+// reporter of the rows read; without Progress it counts nothing.
+func (s *Session) downloadMeter(ctx context.Context, tx pgx.Tx) (func(done int64), error) {
+	if s.progress == nil {
+		return func(int64) {}, nil
+	}
+
+	var total int64
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM smartnote.note").Scan(&total); err != nil {
+		return nil, fmt.Errorf("count notes: %w", err)
+	}
+
+	return s.meter(usecase.DirectionDownload, total), nil
+}
+
+// meter reports 0 of total notes in direction and returns the reporter of
+// the next counts; without Progress it reports nothing.
+func (s *Session) meter(direction string, total int64) func(done int64) {
+	if s.progress == nil {
+		return func(int64) {}
+	}
+
+	report := usecase.ThrottleProgress(s.progress, s.now)
+	send := func(done int64) {
+		report(usecase.TransferProgress{
+			Storage: domain.KindSSHPostgres, Direction: direction, Unit: usecase.UnitNotes, Done: done, Total: total,
+		})
+	}
+
+	send(0)
+
+	return send
+}
+
+func (s *Session) readNotes(ctx context.Context, tx pgx.Tx, report func(done int64)) ([]domain.Note, error) {
 	rows, err := tx.Query(ctx, "SELECT note_uuid::text, updated, name, info FROM smartnote.note")
 	if err != nil {
 		return nil, fmt.Errorf("read notes: %w", err)
@@ -316,6 +368,7 @@ func (s *Session) readNotes(ctx context.Context, tx pgx.Tx) ([]domain.Note, erro
 		}
 
 		notes = append(notes, n)
+		report(int64(len(notes)))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -388,11 +441,14 @@ func (s *Session) Backup(ctx context.Context, notes []domain.Note, expectedServe
 	return revision, nil
 }
 
-// upsert writes notes in one batch, one round trip through the tunnel.
+// upsert writes notes in one batch, one round trip through the tunnel, and
+// reports each result of the batch.
 func (s *Session) upsert(ctx context.Context, tx pgx.Tx, notes []domain.Note) (err error) {
 	if len(notes) == 0 {
 		return nil
 	}
+
+	report := s.meter(usecase.DirectionUpload, int64(len(notes)))
 
 	batch := &pgx.Batch{}
 
@@ -414,10 +470,12 @@ func (s *Session) upsert(ctx context.Context, tx pgx.Tx, notes []domain.Note) (e
 		}
 	}()
 
-	for range notes {
+	for i := range notes {
 		if _, err := br.Exec(); err != nil {
 			return fmt.Errorf("write notes: %w", err)
 		}
+
+		report(int64(i + 1))
 	}
 
 	return nil

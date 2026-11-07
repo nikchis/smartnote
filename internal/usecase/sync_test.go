@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -212,6 +213,44 @@ func TestConnectCreatedButChangedSkipsBackup(t *testing.T) {
 	}
 }
 
+func TestConnectYandexWithoutTokenOffline(t *testing.T) {
+	yandex := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "own"}
+
+	tests := []struct {
+		name  string
+		store *fakeTokenStore
+	}{
+		{name: "no token", store: &fakeTokenStore{}},
+		{name: "token of another client ID", store: &fakeTokenStore{tok: CloudToken{ClientID: "other", Access: "x"}, has: true}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &fakeServer{serverID: serverA}
+			f := newSyncFixture(t, LocalSnapshot{}, srv)
+			f.sync.d.Settings = &fakeSettings{s: yandex}
+			f.sync.d.Tokens = tc.store
+
+			out, err := f.sync.Connect(context.Background())
+			if err != nil {
+				t.Fatalf("Connect: %v", err)
+			}
+
+			if out.Status != StatusOffline {
+				t.Errorf("Status = %q, want offline", out.Status)
+			}
+
+			if st := f.sync.State(); st != (State{}) {
+				t.Errorf("State = %+v, want zero", st)
+			}
+
+			if len(srv.targets) != 0 {
+				t.Errorf("Open called %d times without a token", len(srv.targets))
+			}
+		})
+	}
+}
+
 func TestConnectEmptyBothInSync(t *testing.T) {
 	srv := &fakeServer{serverID: serverA}
 	f := newSyncFixture(t, LocalSnapshot{}, srv)
@@ -335,6 +374,82 @@ func TestConnectServerIDChanged(t *testing.T) {
 	}
 }
 
+func TestConnectRemoteOlder(t *testing.T) {
+	srv := &fakeServer{serverID: serverA, revision: 3, notes: []domain.Note{note(1, "a", "server")}}
+	local := LocalSnapshot{Notes: []domain.Note{note(1, "a", "local")}, Revision: 5, ServerID: serverA}
+	f := newSyncFixture(t, local, srv)
+
+	out, err := f.sync.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	if out.Status != StatusRemoteOlder {
+		t.Errorf("Status = %q, want remote_older", out.Status)
+	}
+
+	if st := f.sync.State(); !st.Connected || !st.Dirty || !st.RestoreAvailable {
+		t.Errorf("State = %+v, want connected, dirty, restore available", st)
+	}
+
+	if err := f.sync.CommitRestore(context.Background()); !errors.Is(err, domain.ErrNoPendingOperation) {
+		t.Errorf("CommitRestore after remote_older = %v, want ErrNoPendingOperation", err)
+	}
+
+	if f.local.writes() != 0 {
+		t.Errorf("local writes = %d, want 0", f.local.writes())
+	}
+}
+
+func TestConnectOlderSameNotesInSync(t *testing.T) {
+	notes := []domain.Note{note(1, "a", "x")}
+	srv := &fakeServer{serverID: serverA, revision: 3, notes: notes}
+	f := newSyncFixture(t, LocalSnapshot{Notes: notes, Revision: 5, ServerID: serverA}, srv)
+
+	out, err := f.sync.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	if out.Status != StatusInSync {
+		t.Errorf("Status = %q, want in_sync", out.Status)
+	}
+
+	if got := f.local.setCalls; len(got) != 1 || got[0] != (syncStateCall{serverA, 3}) {
+		t.Errorf("SetSyncState calls = %v, want [{A 3}]", got)
+	}
+}
+
+func TestConnectOtherServerLowerRevision(t *testing.T) {
+	srv := &fakeServer{serverID: serverB, revision: 1, notes: []domain.Note{note(1, "a", "server")}}
+	local := LocalSnapshot{Notes: []domain.Note{note(1, "a", "local")}, Revision: 5, ServerID: serverA}
+	f := newSyncFixture(t, local, srv)
+
+	out, err := f.sync.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	if out.Status != StatusRemoteNewer {
+		t.Errorf("Status = %q, want remote_newer (another server compares as revision 0)", out.Status)
+	}
+}
+
+func TestPrepareRestorePreview(t *testing.T) {
+	srv := &fakeServer{serverID: serverA, revision: 3, notes: []domain.Note{note(1, "a", "server")}}
+	local := LocalSnapshot{Notes: []domain.Note{note(1, "a", "local")}, Revision: 5, ServerID: serverA}
+	f := newSyncFixture(t, local, srv)
+
+	p, err := f.sync.PrepareRestore(context.Background())
+	if err != nil {
+		t.Fatalf("PrepareRestore: %v", err)
+	}
+
+	if !p.RemoteOlder || p.Counts != (Counts{Updated: 1}) {
+		t.Errorf("preview = %+v, want RemoteOlder with one update", p)
+	}
+}
+
 func TestServerSwitchKeepsRevision(t *testing.T) {
 	notes := []domain.Note{note(1, "a", "x")}
 	srv := &fakeServer{serverID: serverB, revision: 1, notes: []domain.Note{note(9, "other", "y")}}
@@ -367,6 +482,97 @@ func TestServerSwitchKeepsRevision(t *testing.T) {
 
 	if len(f.local.setCalls) != 0 || f.local.snap.Revision != 5 || f.local.snap.ServerID != serverA {
 		t.Errorf("local sync state = (%v, %d), calls %v; want (A, 5) untouched", f.local.snap.ServerID, f.local.snap.Revision, f.local.setCalls)
+	}
+}
+
+// Connect to a server this device synchronized with before another one
+// compares with that server's own revision.
+func TestConnectKnownServer(t *testing.T) {
+	tests := []struct {
+		name     string
+		revision int64
+		want     ConnectStatus
+	}{
+		{name: "unchanged since: the device is newer", revision: 4, want: StatusDiverged},
+		{name: "changed by another device", revision: 6, want: StatusRemoteNewer},
+		{name: "rolled back", revision: 2, want: StatusRemoteOlder},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := &fakeServer{serverID: serverB, revision: tt.revision, notes: []domain.Note{note(1, "a", "old")}}
+			local := LocalSnapshot{
+				Notes: []domain.Note{note(1, "a", "new")}, Revision: 9, ServerID: serverA,
+				Synced: map[uuid.UUID]int64{serverA: 9, serverB: 4},
+			}
+			f := newSyncFixture(t, local, srv)
+
+			out, err := f.sync.Connect(context.Background())
+			if err != nil {
+				t.Fatalf("Connect: %v", err)
+			}
+
+			if out.Status != tt.want {
+				t.Errorf("Status = %q, want %q", out.Status, tt.want)
+			}
+
+			if f.local.writes() != 0 {
+				t.Errorf("local writes = %d, want 0", f.local.writes())
+			}
+		})
+	}
+}
+
+// Save to a server unchanged since this device last synchronized with it
+// does not ask about overwriting fresher data.
+func TestPrepareBackupKnownServer(t *testing.T) {
+	srv := &fakeServer{serverID: serverB, revision: 4, notes: []domain.Note{note(1, "a", "old")}}
+	local := LocalSnapshot{
+		Notes: []domain.Note{note(1, "a", "new")}, Revision: 9, ServerID: serverA,
+		Synced: map[uuid.UUID]int64{serverA: 9, serverB: 4},
+	}
+	f := newSyncFixture(t, local, srv)
+
+	p, err := f.sync.PrepareBackup(context.Background())
+	if err != nil {
+		t.Fatalf("PrepareBackup: %v", err)
+	}
+
+	if p.RemoteNewer || p.Counts != (Counts{Updated: 1}) {
+		t.Errorf("preview = %+v, want one update and RemoteNewer false", p)
+	}
+}
+
+// After a Restore from B the device returns to A, unchanged since the last
+// synchronization with it: A is not offered as fresher data.
+func TestServerSwitchRemembersEachServer(t *testing.T) {
+	aNotes := []domain.Note{note(1, "a", "x")}
+	srv := &fakeServer{serverID: serverB, revision: 1, notes: []domain.Note{note(9, "other", "y")}}
+	f := newSyncFixture(t, LocalSnapshot{Notes: aNotes, Revision: 5, ServerID: serverA, Synced: map[uuid.UUID]int64{serverA: 5}}, srv)
+	ctx := context.Background()
+
+	if out, err := f.sync.Connect(ctx); err != nil || out.Status != StatusRemoteNewer {
+		t.Fatalf("Connect to B = %+v, %v; want remote_newer", out, err)
+	}
+
+	if err := f.sync.CommitRestore(ctx); err != nil {
+		t.Fatalf("CommitRestore from B: %v", err)
+	}
+
+	f.local.mu.Lock()
+	f.local.snap.Notes = []domain.Note{note(9, "other", "y")}
+	f.local.mu.Unlock()
+
+	srv.mu.Lock()
+	srv.serverID, srv.revision, srv.notes = serverA, 5, aNotes
+	srv.mu.Unlock()
+
+	out, err := f.sync.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect back to A: %v", err)
+	}
+
+	if out.Status != StatusDiverged {
+		t.Errorf("Connect back to A = %q, want diverged: A is unchanged since revision 5", out.Status)
 	}
 }
 
@@ -622,13 +828,13 @@ func TestRestore(t *testing.T) {
 	f := diverged(t)
 	ctx := context.Background()
 
-	counts, err := f.sync.PrepareRestore(ctx)
+	preview, err := f.sync.PrepareRestore(ctx)
 	if err != nil {
 		t.Fatalf("PrepareRestore: %v", err)
 	}
 
-	if counts != (Counts{Added: 1, Updated: 1}) {
-		t.Errorf("Counts = %+v, want {Added: 1, Updated: 1}", counts)
+	if preview != (RestorePreview{Counts: Counts{Added: 1, Updated: 1}}) {
+		t.Errorf("preview = %+v, want {Added: 1, Updated: 1} and not older", preview)
 	}
 
 	if f.srv.opens[0] != OpenCheck {
@@ -1187,7 +1393,12 @@ func TestSyncRemembersOffer(t *testing.T) {
 	settings := &fakeSettings{s: completeSettings()}
 	f.sync.d.Settings = settings
 
-	c, err := NewConnection(settings, f.srv, f.gate, f.offer, f.sync.ResetConnection)
+	tokens := &fakeTokenStore{}
+
+	c, err := NewConnection(ConnectionDeps{
+		Settings: settings, Store: &fakeConnectionStore{settings: settings, tokens: tokens}, Tokens: tokens,
+		Remote: f.srv, Gate: f.gate, Offer: f.offer, Changed: f.sync.ResetConnection,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1256,5 +1467,71 @@ func TestCommitRestoreTellsIndex(t *testing.T) {
 
 	if index.calls != 1 {
 		t.Errorf("NotesReplaced calls = %d after a refused Restore, want 1", index.calls)
+	}
+}
+
+func TestSyncOpenPassesStoredSource(t *testing.T) {
+	yandex := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "own"}
+	store := &fakeTokenStore{tok: CloudToken{ClientID: "own", Access: "x"}, has: true}
+
+	tests := []struct {
+		name      string
+		settings  domain.ConnectionSettings
+		wantToken bool
+	}{
+		{name: "yandex_disk", settings: yandex, wantToken: true},
+		{name: "ssh_postgres", settings: completeSettings()},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &fakeServer{openErr: errors.New("stop")}
+			f := newSyncFixture(t, LocalSnapshot{}, srv)
+			f.sync.d.Settings = &fakeSettings{s: tc.settings}
+			f.sync.d.Tokens = store
+
+			_, _ = f.sync.PrepareBackup(context.Background())
+
+			if len(srv.targets) != 1 {
+				t.Fatalf("opens = %d", len(srv.targets))
+			}
+
+			got := srv.targets[0]
+			if got.Settings != tc.settings {
+				t.Fatalf("settings = %+v", got.Settings)
+			}
+
+			if !tc.wantToken {
+				if got.Token != nil {
+					t.Fatal("Token must be nil for ssh_postgres")
+				}
+
+				return
+			}
+
+			tok, err := got.Token.Token(context.Background())
+			if err != nil || tok.Access != "x" {
+				t.Fatalf("Token = %+v, %v", tok, err)
+			}
+		})
+	}
+}
+
+func TestDisconnectsNewErrors(t *testing.T) {
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{domain.ErrRemoteDamaged, false},
+		{domain.ErrRemoteTooLarge, false},
+		{fmt.Errorf("wrap: %w", domain.ErrRemoteDamaged), false},
+		{domain.ErrReauthRequired, true},
+		{domain.ErrRemoteOutcomeUnknown, true},
+	}
+
+	for _, tc := range tests {
+		if got := disconnects(tc.err); got != tc.want {
+			t.Errorf("disconnects(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }

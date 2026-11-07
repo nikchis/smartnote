@@ -49,4 +49,23 @@ describe("settings form", () => {
     const f = { ...toForm(emptySettings), dbPort: "9".repeat(310) };
     expect(JSON.parse(JSON.stringify(fromForm(f))).dbPort).toBe(-1);
   });
+
+  it("starts with no storage and no own client ID", () => {
+    expect(emptySettings).toMatchObject({ kind: "none", yandexClientId: "" });
+  });
+
+  it("keeps the kind and the client ID both ways", () => {
+    const y: SettingsDTO = { ...emptySettings, kind: "yandex_disk", yandexClientId: "my-id_1", yandexAccount: "ivan", yandexSignedIn: true };
+    expect(toForm(y)).toMatchObject({ kind: "yandex_disk", yandexClientId: "my-id_1" });
+    expect(fromForm(toForm(y))).toMatchObject({ kind: "yandex_disk", yandexClientId: "my-id_1" });
+  });
+
+  it("reads a kind that Go left empty as no storage", () => {
+    expect(toForm({ ...emptySettings, kind: "" }).kind).toBe("none");
+  });
+
+  it("does not turn the sign-in state into something the form can change on its own", () => {
+    const f = toForm({ ...emptySettings, kind: "yandex_disk", yandexAccount: "ivan", yandexSignedIn: true });
+    expect(fromForm(f)).toMatchObject({ yandexAccount: "ivan", yandexSignedIn: true });
+  });
 });

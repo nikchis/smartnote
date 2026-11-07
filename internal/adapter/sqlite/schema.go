@@ -72,6 +72,29 @@ const embeddingDDL = `CREATE TABLE note_embedding (
 	data      BLOB NOT NULL
 );`
 
+// cloudAuthDDL and cloudPendingDDL are the tables of the cloud storage
+// (yandex spec §7.2). They are created on every Create and Unlock and are not
+// required, so a database of version 2.1.0 stays valid.
+const (
+	cloudAuthDDL = `CREATE TABLE IF NOT EXISTS cloud_auth (
+	cloud_auth_id INTEGER PRIMARY KEY CHECK (cloud_auth_id = 1),
+	data          BLOB NOT NULL
+);`
+	cloudPendingDDL = `CREATE TABLE IF NOT EXISTS cloud_pending (
+	cloud_pending_id INTEGER PRIMARY KEY CHECK (cloud_pending_id = 1),
+	temp_name        TEXT NOT NULL
+);`
+)
+
+// syncServerDDL is the revision this device last synchronized with each
+// server, so that a server it returns to is compared with its own revision.
+// The current pair stays in connection, which 2.1.0 reads. Like the cloud
+// tables it is created on every Create and Unlock and is not required.
+const syncServerDDL = `CREATE TABLE IF NOT EXISTS sync_server (
+	sync_server_uuid TEXT PRIMARY KEY,
+	revision         INTEGER NOT NULL
+);`
+
 // requiredTablesV1 and requiredTablesV2 are checked on Unlock, so a damaged
 // schema reads as a corrupt storage rather than as a later "no such table".
 var (
@@ -87,7 +110,11 @@ const (
 	tableConnection    = "connection"
 	tableSSHKey        = "ssh_key"
 	tableNoteEmbedding = "note_embedding"
+	tableCloudAuth     = "cloud_auth"
 )
+
+// columnData is the sealed payload column shared by cloud_auth and note_embedding.
+const columnData = "data"
 
 // AADs of the sealed fields (spec §4).
 func aadWrappedDEK() sealbox.AAD {
@@ -101,7 +128,7 @@ func aadPrivateKey() sealbox.AAD {
 }
 
 func aadEmbedding(id string) sealbox.AAD {
-	return sealbox.AAD{Table: tableNoteEmbedding, Column: "data", RowID: id}
+	return sealbox.AAD{Table: tableNoteEmbedding, Column: columnData, RowID: id}
 }
 
 func aadNote(column, id string) sealbox.AAD {

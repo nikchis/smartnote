@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
+	"github.com/nikchis/smartnote/internal/adapter/yadisk"
 	"github.com/nikchis/smartnote/internal/domain"
 )
 
@@ -80,6 +81,8 @@ func TestToUIError(t *testing.T) {
 				Expected: "SHA256:a", Got: "SHA256:b"}},
 		{name: "validation", err: wrap(&domain.ValidationError{Field: "ssh_port", Reason: "must be 1-65535"}),
 			want: UIError{Code: "validation", Message: "invalid ssh_port: must be 1-65535", Field: "ssh_port"}},
+		{name: "yandex account", err: wrap(&domain.ValidationError{Field: "yandex_account", Reason: "sign in required"}),
+			want: UIError{Code: "validation", Message: "Sign in to Yandex Disk first, or choose None (local only).", Field: "yandex_account"}},
 		{name: "not connected", err: wrap(domain.ErrNotConnected),
 			want: UIError{Code: "not_connected", Message: msgNotConnected}},
 		{name: "remote changed", err: wrap(domain.ErrRemoteChanged),
@@ -205,4 +208,119 @@ func pgConnectError(t *testing.T) error {
 	}
 
 	return err
+}
+
+func TestToUIErrorCloud(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"no space", yadisk.CloudError{Status: 507, Code: "other"}, "Not enough space on Yandex Disk."},
+		{"too large", fmt.Errorf("upload: %w", yadisk.CloudError{Status: 413, Code: "other"}), "The file is larger than your Yandex Disk plan allows."},
+		{"server error", yadisk.CloudError{Status: 503, Code: "DiskInternalError"}, "Yandex Disk error: 503 DiskInternalError."},
+		{"network", yadisk.CloudError{Code: "network"}, "Yandex Disk error: network."},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ui := classify(tc.err)
+			if ui.Code != "cloud" || ui.Message != tc.want {
+				t.Errorf("classify = %q %q, want cloud %q", ui.Code, ui.Message, tc.want)
+			}
+		})
+	}
+}
+
+func TestToUIErrorNewSentinels(t *testing.T) {
+	tests := []struct {
+		err        error
+		code, text string
+	}{
+		{domain.ErrReauthRequired, "reauth_required", "Sign in to Yandex Disk again."},
+		{domain.ErrRemoteDamaged, "remote_damaged", "Data in the remote storage is damaged."},
+		{domain.ErrRemoteTooLarge, "remote_too_large", "Notes do not fit into the remote storage (64 MiB)."},
+		{domain.ErrRemoteOutcomeUnknown, "remote_outcome_unknown", "The result of the backup is unknown. Connect again to check the remote storage."},
+		{domain.ErrLoopbackUnavailable, "loopback_unavailable", msgLoopbackUnavailable},
+	}
+
+	for _, tc := range tests {
+		ui := classify(fmt.Errorf("op: %w", tc.err))
+		if ui.Code != tc.code || ui.Message != tc.text {
+			t.Errorf("classify(%v) = %q %q, want %q %q", tc.err, ui.Code, ui.Message, tc.code, tc.text)
+		}
+	}
+
+	if ui := classify(errors.Join(context.DeadlineExceeded, yadisk.CloudError{Status: 503, Code: "x"})); ui.Code != codeTimeout {
+		t.Errorf("deadline code = %q, want timeout", ui.Code)
+	}
+}
+
+func TestLogErrorCloud(t *testing.T) {
+	var buf bytes.Buffer
+
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+
+	LogError(log, "sync", fmt.Errorf("https://cloud-api.yandex.net/v1?token=SECRET: %w", yadisk.CloudError{Status: 503, Code: "DiskInternalError"}))
+
+	got := buf.String()
+	for _, want := range []string{"status=503", "code=cloud", "DiskInternalError"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log %q lacks %q", got, want)
+		}
+	}
+
+	if strings.Contains(got, "step=") || strings.Contains(got, "net=") {
+		t.Errorf("log %q has a step or a network class the error lacks", got)
+	}
+
+	buf.Reset()
+	LogError(log, "backup", fmt.Errorf("upload: %w", yadisk.CloudError{Code: "network", Step: "upload", Net: "reset"}))
+
+	got = buf.String()
+	for _, want := range []string{"code=cloud", "status=0", "cloud_code=network", "step=upload", "net=reset"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log %q lacks %q", got, want)
+		}
+	}
+
+	if strings.Contains(got, "err=") {
+		t.Errorf("log %q has the error text", got)
+	}
+
+	for _, bad := range []string{"SECRET", "https://", "description"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("log %q contains %q", got, bad)
+		}
+	}
+
+	for _, e := range []error{domain.ErrReauthRequired, domain.ErrRemoteOutcomeUnknown, domain.ErrRemoteDamaged} {
+		buf.Reset()
+		LogError(log, "sync", fmt.Errorf("secret-text: %w", e))
+
+		got := buf.String()
+		ui := classify(e)
+
+		if !strings.Contains(got, "code="+ui.Code) || strings.Contains(got, "secret-text") || strings.Contains(got, e.Error()) || strings.Contains(got, "err=") {
+			t.Errorf("log for %v = %q, want only the code", e, got)
+		}
+	}
+}
+
+func TestTransportTimeoutIsCloudError(t *testing.T) {
+	err := fmt.Errorf("upload: %w", yadisk.CloudError{Code: "network", Step: "upload", Net: "timeout"})
+
+	if ui := classify(err); ui.Code != codeCloud || ui.Message != "Yandex Disk error: network." {
+		t.Errorf("classify = %q %q, want cloud \"Yandex Disk error: network.\"", ui.Code, ui.Message)
+	}
+
+	var buf bytes.Buffer
+
+	LogError(slog.New(slog.NewTextHandler(&buf, nil)), "backup", err)
+
+	for _, want := range []string{"code=cloud", "step=upload", "net=timeout"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("log %q lacks %q", buf.String(), want)
+		}
+	}
 }

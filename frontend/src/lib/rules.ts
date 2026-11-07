@@ -57,9 +57,12 @@ export type SettingsButtons = { test: boolean; save: boolean; generate: boolean;
 /**
  * settingsButtons are the buttons of Settings that act on what was loaded.
  * Until the settings load, OK would save the empty form; until hasKey loads,
- * Generate could replace a key without the question.
+ * Generate could replace a key without the question. Without a storage there
+ * is nothing to test; while a Yandex sign-in runs neither Test nor OK may start
+ * (spec §8).
  */
-export function settingsButtons(loaded: boolean, hasKey: boolean | undefined): SettingsButtons {
+export function settingsButtons(loaded: boolean, hasKey: boolean | undefined, kind: string, signingIn: boolean): SettingsButtons {
   const known = hasKey !== undefined;
-  return { test: loaded, save: loaded, generate: known, export: hasKey === true, import: known };
+  const ready = loaded && !signingIn;
+  return { test: ready && kind !== "none", save: ready, generate: known, export: hasKey === true, import: known };
 }

@@ -272,6 +272,7 @@ func (f *fakeSyncState) LocalSnapshot(ctx context.Context) (LocalSnapshot, error
 	hook, notes, snapErr := f.onSnapshot, f.notes, f.snapErr
 	snap := f.snap
 	snap.Notes = slices.Clone(snap.Notes)
+	snap.Synced = maps.Clone(snap.Synced)
 	f.mu.Unlock()
 
 	if hook != nil {
@@ -328,7 +329,7 @@ func (f *fakeSyncState) ApplyRestore(_ context.Context, p RestorePlan, revision 
 	defer f.mu.Unlock()
 
 	f.restores = append(f.restores, p)
-	f.snap.Revision, f.snap.ServerID = revision, serverID
+	f.synced(serverID, revision)
 
 	return nil
 }
@@ -343,9 +344,20 @@ func (f *fakeSyncState) SetSyncState(ctx context.Context, serverID uuid.UUID, re
 	}
 
 	f.setCalls = append(f.setCalls, syncStateCall{serverID, revision})
-	f.snap.Revision, f.snap.ServerID = revision, serverID
+	f.synced(serverID, revision)
 
 	return nil
+}
+
+// synced stores the pair as the current one and in the history, as the
+// local database does; f.mu is held.
+func (f *fakeSyncState) synced(serverID uuid.UUID, revision int64) {
+	f.snap.Revision, f.snap.ServerID = revision, serverID
+	if f.snap.Synced == nil {
+		f.snap.Synced = map[uuid.UUID]int64{}
+	}
+
+	f.snap.Synced[serverID] = revision
 }
 
 func (f *fakeSyncState) writes() int {
@@ -384,19 +396,22 @@ type fakeServer struct {
 
 	opens    []OpenMode
 	settings []domain.ConnectionSettings
+	targets  []RemoteTarget
 	backups  []backupCall
 	closed   int
 }
 
 var errAckLost = errors.New("connection lost after COMMIT")
 
-func (f *fakeServer) Open(_ context.Context, s domain.ConnectionSettings, mode OpenMode) (RemoteSession, error) {
+func (f *fakeServer) Open(_ context.Context, t RemoteTarget, mode OpenMode) (RemoteSession, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	f.opens = append(f.opens, mode)
 
-	f.settings = append(f.settings, s)
+	f.targets = append(f.targets, t)
+	f.settings = append(f.settings, t.Settings)
+
 	if f.openErr != nil {
 		return nil, f.openErr
 	}
@@ -830,4 +845,222 @@ func (f *fakeEmbeddingStore) putCalls() []embeddingPut {
 	defer f.mu.Unlock()
 
 	return slices.Clone(f.puts)
+}
+
+// saveConnectionCall is one ConnectionStore.SaveConnection call.
+type saveConnectionCall struct {
+	Settings domain.ConnectionSettings
+	Change   TokenChange
+	Token    CloudToken
+}
+
+// fakeConnectionStore saves the settings into settings and applies the token
+// change to tokens, as one transaction of local.db would.
+type fakeConnectionStore struct {
+	settings *fakeSettings
+	tokens   *fakeTokenStore
+
+	mu    sync.Mutex
+	calls []saveConnectionCall
+}
+
+func (f *fakeConnectionStore) SaveConnection(ctx context.Context, s domain.ConnectionSettings, change TokenChange, t CloudToken) error {
+	f.mu.Lock()
+	f.calls = append(f.calls, saveConnectionCall{Settings: s, Change: change, Token: t})
+	f.mu.Unlock()
+
+	f.tokens.mu.Lock()
+	switch change {
+	case TokenKeep:
+	case TokenSet:
+		f.tokens.tok, f.tokens.has = t, true
+	case TokenDelete:
+		f.tokens.tok, f.tokens.has = CloudToken{}, false
+	}
+	f.tokens.mu.Unlock()
+
+	return f.settings.SaveSettings(ctx, s)
+}
+
+func (f *fakeConnectionStore) saveCalls() []saveConnectionCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.calls)
+}
+
+// loginResult is what a fakeLogin's Wait or Exchange returns.
+type loginResult struct {
+	tok CloudToken
+	err error
+}
+
+// fakeLogin is one sign-in session. Wait and Exchange signal entered, then
+// block until the test sends a result, the context ends or the login is closed.
+type fakeLogin struct {
+	url     string
+	result  chan loginResult
+	entered chan struct{}
+	closed  chan struct{}
+	close   sync.Once
+
+	mu    sync.Mutex
+	waits int
+	codes []string
+}
+
+func newFakeLogin(url string) *fakeLogin {
+	return &fakeLogin{
+		url: url, result: make(chan loginResult), entered: make(chan struct{}, 8), closed: make(chan struct{}),
+	}
+}
+
+func (l *fakeLogin) URL() string { return l.url }
+
+func (l *fakeLogin) Wait(ctx context.Context) (CloudToken, error) {
+	l.mu.Lock()
+	l.waits++
+	l.mu.Unlock()
+
+	return l.finish(ctx)
+}
+
+func (l *fakeLogin) Exchange(ctx context.Context, code string) (CloudToken, error) {
+	l.mu.Lock()
+	l.codes = append(l.codes, code)
+	l.mu.Unlock()
+
+	return l.finish(ctx)
+}
+
+func (l *fakeLogin) finish(ctx context.Context) (CloudToken, error) {
+	l.entered <- struct{}{}
+
+	select {
+	case r := <-l.result:
+		return r.tok, r.err
+	case <-ctx.Done():
+		return CloudToken{}, ctx.Err()
+	case <-l.closed:
+		return CloudToken{}, errors.New("login closed")
+	}
+}
+
+func (l *fakeLogin) Close() error {
+	l.close.Do(func() { close(l.closed) })
+
+	return nil
+}
+
+func (l *fakeLogin) isClosed() bool {
+	select {
+	case <-l.closed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (l *fakeLogin) waitCalls() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.waits
+}
+
+func (l *fakeLogin) submitted() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return slices.Clone(l.codes)
+}
+
+// beginCall is one CloudAuthorizer.Begin* call.
+type beginCall struct {
+	clientID string
+	manual   bool
+	// prevClosed reports whether every earlier login was closed at the call.
+	prevClosed bool
+}
+
+// fakeAuthorizer hands out fakeLogins and sends each one on begun, so the
+// test can finish it. beginErr, when set, is returned instead.
+type fakeAuthorizer struct {
+	begun chan *fakeLogin
+
+	mu       sync.Mutex
+	beginErr error
+	logins   []*fakeLogin
+	calls    []beginCall
+}
+
+func newFakeAuthorizer() *fakeAuthorizer {
+	return &fakeAuthorizer{begun: make(chan *fakeLogin, 8)}
+}
+
+func (a *fakeAuthorizer) BeginLoopback(_ context.Context, clientID string) (CloudLogin, error) {
+	return a.begin(clientID, false)
+}
+
+func (a *fakeAuthorizer) BeginManual(_ context.Context, clientID string) (CloudLogin, error) {
+	return a.begin(clientID, true)
+}
+
+func (a *fakeAuthorizer) begin(clientID string, manual bool) (CloudLogin, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	prevClosed := true
+
+	for _, l := range a.logins {
+		if !l.isClosed() {
+			prevClosed = false
+		}
+	}
+
+	a.calls = append(a.calls, beginCall{clientID: clientID, manual: manual, prevClosed: prevClosed})
+	if a.beginErr != nil {
+		return nil, a.beginErr
+	}
+
+	l := newFakeLogin(fmt.Sprintf("https://oauth.example/authorize?n=%d", len(a.logins)))
+	a.logins = append(a.logins, l)
+
+	a.begun <- l
+
+	return l, nil
+}
+
+func (a *fakeAuthorizer) beginCalls() []beginCall {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return slices.Clone(a.calls)
+}
+
+// recv returns the next value from ch or fails the test after a timeout.
+func recv[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+
+		var zero T
+
+		return zero
+	}
+}
+
+// send delivers v on ch or fails the test after a timeout.
+func send[T any](t *testing.T, ch chan<- T, v T, what string) {
+	t.Helper()
+
+	select {
+	case ch <- v:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out sending %s", what)
+	}
 }

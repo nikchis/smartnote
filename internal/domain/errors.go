@@ -23,6 +23,11 @@ var (
 	ErrKeyPassphraseRequired = errors.New("key passphrase required")
 	ErrKeyMissing            = errors.New("no ssh key")
 	ErrNoPendingOperation    = errors.New("no pending operation")
+	ErrReauthRequired        = errors.New("sign in again")
+	ErrRemoteDamaged         = errors.New("remote data is damaged")
+	ErrRemoteTooLarge        = errors.New("remote data is too large")
+	ErrRemoteOutcomeUnknown  = errors.New("outcome of the remote operation is unknown")
+	ErrLoopbackUnavailable   = errors.New("local sign-in address is unavailable")
 )
 
 // ValidationError reports an invalid field. It matches ErrValidation.

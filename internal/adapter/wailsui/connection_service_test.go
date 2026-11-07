@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -17,8 +18,11 @@ import (
 )
 
 type memSettings struct {
-	s     domain.ConnectionSettings
-	saves int
+	s        domain.ConnectionSettings
+	saves    int
+	token    usecase.CloudToken
+	hasToken bool
+	tokenErr error // of LoadCloudToken
 }
 
 func (m *memSettings) LoadSettings(context.Context) (domain.ConnectionSettings, error) {
@@ -31,6 +35,18 @@ func (m *memSettings) SaveSettings(_ context.Context, s domain.ConnectionSetting
 
 	return nil
 }
+
+// SaveConnection saves the settings as SaveSettings does; the token is not
+// kept, these tests never sign in.
+func (m *memSettings) SaveConnection(ctx context.Context, s domain.ConnectionSettings, _ usecase.TokenChange, _ usecase.CloudToken) error {
+	return m.SaveSettings(ctx, s)
+}
+
+func (m *memSettings) LoadCloudToken(context.Context) (usecase.CloudToken, bool, error) {
+	return m.token, m.hasToken, m.tokenErr
+}
+
+func (m *memSettings) SaveCloudToken(context.Context, usecase.CloudToken) error { return nil }
 
 type emptySession struct{ usecase.RemoteSession }
 
@@ -45,8 +61,10 @@ type keyServer struct {
 	seen domain.ConnectionSettings
 }
 
-func (k *keyServer) Open(_ context.Context, s domain.ConnectionSettings, _ usecase.OpenMode) (usecase.RemoteSession, error) {
+func (k *keyServer) Open(_ context.Context, t usecase.RemoteTarget, _ usecase.OpenMode) (usecase.RemoteSession, error) {
+	s := t.Settings
 	k.seen = s
+
 	if s.TrustedKey() != k.key {
 		return nil, &domain.HostKeyUnknownError{Fingerprint: k.fp, AuthorizedKey: k.key, Addr: s.SSHAddr()}
 	}
@@ -77,14 +95,17 @@ func newTestConnectionService(t *testing.T, saved domain.ConnectionSettings) (*C
 	server := &keyServer{}
 	server.key, server.fp = newHostKey(t)
 
-	conn, err := usecase.NewConnection(store, server, &usecase.Gate{}, &usecase.HostKeyOffer{}, func() {})
+	conn, err := usecase.NewConnection(usecase.ConnectionDeps{
+		Settings: store, Store: store, Tokens: store, Remote: server,
+		Gate: &usecase.Gate{}, Offer: &usecase.HostKeyOffer{}, Changed: func() {},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	env := Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}
 
-	return NewConnectionService(env, conn), store, server
+	return NewConnectionService(env, conn, nil), store, server
 }
 
 var filledSettings = domain.ConnectionSettings{
@@ -274,4 +295,179 @@ func TestSaveRejectsAnotherKeyInsteadOfTheSavedOne(t *testing.T) {
 	if store.saves != 0 || store.s.TrustedHostKey != key {
 		t.Errorf("saved trust changed to a key the server never offered")
 	}
+}
+
+func TestSettingsDTONoToken(t *testing.T) {
+	typ := reflect.TypeFor[SettingsDTO]()
+	for f := range typ.Fields() {
+		name := strings.ToLower(f.Name)
+		if strings.Contains(name, "token") || strings.Contains(name, "refresh") || strings.Contains(name, "access") {
+			t.Errorf("SettingsDTO field %s may carry a token", f.Name)
+		}
+	}
+
+	svc, store, _ := newTestConnectionService(t, domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "c"})
+	store.token = usecase.CloudToken{ClientID: "c", Account: "ivan", Access: "ACCESS-SECRET", Refresh: "REFRESH-SECRET"}
+	store.hasToken = true
+
+	dto, err := svc.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, _ := json.Marshal(dto)
+	if s := string(b); strings.Contains(s, "SECRET") || !strings.Contains(s, `"yandexAccount":"ivan"`) || !strings.Contains(s, `"yandexSignedIn":true`) {
+		t.Errorf("Load JSON = %s", s)
+	}
+}
+
+// TestLoadWithUnreadableToken: a token that cannot be read still opens
+// Settings, as Not signed in, and only the error's code is logged.
+func TestLoadWithUnreadableToken(t *testing.T) {
+	saved := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "c", SyncPhrase: "sixteen chars ok"}
+	svc, store, _ := newTestConnectionService(t, saved)
+	store.tokenErr = errors.New("cipher: message authentication failed SECRET-DETAIL")
+
+	var logged strings.Builder
+
+	svc.env.Log = slog.New(slog.NewTextHandler(&logged, nil))
+
+	dto, err := svc.Load()
+	if err != nil {
+		t.Fatalf("Load: %v, want the settings without the account", err)
+	}
+
+	if dto.Kind != string(domain.KindYandexDisk) || dto.YandexClientID != "c" || dto.YandexSignedIn || dto.YandexAccount != "" {
+		t.Errorf("Load = %+v, want the saved settings, not signed in", dto)
+	}
+
+	if out := logged.String(); !strings.Contains(out, "code=") || strings.Contains(out, "SECRET-DETAIL") {
+		t.Errorf("log = %q, want the code only", out)
+	}
+}
+
+type fakeAuth struct {
+	clientID string
+	login    *fakeLogin
+}
+
+func (a *fakeAuth) BeginLoopback(_ context.Context, clientID string) (usecase.CloudLogin, error) {
+	a.clientID = clientID
+	return a.login, nil
+}
+
+func (a *fakeAuth) BeginManual(_ context.Context, clientID string) (usecase.CloudLogin, error) {
+	a.clientID = clientID
+	return a.login, nil
+}
+
+type fakeLogin struct{}
+
+func (*fakeLogin) URL() string { return "https://oauth.example/authorize" }
+func (*fakeLogin) Wait(context.Context) (usecase.CloudToken, error) {
+	return usecase.CloudToken{ClientID: "form-id", Account: "ivan"}, nil
+}
+func (*fakeLogin) Exchange(context.Context, string) (usecase.CloudToken, error) {
+	return usecase.CloudToken{ClientID: "form-id", Account: "ivan"}, nil
+}
+func (*fakeLogin) Close() error { return nil }
+
+func TestSignInUsesFormClientID(t *testing.T) {
+	svc, auth := newYandexService(t)
+
+	account, err := svc.SignIn(SettingsDTO{Kind: "yandex_disk", YandexClientID: "form-id", SyncPhrase: "sixteen chars ok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if account != "ivan" || auth.clientID != "form-id" {
+		t.Errorf("account = %q, client ID = %q, want ivan and form-id", account, auth.clientID)
+	}
+}
+
+func TestSignInManualAndSubmit(t *testing.T) {
+	svc, auth := newYandexService(t)
+
+	if err := svc.SignInManual(SettingsDTO{Kind: "yandex_disk", YandexClientID: "form-id"}); err != nil {
+		t.Fatal(err)
+	}
+
+	account, err := svc.SubmitCode("code")
+	if err != nil || account != "ivan" || auth.clientID != "form-id" {
+		t.Errorf("SubmitCode = %q, %v; client ID %q", account, err, auth.clientID)
+	}
+
+	svc.SignOut()
+	svc.CancelSignIn()
+}
+
+func TestSignInErrorsAreUIErrors(t *testing.T) {
+	svc, _, _ := newTestConnectionService(t, domain.ConnectionSettings{})
+
+	_, err := svc.SignIn(SettingsDTO{Kind: "yandex_disk"})
+	if code, _ := uiCode(t, err); code != "not_connected" {
+		t.Errorf("code = %q, want not_connected without an authorizer", code)
+	}
+}
+
+func newYandexService(t *testing.T) (*ConnectionService, *fakeAuth) {
+	t.Helper()
+
+	store := &memSettings{}
+	auth := &fakeAuth{login: &fakeLogin{}}
+
+	conn, err := usecase.NewConnection(usecase.ConnectionDeps{
+		Settings: store, Store: store, Tokens: store, Remote: &keyServer{}, Auth: auth,
+		Gate: &usecase.Gate{}, Offer: &usecase.HostKeyOffer{}, Changed: func() {},
+		OpenURL: func(string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return NewConnectionService(Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}, conn, nil), auth
+}
+
+// Test may run a transfer with the storage: whatever its result, the
+// interface is told that the progress is over, as after the sync operations.
+func TestConnectionTestEndsProgress(t *testing.T) {
+	svc, _, server := newTestConnectionService(t, domain.ConnectionSettings{})
+
+	var log eventLog
+
+	svc.progress = NewProgressFeed(log.emit)
+
+	wantEnd := func(step string) {
+		t.Helper()
+
+		got := log.list()
+		if len(got) == 0 || got[len(got)-1].name != EventSyncProgress || !reflect.DeepEqual(got[len(got)-1].data, []any{ProgressDTO{}}) {
+			t.Errorf("%s: events %+v, want the end of the progress last", step, got)
+		}
+	}
+
+	form := toSettingsDTO(filledSettings)
+
+	if _, err := svc.Test(form); err == nil {
+		t.Fatal("Test with an unknown server key succeeded")
+	}
+
+	wantEnd("failure")
+
+	form, err := svc.TrustOfferedKey(server.fp, form)
+	if err != nil {
+		t.Fatalf("TrustOfferedKey: %v", err)
+	}
+
+	before := len(log.list())
+
+	if _, err := svc.Test(form); err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+
+	if len(log.list()) == before {
+		t.Error("successful Test sent no event")
+	}
+
+	wantEnd("success")
 }

@@ -11,8 +11,9 @@ import (
 // trusted server key. The interface names the key only by fingerprint: a key
 // trusted during Test waits here, in pending, until OK saves it (spec §6.1).
 type ConnectionService struct {
-	env  Env
-	conn *usecase.Connection
+	env      Env
+	conn     *usecase.Connection
+	progress *ProgressFeed // Test ends the progress of its transfer here
 
 	mu      sync.Mutex
 	pending trustedKey
@@ -24,33 +25,94 @@ type trustedKey struct {
 	key, addr string
 }
 
-// NewConnectionService returns a ConnectionService over c.
-func NewConnectionService(env Env, c *usecase.Connection) *ConnectionService {
-	return &ConnectionService{env: env, conn: c}
+// NewConnectionService returns a ConnectionService over c that ends the
+// progress of Test in progress; nil sends nothing.
+func NewConnectionService(env Env, c *usecase.Connection, progress *ProgressFeed) *ConnectionService {
+	if progress == nil {
+		progress = NewProgressFeed(nil)
+	}
+
+	return &ConnectionService{env: env, conn: c, progress: progress}
 }
 
 // Load returns the saved settings for the settings dialog; a key trusted in
-// a dialog closed without OK is forgotten.
+// a dialog closed without OK is forgotten. A Yandex token that cannot be
+// read shows as Not signed in.
 func (s *ConnectionService) Load() (SettingsDTO, error) {
 	s.setPending(trustedKey{})
+
+	s.conn.DiscardPending()
 
 	settings, err := s.conn.Load(s.env.Ctx)
 	if err != nil {
 		return SettingsDTO{}, s.env.fail("load settings", err)
 	}
 
-	return toSettingsDTO(settings), nil
+	dto := toSettingsDTO(settings)
+
+	dto.YandexAccount, dto.YandexSignedIn, err = s.conn.Account(s.env.Ctx, settings)
+	if err != nil {
+		// An unreadable token must not keep Settings closed: the account
+		// shows as Not signed in. The error text may carry details of the
+		// token store, so only its code is logged.
+		s.env.Log.Error("load yandex account", "code", classify(err).Code)
+
+		dto.YandexAccount, dto.YandexSignedIn = "", false
+	}
+
+	return dto, nil
 }
+
+// SignIn signs in to Yandex Disk through the browser and the loopback
+// receiver and returns the account. It waits for the browser up to the
+// sign-in's own limit, so it runs on the application context rather than
+// under the operation timeout; CancelSignIn ends it. The token stays pending
+// until Save.
+func (s *ConnectionService) SignIn(settings SettingsDTO) (string, error) {
+	account, err := s.conn.SignIn(s.env.Ctx, settings.settings())
+	if err != nil {
+		return "", s.env.fail("sign in", err)
+	}
+
+	return account, nil
+}
+
+// SignInManual opens the browser for a sign-in by code; SubmitCode finishes it.
+func (s *ConnectionService) SignInManual(settings SettingsDTO) error {
+	return s.env.fail("sign in manually", s.conn.SignInManual(s.env.Ctx, settings.settings()))
+}
+
+// SubmitCode finishes the manual sign-in with the code the user copied and
+// returns the account.
+func (s *ConnectionService) SubmitCode(code string) (string, error) {
+	ctx, cancel := s.env.remote()
+	defer cancel()
+
+	account, err := s.conn.SubmitCode(ctx, code)
+	if err != nil {
+		return "", s.env.fail("submit code", err)
+	}
+
+	return account, nil
+}
+
+// CancelSignIn ends the sign-in in progress, if any.
+func (s *ConnectionService) CancelSignIn() { s.conn.CancelSignIn() }
+
+// SignOut forgets the Yandex Disk token; Save makes it final.
+func (s *ConnectionService) SignOut() { s.conn.SignOut() }
 
 // Test connects with settings without saving them; empty reports that the
 // server has no Smartnote storage yet.
 func (s *ConnectionService) Test(settings SettingsDTO) (empty bool, err error) {
+	defer s.progress.End()
+
 	trusted, err := s.withTrust(settings)
 	if err != nil {
 		return false, s.env.fail("test connection", err)
 	}
 
-	ctx, cancel := s.env.remote()
+	ctx, cancel := s.env.remoteFor(trusted.Kind())
 	defer cancel()
 
 	res, err := s.conn.Test(ctx, trusted)

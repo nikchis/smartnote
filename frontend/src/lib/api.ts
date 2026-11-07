@@ -13,6 +13,7 @@ export type {
   ConnectDTO,
   CountsDTO,
   NoteDTO,
+  RestorePreviewDTO,
   SearchHitDTO,
   SearchStatusDTO,
   SettingsDTO,

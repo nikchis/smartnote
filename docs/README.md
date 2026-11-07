@@ -11,6 +11,7 @@ build, package and test the application. Every document has a Russian version.
   search needs, the one-way upgrade from 2.0.x and how to go back, where the files are.
 - [Server setup](server-setup.md): PostgreSQL and OpenSSH for backing up and restoring the notes,
   and the sync phrase.
+- [Yandex Disk](yandex-disk.md): sign-in, your own client ID, revoking access.
 - [Search](search.md): words, phrases, fragments of code and search by meaning; the status line.
 - [Security](security.md): the threat model, process hardening, the isolation of the search worker
   and what is not protected.
