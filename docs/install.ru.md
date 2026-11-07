@@ -26,8 +26,15 @@ libharfbuzz0b bubblewrap xdg-dbus-proxy`; в любой настольной Ubu
 
 ## Windows
 
-Windows 10/11, файл `Smartnote-<версия>-windows-amd64-installer.exe`. SmartScreen показывает «Windows protected your
-PC»: выберите **More info**, затем **Run anyway**.
+Windows 10/11, файл `Smartnote-<версия>-windows-amd64.msi`. SmartScreen показывает «Windows
+protected your PC»: выберите **More info**, затем **Run anyway**.
+
+Пакет устанавливает Smartnote для текущего пользователя в `%LOCALAPPDATA%\Programs\Smartnote` без
+прав администратора и добавляет ярлыки в меню «Пуск» и на рабочий стол. Ему нужен Microsoft Edge
+WebView2 Runtime, который есть в Windows 11 и обновлённой Windows 10; без него пакет отказывается
+устанавливаться и называет страницу, откуда скачать Runtime. Более новый пакет заменяет
+установленную версию. Smartnote удаляется в **Параметры → Приложения**; заметки
+(`%APPDATA%\smartnote`) и данные WebView2 (`%APPDATA%\smartnote.exe`) остаются.
 
 Семантическому поиску нужен Microsoft Visual C++ Redistributable (x64), который есть в большинстве
 систем; без него работает только полнотекстовый поиск.

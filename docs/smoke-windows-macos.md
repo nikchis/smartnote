@@ -5,7 +5,7 @@
 A checklist for the unsigned Windows and macOS packages, including the search checks that CI
 cannot do. For testers with access to those systems.
 
-The packages for Windows (`smartnote-amd64-installer.exe`) and macOS (`smartnote.dmg`, Apple Silicon
+The packages for Windows (`smartnote-amd64.msi`) and macOS (`smartnote.dmg`, Apple Silicon
 only) are built by CI
 (job `package`, artifacts `smartnote-windows` and `smartnote-darwin`) and are not signed. This check
 is run by hand on each system; the **Result** and **Checked by** columns are filled in by the tester.
@@ -23,7 +23,7 @@ Smartnote: files older than that are not from this test.
 
 | # | Step | Expected | Result | Checked by |
 |---|---|---|---|---|
-| 1 | Run the installer; on "Windows protected your PC" choose **More info** → **Run anyway**. | The installer finishes; Smartnote is in the Start menu. | | |
+| 1 | Run the `.msi`; on "Windows protected your PC" choose **More info** → **Run anyway**. | No administrator prompt; the installation finishes; Smartnote is in the Start menu and in `%LOCALAPPDATA%\Programs\Smartnote`. | | |
 | 2 | Start Smartnote. | The New storage screen opens in the dark v1 colors, with a light or a dark system theme alike. The Smartnote logo is on `smartnote.exe` in Explorer, in the title bar and on the taskbar. | | |
 | 3 | Create the storage, add a note. | "Note has been successfully added."; `local.db` is in `%APPDATA%\smartnote`. | | |
 | 4 | **Settings**: generate a key, add the public key to the server, fill in the server, **Test connection**, trust the key. | "Connection successfully established." (or "… Remote storage is empty."). | | |

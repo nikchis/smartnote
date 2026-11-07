@@ -77,6 +77,10 @@ written to `smartnote.log` as a warning. The search works at every level.
 ## What is not protected
 
 - On Windows and macOS the search worker is not isolated from the disk and the network.
+- On Windows Smartnote is installed per user into `%LOCALAPPDATA%\Programs\Smartnote`, which the
+  user's own programs can write: a program running as the same user can replace `smartnote.exe`
+  or its libraries there. Up to 2.2.0 the installer put them into `Program Files`, where only an
+  administrator can.
 - Keys and passwords are wiped from memory where possible; the Go runtime may keep copies. The text
   of the notes is also in the memory of the application, of the WebView and of ONNX Runtime.
 - The WebView processes (WebKitGTK on Linux) are not hardened by Smartnote: other processes of the

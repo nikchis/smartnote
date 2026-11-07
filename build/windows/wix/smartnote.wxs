@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows package of Smartnote: a per-user MSI built with the WiX Toolset v6
+  (task windows:create:msi, which passes RootDir). It installs into
+  %LOCALAPPDATA%\Programs\Smartnote without asking for administrator rights and
+  has no custom actions and no dialogs of its own.
+
+  Every component lives in the user profile, so its key path is a value under
+  HKCU and each folder it creates has a RemoveFolder (ICE38, ICE43, ICE64).
+  WiX cannot generate the GUID of a component with files and a registry key
+  path (WIX0230), so those components have fixed GUIDs: keep them.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="Smartnote"
+      Manufacturer="Nikita Chisnikov"
+      Version="!(bind.FileVersion.SmartnoteExe)"
+      UpgradeCode="6E0F4C2A-8B1D-4A57-9C3E-2F7B5D1A9E64"
+      Scope="perUser"
+      Language="1033"
+      Compressed="yes">
+
+    <SummaryInformation Description="Smartnote: a notepad for private records" />
+
+    <!-- Every build has a new ProductCode: a rebuild of the same version replaces it too. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of Smartnote is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="SmartnoteIcon" SourceFile="$(var.RootDir)\build\windows\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="SmartnoteIcon" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!--
+      The window of Smartnote is drawn by the Microsoft Edge WebView2 Runtime, which
+      Windows 11 and an updated Windows 10 already have. The package does not install
+      it (that would need a custom action); it refuses to install without it. The
+      Runtime registers its version (pv) per machine or per user.
+    -->
+    <Property Id="WEBVIEW2_MACHINE">
+      <RegistrySearch
+          Root="HKLM"
+          Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+          Name="pv"
+          Type="raw"
+          Bitness="always64" />
+    </Property>
+    <Property Id="WEBVIEW2_USER">
+      <RegistrySearch
+          Root="HKCU"
+          Key="Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+          Name="pv"
+          Type="raw"
+          Bitness="always64" />
+    </Property>
+    <Launch
+        Condition="Installed OR (WEBVIEW2_MACHINE AND WEBVIEW2_MACHINE &lt;&gt; &quot;0.0.0.0&quot;) OR (WEBVIEW2_USER AND WEBVIEW2_USER &lt;&gt; &quot;0.0.0.0&quot;)"
+        Message="Smartnote needs the Microsoft Edge WebView2 Runtime. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and run this package again." />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="LocalProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Smartnote">
+          <Directory Id="ModelFolder" Name="model" />
+          <Directory Id="LicensesFolder" Name="licenses">
+            <Directory Id="OrtLicensesFolder" Name="onnxruntime" />
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Feature Id="Main" Title="Smartnote">
+      <!-- The application, the search worker (specification 8.2) and its ONNX Runtime. -->
+      <Component Id="Application" Guid="55E1E88E-70BE-47D6-AB7F-5E54F085141D" Directory="INSTALLFOLDER">
+        <RegistryValue Root="HKCU" Key="Software\nikchis\Smartnote" Name="Application" Type="integer" Value="1" KeyPath="yes" />
+        <File Id="SmartnoteExe" Source="$(var.RootDir)\bin\smartnote.exe" />
+        <File Id="SearchWorkerExe" Source="$(var.RootDir)\bin\smartnote-search.exe" />
+        <File Id="OnnxRuntimeDll" Source="$(var.RootDir)\build\ort\onnxruntime.dll" />
+        <File Id="ThirdPartyNotices" Source="$(var.RootDir)\THIRD_PARTY_NOTICES.md" />
+        <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveLocalProgramsFolder" Directory="LocalProgramsFolder" On="uninstall" />
+      </Component>
+
+      <Component Id="Model" Guid="141791B6-DEFD-4C9B-B641-B5FF3FFC0570" Directory="ModelFolder">
+        <RegistryValue Root="HKCU" Key="Software\nikchis\Smartnote" Name="Model" Type="integer" Value="1" KeyPath="yes" />
+        <File Id="ModelOnnx" Source="$(var.RootDir)\build\model\model.onnx" />
+        <File Id="ModelTokenizer" Source="$(var.RootDir)\build\model\tokenizer.kit" />
+        <File Id="ModelManifest" Source="$(var.RootDir)\build\model\manifest.json" />
+        <RemoveFolder Id="RemoveModelFolder" On="uninstall" />
+      </Component>
+
+      <!-- The licence notices of the third-party components (task notices:build). -->
+      <Component Id="Licenses" Guid="E287782A-E94F-4298-BD40-C8E7F4CC3171" Directory="LicensesFolder">
+        <RegistryValue Root="HKCU" Key="Software\nikchis\Smartnote" Name="Licenses" Type="integer" Value="1" KeyPath="yes" />
+        <File Id="RustCratesNotices" Source="$(var.RootDir)\build\notices\rust-crates.txt" />
+        <File Id="GoModulesNotices" Source="$(var.RootDir)\build\notices\go-modules.txt" />
+        <RemoveFolder Id="RemoveLicensesFolder" On="uninstall" />
+      </Component>
+
+      <Component Id="OrtLicenses" Guid="F6228461-E8A3-458D-9BAC-3A7CA97B2164" Directory="OrtLicensesFolder">
+        <RegistryValue Root="HKCU" Key="Software\nikchis\Smartnote" Name="OrtLicenses" Type="integer" Value="1" KeyPath="yes" />
+        <File Id="OrtLicense" Source="$(var.RootDir)\build\ort\LICENSE" />
+        <File Id="OrtThirdPartyNotices" Source="$(var.RootDir)\build\ort\ThirdPartyNotices.txt" />
+        <RemoveFolder Id="RemoveOrtLicensesFolder" On="uninstall" />
+      </Component>
+
+      <!-- The shortcuts name the folder, not [#SmartnoteExe]: a file of another component (ICE69). -->
+      <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder">
+        <RegistryValue Root="HKCU" Key="Software\nikchis\Smartnote" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+        <Shortcut Id="StartMenuSmartnote" Name="Smartnote" Target="[INSTALLFOLDER]smartnote.exe" WorkingDirectory="INSTALLFOLDER" />
+      </Component>
+
+      <Component Id="DesktopShortcut" Directory="DesktopFolder">
+        <RegistryValue Root="HKCU" Key="Software\nikchis\Smartnote" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+        <Shortcut Id="DesktopSmartnote" Name="Smartnote" Target="[INSTALLFOLDER]smartnote.exe" WorkingDirectory="INSTALLFOLDER" />
+      </Component>
+    </Feature>
+  </Package>
+</Wix>

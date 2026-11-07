@@ -14,6 +14,8 @@ permissions:
 env:
   WAILS_VERSION: v3.1.0
   TASK_VERSION: v3.54.0
+  # WiX Toolset for the MSI package; v7 needs the OSMF EULA accepted, v6 does not.
+  WIX_VERSION: "6.0.2"
   NODE_VERSION: "24"
   # Wails v3 needs GTK 4 and WebKitGTK 6.0 headers to compile on Linux (cgo).
   LINUX_PACKAGES: build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
@@ -144,7 +146,7 @@ jobs:
               bin/smartnote-x86_64.AppImage
           - os: windows-latest
             target: windows
-            artifacts: bin/*installer.exe
+            artifacts: bin/*.msi
           - os: macos-latest
             target: darwin
             artifacts: bin/*.dmg
@@ -162,10 +164,10 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y $LINUX_PACKAGES
       - if: runner.os == 'Windows'
-        # choco does not put makensis on PATH for the following steps.
+        # The global tools folder of dotnet is put on PATH for the following steps.
         run: |
-          choco install nsis -y --no-progress
-          Add-Content -Path $env:GITHUB_PATH -Value "${env:ProgramFiles(x86)}\NSIS"
+          dotnet tool install --global wix --version $env:WIX_VERSION
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
       - run: go install github.com/go-task/task/v3/cmd/task@${{ env.TASK_VERSION }}
       - run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ env.WAILS_VERSION }}
       # task package builds the search worker (task search:build) with the toolchain of
@@ -190,8 +192,8 @@ jobs:
       - run: task package:${{ matrix.target }}
         shell: bash
       # The packaged search worker must load its ONNX Runtime and model: on macOS from the signed
-      # bundle (the library keeps its pinned SHA-256), on Windows from the files the installer
-      # takes. The Linux packages are checked by task package:linux (.deb) and smoke-appimage.
+      # bundle (the library keeps its pinned SHA-256), on Windows from the folder the MSI installs.
+      # The Linux packages are checked by task package:linux (.deb) and smoke-appimage.
       - if: runner.os == 'macOS'
         run: >-
           go run ./cmd/searchsmoke -timeout 120s
@@ -200,13 +202,44 @@ jobs:
           -model "$PWD/bin/smartnote.app/Contents/Resources/model"
         env:
           ORT_DISABLE_TELEMETRY: "1"
+      # The per-user MSI: install it quietly, check the files, the Start menu shortcut and the entry
+      # for uninstalling, run the worker from the installed folder, then uninstall it.
       - if: runner.os == 'Windows'
         shell: pwsh
-        run: >-
-          go run ./cmd/searchsmoke -timeout 120s
-          -worker "$PWD\bin\smartnote-search.exe"
-          -ort "$PWD\build\ort\onnxruntime.dll"
-          -model "$PWD\build\model"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = (Get-Item bin\smartnote-amd64.msi).FullName
+          function Invoke-Msiexec([string[]] $arguments, [string] $log) {
+            $p = Start-Process msiexec.exe -ArgumentList ($arguments + @('/qn', '/l*v', "`"$log`"")) -Wait -PassThru
+            if ($p.ExitCode -ne 0) {
+              Get-Content $log -Tail 80
+              throw "msiexec $($arguments[0]) exited with $($p.ExitCode)"
+            }
+          }
+          Invoke-Msiexec @('/i', "`"$msi`"") "$PWD\msi-install.log"
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Smartnote'
+          $files = 'smartnote.exe', 'smartnote-search.exe', 'onnxruntime.dll', 'THIRD_PARTY_NOTICES.md',
+            'model\model.onnx', 'model\tokenizer.kit', 'model\manifest.json',
+            'licenses\rust-crates.txt', 'licenses\go-modules.txt',
+            'licenses\onnxruntime\LICENSE', 'licenses\onnxruntime\ThirdPartyNotices.txt'
+          foreach ($f in $files) {
+            if (-not (Test-Path (Join-Path $dir $f))) { throw "not installed: $f" }
+          }
+          $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Smartnote.lnk'
+          if (-not (Test-Path $lnk)) { throw "no Start menu shortcut: $lnk" }
+          # Windows Installer keeps the entry of a per-user product under UserData of the user's SID;
+          # Settings > Apps reads it from there.
+          $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $entries = @(Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Installer\UserData\$sid\Products" -ErrorAction SilentlyContinue |
+            ForEach-Object { Get-ItemProperty (Join-Path $_.PSPath 'InstallProperties') -ErrorAction SilentlyContinue } |
+            Where-Object DisplayName -eq 'Smartnote')
+          if ($entries.Count -ne 1) { throw "uninstall entries of Smartnote: $($entries.Count)" }
+          "Installed Smartnote $($entries[0].DisplayVersion) into $dir"
+          go run ./cmd/searchsmoke -timeout 120s -worker "$dir\smartnote-search.exe" -ort "$dir\onnxruntime.dll" -model "$dir\model"
+          if ($LASTEXITCODE -ne 0) { throw "searchsmoke exited with $LASTEXITCODE" }
+          Invoke-Msiexec @('/x', "`"$msi`"") "$PWD\msi-uninstall.log"
+          if (Test-Path $dir) { throw "left after uninstall: $dir" }
+          if (Test-Path $lnk) { throw "left after uninstall: $lnk" }
         env:
           ORT_DISABLE_TELEMETRY: "1"
       # The package must be built from the committed dependency versions.

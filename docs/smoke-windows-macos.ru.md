@@ -5,7 +5,7 @@
 Чек-лист для неподписанных пакетов Windows и macOS, включая проверки поиска, которые CI выполнить
 не может. Для тестировщиков с доступом к этим системам.
 
-Пакеты для Windows (`smartnote-amd64-installer.exe`) и macOS (`smartnote.dmg`, только Apple
+Пакеты для Windows (`smartnote-amd64.msi`) и macOS (`smartnote.dmg`, только Apple
 Silicon) собирает CI (задание `package`, артефакты `smartnote-windows` и `smartnote-darwin`), и они
 не подписаны. Эта проверка выполняется вручную на каждой системе; столбцы **Результат** и
 **Проверил** заполняет тестировщик.
@@ -23,7 +23,7 @@ Silicon) собирает CI (задание `package`, артефакты `smar
 
 | № | Шаг | Ожидается | Результат | Проверил |
 |---|---|---|---|---|
-| 1 | Запустите установщик; на «Windows protected your PC» выберите **More info** → **Run anyway**. | Установщик завершается; Smartnote есть в меню «Пуск». | | |
+| 1 | Запустите `.msi`; на «Windows protected your PC» выберите **More info** → **Run anyway**. | Запроса прав администратора нет; установка завершается; Smartnote есть в меню «Пуск» и в `%LOCALAPPDATA%\Programs\Smartnote`. | | |
 | 2 | Запустите Smartnote. | Экран New storage открывается в тёмных цветах v1 — и при светлой, и при тёмной теме системы. Логотип Smartnote есть у `smartnote.exe` в Проводнике, в заголовке окна и на панели задач. | | |
 | 3 | Создайте хранилище, добавьте заметку. | «Note has been successfully added.»; `local.db` лежит в `%APPDATA%\smartnote`. | | |
 | 4 | **Settings**: создайте ключ, добавьте открытый ключ на сервер, заполните настройки сервера, **Test connection**, доверьтесь ключу. | «Connection successfully established.» (или «… Remote storage is empty.»). | | |

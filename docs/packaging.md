@@ -11,12 +11,13 @@ notices and signing on macOS. For developers who build or change the packages; t
 
 - Package metadata (name, vendor, version, copyright, description) lives in `build/config.yml`;
   `wails3 task common:update:build-assets` copies it into `build/darwin/*.plist`,
-  `build/windows/info.json`, `build/windows/nsis/wails_tools.nsh`, `build/linux/desktop` and
+  `build/windows/info.json`, `build/linux/desktop` and
   `build/linux/nfpm/nfpm.yaml`. That task rewrites `nfpm.yaml` from the Wails template, which
   resets `maintainer` (to `${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>`, empty in CI) and
   `homepage` (to `https://wails.io`): set them back after running it. `build/windows/msix/*.xml`
   is not generated and is kept by hand. The task also creates `build/ios/`, which the project does
-  not use and does not keep.
+  not use and does not keep, and `build/windows/nsis/`, which it no longer uses since the MSI
+  package: delete both.
 - The icon source is `build/appicon.svg`; `build/appicon.png` is its 1024×1024 rendering, and
   `common:generate:icons` builds `windows/icon.ico` and `darwin/icons.icns` from that PNG.
   There is no Icon Composer `Assets.car`: on macOS with actool 26 Wails would rebuild it, and
@@ -40,7 +41,7 @@ tests and is not shipped), and the licence notices: `THIRD_PARTY_NOTICES.md` wit
 
 - `task search:files` prepares them and is a dependency of `linux:create:appimage`,
   `linux:create:deb` (and `create:rpm`, `create:aur`), `darwin:create:app:bundle` and
-  `windows:create:nsis:installer` (the installer of `windows:package`), so `task package:<os>`
+  `windows:create:msi` (the package of `windows:package`), so `task package:<os>`
   works from a clean checkout. It runs
   `search:build`, `model:fetch` and `ort:fetch`; the package tasks run `notices:build` themselves
   once the application is built, because `go list` needs `frontend/dist` (`go:embed`). Each of
@@ -53,13 +54,13 @@ tests and is not shipped), and the licence notices: `THIRD_PARTY_NOTICES.md` wit
   are honoured. Cargo runs every time. A `GOOS` other than the host's, or a target without a
   worker, stops with a message: the worker is not cross-compiled. On Windows the worker links the
   C runtime statically (`search/.cargo/config.toml`, `-C target-feature=+crt-static`; a
-  `RUSTFLAGS` variable would replace it): the installer ships no Visual C++ Redistributable. The
+  `RUSTFLAGS` variable would replace it): the package ships no Visual C++ Redistributable. The
   official `onnxruntime.dll` still imports `MSVCP140.dll`, `MSVCP140_1.dll`, `VCRUNTIME140.dll`
   and `VCRUNTIME140_1.dll`; without the Redistributable it does not load, semantic search is
   unavailable ("semantic search unavailable: loading the ONNX Runtime library failed" in the
   log) and full-text search works (`tests/e2e.rs`, `ort_load_failure_keeps_full_text_search`,
   checks this with a broken dependency of the library on Linux). These DLLs are not copied
-  into the installer: they would be unpinned binaries.
+  into the package: they would be unpinned binaries.
 - `task ort:fetch` fetches the library of `GOOS`/`ARCH` and also extracts `LICENSE` and
   `ThirdPartyNotices.txt` from the release archive (the `notices` of `ort.lock.json`; the archive
   SHA-256 covers them, a later run only checks that they are present) into `build/ort`. A target
@@ -88,10 +89,19 @@ tests and is not shipped), and the licence notices: `THIRD_PARTY_NOTICES.md` wit
   the files are added to the AppDir that Wails leaves in `build/linux/appimage/build`, and the AppDir
   is packed again by `linuxdeploy-plugin-appimage` from the same linuxdeploy AppImage (extracted
   with `--appimage-extract`), which only packs. The AppRun of Wails is kept.
-- Windows: `project.nsi` installs the files beside `smartnote.exe` (`model\`, `licenses\`) and the
-  uninstaller deletes only these files by name, then each folder only if it is empty: a folder
-  chosen for the installation may hold other files, and they stay. A new file in the package needs
-  a `Delete` line in the uninstall section too.
+- Windows: `build/windows/wix/smartnote.wxs` describes a per-user MSI (WiX Toolset v6) that puts
+  the files into `%LOCALAPPDATA%\Programs\Smartnote` (`model\`, `licenses\` beside
+  `smartnote.exe`) without administrator rights, takes its version from the version resource of
+  `smartnote.exe` (`build/windows/info.json`) and replaces an older version (`MajorUpgrade`, fixed
+  `UpgradeCode`). Every component lives in the user profile, so its key path is a value under
+  `HKCU\Software\nikchis\Smartnote` and each folder has a `RemoveFolder`; `wix msi validate` runs
+  the ICE checks. A new file in the package needs a `File` in one of its components. The package
+  has no custom actions and no dialogs of its own and does not install the WebView2 Runtime: a
+  launch condition refuses the installation without it (the `pv` value in `HKLM` or `HKCU`).
+  The Go application for Windows is linked without `-s -w`, with its symbol tables. Both choices
+  aim at the machine-learning detection `Trojan:Win32/Wacatac` of Microsoft Defender, which
+  blocked the download of the unsigned NSIS installer of 2.2.0: stripped Go executables and NSIS
+  installers are reported to trigger it, though neither is a proven cause.
 
 The model files are prepared and published as [tools/model/README.md](../tools/model/README.md)
 describes; the notices file is [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
@@ -131,6 +141,9 @@ Package sizes without and with the search files (2026-11-04): `.deb` 8.8 MB → 
 CI job `package` installs the toolchain of `search/rust-toolchain.toml`, caches cargo
 (`Swatinem/rust-cache`), `build/model` and `build/ort` with the keys of job `search`, then runs
 `task package:<os>`. On macOS and Windows it runs `cmd/searchsmoke` against the packaged worker
-(the signed bundle on macOS) with `ORT_DISABLE_TELEMETRY=1`. The model release `model-e5s-1` must be
+(the signed bundle on macOS) with `ORT_DISABLE_TELEMETRY=1`. On Windows it first installs the MSI
+with `msiexec /qn`, checks the installed files, the Start menu shortcut and the entry for
+uninstalling, runs `searchsmoke` against the installed files, then uninstalls the package and
+checks that the folder is gone. The model release `model-e5s-1` must be
 published before `task model:fetch` can work in CI; locally `MODEL_BASE_URL=file:///…/` points it
 at a directory.

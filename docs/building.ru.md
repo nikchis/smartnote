@@ -21,7 +21,8 @@ Wails v3 требует `go 1.26.0`; оба варианта означают о
 
 На Ubuntu 26.04 для сборки нужны ещё `build-essential pkg-config libgtk-4-dev
 libwebkitgtk-6.0-dev` (`wails3 doctor` перечисляет, чего не хватает; разработка велась с GTK 4.22.4
-и WebKitGTK 2.52.6). Для установщика Windows нужен NSIS (`makensis`).
+и WebKitGTK 2.52.6). Для пакета Windows нужен WiX Toolset v6 (`dotnet tool install --global wix
+--version 6.0.2`).
 
 Некоторым командам нужно больше: Docker — для `make integration` и `task smoke:appimage`; `gdb` и
 `strace` — для `make search-test`; `cargo-deny` — для `make search-lint`; ночной набор
@@ -50,7 +51,7 @@ Wails — через Task, который вызывают `make build`, `make p
 | `task build` | собрать `bin/smartnote` |
 | `task search:files` | собрать поисковый воркер и загрузить модель и библиотеку ONNX Runtime ([Упаковка](packaging.ru.md)) |
 | `task package:linux` | `.deb` и AppImage в `bin/` |
-| `task package:windows` | установщик NSIS в `bin/` (на Windows) |
+| `task package:windows` | MSI-пакет для одного пользователя в `bin/` (на Windows) |
 | `task package:darwin` | `.app` и `.dmg` в `bin/` (на macOS) |
 | `task smoke:appimage` | запустить AppImage в чистом контейнере `ubuntu:26.04` (нужен Docker) |
 
