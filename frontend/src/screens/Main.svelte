@@ -224,6 +224,10 @@
   .main {
     width: 100%;
     height: 100%;
+    /* The screen is a grid item of <main>, whose row grows with the content:
+       without this the row takes the height of the whole list, and the window
+       scrolls instead of the list. */
+    min-height: 0;
     display: grid;
     grid-template-rows: auto 1fr auto;
   }
