@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/unicode/norm"
 )
 
 // Length limits in UTF-16 code units: of the name and text after NormalizeText,
@@ -35,10 +36,11 @@ type NoteVersion struct {
 	Info    string
 }
 
-// Normalized returns n with the name and the text passed through NormalizeText.
-// Callers validate and store the normalized note.
+// Normalized returns n with the name and the text passed through NormalizeText
+// and the white space around the name removed: a name may not begin or end
+// with it. Callers validate and store the normalized note.
 func (n Note) Normalized() Note {
-	n.Name = NormalizeText(n.Name)
+	n.Name = strings.TrimSpace(NormalizeText(n.Name))
 	n.Info = NormalizeText(n.Info)
 
 	return n
@@ -72,6 +74,14 @@ func (n Note) Validate() error {
 	}
 
 	return nil
+}
+
+// SameNoteName reports whether two note names are the same name, which two
+// notes may not share: equal in Unicode NFC regardless of case and of the
+// white space around them, which a name stored before Normalized trimmed it
+// may still have. White space inside a name is significant.
+func SameNoteName(a, b string) bool {
+	return strings.EqualFold(norm.NFC.String(strings.TrimSpace(a)), norm.NFC.String(strings.TrimSpace(b)))
 }
 
 // ValidatePassword checks the length of a local storage password in its NFC

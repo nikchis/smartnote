@@ -242,7 +242,7 @@ func TestNotesStoreErrorMarksNoChange(t *testing.T) {
 	notes, changes := newTestNotes(t, store, fixedClock(t1))
 	ctx := context.Background()
 
-	_, errCreate := notes.Create(ctx, "n", "a")
+	_, errCreate := notes.Create(ctx, "new", "a")
 	_, errText := notes.Save(ctx, id, "n", "b")
 	_, errName := notes.Save(ctx, id, "n2", "a")
 
@@ -380,5 +380,115 @@ func TestNotesHookNotOnStoreError(t *testing.T) {
 
 	if len(index.saved) != 0 || len(index.deleted) != 0 {
 		t.Errorf("failed writes reached the index: saved %+v, deleted %v", index.saved, index.deleted)
+	}
+}
+
+func TestNotesCreateDuplicateName(t *testing.T) {
+	store := newFakeNoteStore(domain.Note{ID: testID(1), Name: "Заметка", Info: "a", Updated: t0})
+	notes, changes := newTestNotes(t, store, fixedClock(t1))
+
+	_, err := notes.Create(context.Background(), "заМЕТКА", "b")
+	assertField(t, err, "name")
+
+	if store.writes != 0 || len(store.notes) != 1 {
+		t.Errorf("store writes = %d, notes = %d, want 0 and 1", store.writes, len(store.notes))
+	}
+
+	if changes.Dirty() {
+		t.Error("a refused create marked a change")
+	}
+}
+
+func TestNotesSaveRenameToDuplicate(t *testing.T) {
+	a, b := testID(1), testID(2)
+	store := newFakeNoteStore(
+		domain.Note{ID: a, Name: "a", Info: "x", Updated: t0},
+		domain.Note{ID: b, Name: "b", Info: "y", Updated: t0},
+	)
+	notes, changes := newTestNotes(t, store, fixedClock(t1))
+
+	_, err := notes.Save(context.Background(), b, "A", "y2")
+	assertField(t, err, "name")
+
+	if got := store.notes[b]; got.Name != "b" || got.Info != "y" || store.writes != 0 {
+		t.Errorf("note b = %+v after %d writes, want it unchanged", got, store.writes)
+	}
+
+	if changes.Dirty() {
+		t.Error("a refused save marked a change")
+	}
+}
+
+func TestNotesSaveRenameOwnCase(t *testing.T) {
+	id := testID(1)
+	store := newFakeNoteStore(domain.Note{ID: id, Name: "note", Info: "x", Updated: t0})
+	notes, _ := newTestNotes(t, store, fixedClock(t1))
+
+	got, err := notes.Save(context.Background(), id, "NOTE", "x")
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if got.Name != "NOTE" || store.notes[id].Name != "NOTE" {
+		t.Errorf("Save = %+v, stored %+v, want the name NOTE", got, store.notes[id])
+	}
+}
+
+// Notes that share a name from before the check stay editable while the name is kept.
+func TestNotesSaveKeepsExistingDuplicate(t *testing.T) {
+	a, b := testID(1), testID(2)
+	store := newFakeNoteStore(
+		domain.Note{ID: a, Name: "x", Info: "1", Updated: t0},
+		domain.Note{ID: b, Name: "X", Info: "2", Updated: t0},
+	)
+	notes, _ := newTestNotes(t, store, fixedClock(t1))
+
+	if _, err := notes.Save(context.Background(), a, "x", "1 changed"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if store.notes[a].Info != "1 changed" {
+		t.Errorf("stored %+v, want the new text", store.notes[a])
+	}
+}
+
+func TestNotesCreateTrimsName(t *testing.T) {
+	store := newFakeNoteStore()
+	notes, _ := newTestNotes(t, store, fixedClock(t0))
+
+	got, err := notes.Create(context.Background(), "  name\t", "a")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if got.Name != "name" || store.notes[got.ID].Name != "name" {
+		t.Errorf("Create = %+v, stored %+v, want the name without surrounding spaces", got, store.notes[got.ID])
+	}
+}
+
+func TestNotesCreateDuplicateNameWithSpaces(t *testing.T) {
+	store := newFakeNoteStore(domain.Note{ID: testID(1), Name: "note", Info: "a", Updated: t0})
+	notes, _ := newTestNotes(t, store, fixedClock(t1))
+
+	_, err := notes.Create(context.Background(), " Note ", "b")
+	assertField(t, err, "name")
+}
+
+// A stored name with surrounding spaces is trimmed on save, which is no new
+// name: a note that already shares it stays editable.
+func TestNotesSaveTrimsExistingDuplicate(t *testing.T) {
+	a, b := testID(1), testID(2)
+	store := newFakeNoteStore(
+		domain.Note{ID: a, Name: "x ", Info: "1", Updated: t0},
+		domain.Note{ID: b, Name: "X", Info: "2", Updated: t0},
+	)
+	notes, _ := newTestNotes(t, store, fixedClock(t1))
+
+	if _, err := notes.Save(context.Background(), a, "x ", "1 changed"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if got := store.notes[a]; got.Name != "x" || got.Info != "1 changed" {
+		t.Errorf("stored %+v, want the trimmed name and the new text", got)
 	}
 }

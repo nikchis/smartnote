@@ -125,6 +125,13 @@ type e2eDevice struct {
 func newE2EDevice(t *testing.T, h *harness, pending *fakePending) *e2eDevice {
 	t.Helper()
 
+	return newE2EDeviceWith(t, h, pending, h.options())
+}
+
+// newE2EDeviceWith builds a device whose stores take opts, as a Progress.
+func newE2EDeviceWith(t *testing.T, h *harness, pending *fakePending, opts StoreOptions) *e2eDevice {
+	t.Helper()
+
 	dev := &e2eDevice{local: &e2eLocal{notes: map[uuid.UUID]domain.Note{}}, changes: &usecase.ChangeTracker{}, pending: pending}
 	cfg := &e2eConfig{
 		settings: domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: fakeClientID, SyncPhrase: "sixteen chars ok"},
@@ -132,7 +139,7 @@ func newE2EDevice(t *testing.T, h *harness, pending *fakePending) *e2eDevice {
 			Provider: fakeProvider, ClientID: fakeClientID, Access: "acc-1", Expiry: testNow.Add(time.Hour),
 		},
 	}
-	factory := newStoreFactory(h.disk.endpoints(), pending, h.options())
+	factory := newStoreFactory(h.disk.endpoints(), pending, opts)
 
 	s, err := usecase.NewSync(usecase.SyncDeps{
 		Local: dev.local, Settings: cfg, Tokens: cfg,
@@ -308,5 +315,80 @@ func TestEndToEndUnstableVersion(t *testing.T) {
 
 	if !dev.sync.State().Connected {
 		t.Error("disconnected by remote_changed")
+	}
+}
+
+// TestEndToEndTransfers pins the transfers that report their progress in each
+// call of the synchronization: the interface splits the bar of a process into
+// equal shares by them (TRANSFERS in frontend/src/lib/overlay.svelte.ts).
+func TestEndToEndTransfers(t *testing.T) {
+	h := newHarness(t)
+	first := newE2EDevice(t, h, h.pending)
+	first.edit(domain.Note{ID: uuid.New(), Name: "Garden", Info: "tomatoes", Updated: testNow})
+
+	if out := first.connect(t); out.Status != usecase.StatusCreated {
+		t.Fatalf("first Connect = %+v, want created", out)
+	}
+
+	var log progressLog
+
+	opts := h.options()
+	opts.Progress = log.add
+	second := newE2EDeviceWith(t, h, &fakePending{disk: h.disk}, opts)
+
+	// transfers runs call and returns the directions of the transfers it
+	// started: each meter reports 0 first.
+	transfers := func(name string, call func(ctx context.Context) error) []string {
+		t.Helper()
+
+		before := len(log.list())
+
+		if err := call(t.Context()); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+
+		var out []string
+
+		for _, p := range log.list()[before:] {
+			if p.Done == 0 {
+				out = append(out, p.Direction)
+			}
+		}
+
+		return out
+	}
+	got := map[string][]string{
+		"Connect": transfers("Connect", func(ctx context.Context) error {
+			_, err := second.sync.Connect(ctx)
+			return err
+		}),
+		"PrepareRestore": transfers("PrepareRestore", func(ctx context.Context) error {
+			_, err := second.sync.PrepareRestore(ctx)
+			return err
+		}),
+		"CommitRestore": transfers("CommitRestore", second.sync.CommitRestore),
+	}
+
+	second.edit(domain.Note{ID: uuid.New(), Name: "Journal", Info: "day one", Updated: testNow})
+
+	got["PrepareBackup"] = transfers("PrepareBackup", func(ctx context.Context) error {
+		_, err := second.sync.PrepareBackup(ctx)
+		return err
+	})
+	got["CommitBackup"] = transfers("CommitBackup", second.sync.CommitBackup)
+
+	down, up := usecase.DirectionDownload, usecase.DirectionUpload
+	want := map[string][]string{
+		"Connect":        {down},
+		"PrepareRestore": {down},
+		"CommitRestore":  nil,
+		"PrepareBackup":  {down},
+		"CommitBackup":   {down, up},
+	}
+
+	for name, w := range want {
+		if !slices.Equal(got[name], w) {
+			t.Errorf("%s transfers %v, want %v", name, got[name], w)
+		}
 	}
 }

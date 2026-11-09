@@ -55,6 +55,13 @@ func TestNote_Normalized(t *testing.T) {
 	}
 }
 
+func TestNote_NormalizedTrimsName(t *testing.T) {
+	got := Note{Name: " \t\u3000a b\u00a0 ", Info: "  text  "}.Normalized()
+	if got.Name != "a b" || got.Info != "  text  " {
+		t.Errorf("Normalized() = {Name: %q, Info: %q}, want {Name: \"a b\", Info: \"  text  \"}", got.Name, got.Info)
+	}
+}
+
 // nfdE is "é" decomposed: e and a combining acute accent, 2 units before NFC and 1 after.
 const nfdE = "e\u0301"
 
@@ -110,5 +117,28 @@ func assertValidationField(t *testing.T, err error, wantField string) {
 
 	if ve.Field != wantField {
 		t.Errorf("Field = %q, want %q (error: %v)", ve.Field, wantField, err)
+	}
+}
+
+func TestSameNoteName(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{name: "equal", a: "Note", b: "Note", want: true},
+		{name: "ascii case", a: "note", b: "NOTE", want: true},
+		{name: "cyrillic case", a: "Заметка ёлка", b: "ЗАМЕТКА ЁЛКА", want: true},
+		{name: "composed and decomposed", a: "café", b: "CAF" + "É", want: true},
+		{name: "different", a: "note", b: "notes", want: false},
+		{name: "surrounding white space", a: "note", b: " NOTE\u00a0\t", want: true},
+		{name: "inner white space is kept", a: "a b", b: "ab", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SameNoteName(tt.a, tt.b); got != tt.want {
+				t.Errorf("SameNoteName(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
 	}
 }

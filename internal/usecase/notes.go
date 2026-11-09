@@ -71,7 +71,8 @@ func (n *Notes) List(ctx context.Context) ([]domain.Note, error) {
 	return notes, nil
 }
 
-// Create normalizes and validates a new note and stores it.
+// Create normalizes and validates a new note and stores it. A name that
+// another note has (domain.SameNoteName) is a ValidationError for "name".
 func (n *Notes) Create(ctx context.Context, name, info string) (domain.Note, error) {
 	note := domain.Note{ID: n.ids(), Name: name, Info: info, Updated: n.clock()}.Normalized()
 	if err := note.Validate(); err != nil {
@@ -79,6 +80,10 @@ func (n *Notes) Create(ctx context.Context, name, info string) (domain.Note, err
 	}
 
 	err := n.changes.Edit(func() (bool, error) {
+		if err := n.checkNameFree(ctx, note); err != nil {
+			return false, err
+		}
+
 		if err := n.store.InsertNote(ctx, note); err != nil {
 			return true, err
 		}
@@ -97,6 +102,10 @@ func (n *Notes) Create(ctx context.Context, name, info string) (domain.Note, err
 // Save writes a new name and text of note id. A changed text keeps the
 // previous one as a version created at the previous Updated; a changed name
 // alone keeps no version, as in v1. Without changes nothing is written.
+// A new name that another note has is a ValidationError for "name". A name
+// that stays the same name (domain.SameNoteName: also a change of case or a
+// trim of the spaces around it) is not checked, so notes that already share
+// one stay editable.
 func (n *Notes) Save(ctx context.Context, id uuid.UUID, name, info string) (domain.Note, error) {
 	note := domain.Note{ID: id, Name: name, Info: info}.Normalized()
 	if err := note.Validate(); err != nil {
@@ -114,6 +123,12 @@ func (n *Notes) Save(ctx context.Context, id uuid.UUID, name, info string) (doma
 		if note.Name == cur.Name && note.Info == cur.Info {
 			saved = cur
 			return false, nil
+		}
+
+		if !domain.SameNoteName(note.Name, cur.Name) {
+			if err := n.checkNameFree(ctx, note); err != nil {
+				return false, err
+			}
 		}
 
 		note.Updated = n.clock()
@@ -138,6 +153,24 @@ func (n *Notes) Save(ctx context.Context, id uuid.UUID, name, info string) (doma
 	}
 
 	return saved, nil
+}
+
+// checkNameFree returns a ValidationError for "name" when a note other than
+// note has its name. The names are sealed in the store, so they are compared
+// here; call it under the edit lock, so no write comes in between.
+func (n *Notes) checkNameFree(ctx context.Context, note domain.Note) error {
+	notes, err := n.store.ListNotes(ctx)
+	if err != nil {
+		return fmt.Errorf("check name: %w", err)
+	}
+
+	for _, other := range notes {
+		if other.ID != note.ID && domain.SameNoteName(other.Name, note.Name) {
+			return &domain.ValidationError{Field: "name", Reason: "a note with this name already exists"}
+		}
+	}
+
+	return nil
 }
 
 // Delete removes note id with its versions.
