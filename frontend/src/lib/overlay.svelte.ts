@@ -39,28 +39,45 @@ export class SyncOverlay {
   /** restoring is true from the Restore download the user started until the next call. */
   restoring = $state(false);
 
-  /** kind is the running process; running counts the processes, as Close can start during a Backup. */
-  private kind: ProcessKind = "backup";
-  private running = 0;
+  /**
+   * processes are the running processes, oldest first: Close can start during
+   * a Backup. The oldest owns the overlay, its text, title and shares; Go
+   * refuses the calls of the others while one of its calls runs (busy).
+   */
+  private processes: { kind: ProcessKind }[] = [];
   /**
    * step is the index of the transfer in the process, -1 before the first.
-   * A transfer starts with the first report after the end of a call or in
-   * another direction; a repeat in the same direction is the same transfer.
+   * A transfer starts with the first report in another direction, or after
+   * the end of a call once the last transfer is complete; a repeat in the same
+   * direction is the same transfer, and so is one that a refused call of
+   * another process (busy, which also ends with an end of progress) interrupts.
    */
   private step = $state(-1);
   private ended = true;
+
+  private get kind(): ProcessKind {
+    return this.processes[0]?.kind ?? "backup";
+  }
 
   /**
    * process runs flow as one process of kind. A progress left from another
    * call (Test in the settings) is dropped.
    */
   async process<T>(kind: ProcessKind, flow: () => Promise<T>): Promise<T> {
-    if (this.running++ === 0) this.reset();
-    this.kind = kind;
+    const me = { kind };
+    if (this.processes.push(me) === 1) this.reset();
     try {
       return await flow();
     } finally {
-      if (--this.running === 0) this.hide();
+      const owner = this.processes[0] === me;
+      this.processes.splice(this.processes.indexOf(me), 1);
+      if (this.processes.length === 0) {
+        this.hide();
+      } else if (owner) {
+        // The next process owns the overlay now and counts its own transfers.
+        this.reset();
+        if (this.text) this.text = LABELS[this.kind];
+      }
     }
   }
 
@@ -70,7 +87,7 @@ export class SyncOverlay {
    */
   call<T>(call: () => Promise<T>, restore = false): Promise<T> {
     this.text = LABELS[this.kind];
-    this.restoring = restore;
+    if (this.processes.length <= 1) this.restoring = restore;
     return call();
   }
 
@@ -83,7 +100,8 @@ export class SyncOverlay {
       this.ended = true;
       return;
     }
-    if (this.ended || p.direction !== this.progress?.direction) this.step++;
+    const last = this.progress;
+    if (!last || p.direction !== last.direction || (this.ended && last.done >= last.total)) this.step++;
     this.ended = false;
     this.progress = p;
   }
@@ -95,12 +113,15 @@ export class SyncOverlay {
     return progressView(p, this.restoring, { index: this.step, count: TRANSFERS[this.kind][p.storage] ?? 1 });
   }
 
-  /** dialogs wraps d so that a final message hides the overlay; questions show over it. */
+  /**
+   * dialogs wraps d so that a final message hides the overlay, unless another
+   * process still runs under it; questions show over it.
+   */
   dialogs(d: Dialogs): Dialogs {
     const final =
       (show: (msg: string) => Promise<void>) =>
       (msg: string): Promise<void> => {
-        this.hide();
+        if (this.processes.length <= 1) this.hide();
         return show(msg);
       };
     return {

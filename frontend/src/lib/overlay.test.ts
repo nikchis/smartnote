@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { backupFlow, restoreFlow, type SyncApi } from "../flows/sync";
+import { backupFlow, closeFlow, restoreFlow, type SyncApi } from "../flows/sync";
 import type { Dialogs } from "./dialogs.svelte";
 import { SyncOverlay } from "./overlay.svelte";
 import type { Progress } from "./progress";
@@ -284,4 +284,92 @@ describe("SyncOverlay", () => {
 
     expect(detail).toBe("Step 1 of 2 · 1 of 2 notes · 25%");
   });
+
+  describe("while another process runs", () => {
+    /** busy is a call that Go refuses during another operation: it ends with the end of the progress, then fails. */
+    const busy = () =>
+      overlay.call(async () => {
+        overlay.follow(end);
+        throw new Error(JSON.stringify({ code: "busy", message: "Another operation with the remote storage is in progress." }));
+      });
+
+    /** running starts a process whose one call stays in a transfer until finish is called. */
+    function running(kind: "backup" | "restore", first: Progress, restore = false) {
+      let finish!: () => void;
+      const done = overlay.process(kind, () =>
+        overlay.call(() => {
+          overlay.follow(first);
+          return new Promise<void>((r) => (finish = r));
+        }, restore),
+      );
+      return { done, finish: () => finish() };
+    }
+
+    it("keeps the overlay and the progress of a running Backup when the Backup on close fails", async () => {
+      const backup = running("backup", disk("upload", 1_000_000, 2_000_000));
+      const d = new RecordingDialogs(overlay);
+
+      let quit = false;
+
+      // Close asks to save, Yes; its Backup is refused, and No to "Close anyway?" keeps the window.
+      await overlay.process("backup", () =>
+        closeFlow({ ...recordingApi(overlay, []), prepareBackup: busy }, overlay.dialogs(d), async () => void (quit = true)),
+      );
+
+      expect(d.log).toEqual([
+        "choose Would you like to save your data changes to remote storage? [overlay: Synchronizing…]",
+        "error Another operation with the remote storage is in progress. [overlay: Synchronizing…]",
+        "ask Close anyway? [overlay: Synchronizing…]",
+      ]);
+      expect(quit).toBe(false);
+      expect(overlay.text).toBe("Synchronizing…");
+      expect(overlay.view()?.detail).toBe("Step 1 of 3 · 1.0 of 2.0 MB · 16%");
+
+      backup.finish();
+      await backup.done;
+      expect(overlay.text).toBe("");
+    });
+
+    it("keeps the share of a transfer through the end of a refused call", async () => {
+      const backup = running("backup", disk("download", 400_000, 1_000_000));
+
+      await overlay.process("backup", busy).catch(() => undefined);
+      overlay.follow(disk("download", 500_000, 1_000_000));
+
+      expect(overlay.view()?.detail).toBe("Step 1 of 3 · 0.5 of 1.0 MB · 16%");
+      backup.finish();
+      await backup.done;
+    });
+
+    it("keeps the title and the shares of a running Restore", async () => {
+      const restore = running("restore", disk("download", 250_000, 1_000_000), true);
+
+      await overlay.process("backup", busy).catch(() => undefined);
+      overlay.follow(disk("download", 500_000, 1_000_000));
+
+      expect(overlay.view()).toMatchObject({ title: "Downloading from Yandex Disk…", detail: "0.5 of 1.0 MB · 50%" });
+      restore.finish();
+      await restore.done;
+    });
+
+    it("counts the transfers of the process that goes on after the first one ends", async () => {
+      const restore = running("restore", disk("download", 1_000_000, 1_000_000), true);
+      let goOn!: () => void;
+      const close = overlay.process("backup", async () => {
+        await new Promise<void>((r) => (goOn = r));
+        await overlay.call(async () => {
+          overlay.follow(disk("download", 0, 1_000_000));
+          expect(overlay.view()).toMatchObject({ title: "Synchronizing with Yandex Disk…", detail: "Step 1 of 3 · 0.0 of 1.0 MB · 0%" });
+        });
+      });
+
+      restore.finish();
+      await restore.done;
+      expect(overlay.text).toBe("Synchronizing…");
+      goOn();
+      await close;
+      expect(overlay.text).toBe("");
+    });
+  });
 });
+
