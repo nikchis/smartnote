@@ -40,8 +40,8 @@ describe("Overlay", () => {
       "This can take several minutes on a slow connection. Do not close Smartnote.",
     ]);
     const bar = el.querySelector("progress")!;
-    expect(bar.max).toBe(5_000_000);
-    expect(bar.value).toBe(2_400_000);
+    expect(bar.max).toBe(1);
+    expect(bar.value).toBeCloseTo(0.48, 9);
     expect(bar.getAttribute("aria-label")).toBe("Uploading to Yandex Disk…");
     expect(bar.getAttribute("aria-valuetext")).toBe("2.4 of 5.0 MB · 48%");
   });
@@ -69,6 +69,6 @@ describe("Overlay", () => {
     const el = show("Connecting…", { storage: "ssh_postgres", direction: "download", unit: "notes", done: 12, total: 340 });
 
     expect(lines(el)).toEqual(["Synchronizing with the server…", "12 of 340 notes · 3%"]);
-    expect(el.querySelector("progress")?.value).toBe(12);
+    expect(el.querySelector("progress")?.value).toBeCloseTo(12 / 340, 9);
   });
 });
