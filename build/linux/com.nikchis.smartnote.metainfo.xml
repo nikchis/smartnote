@@ -42,6 +42,11 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.2.2" date="2026-11-09">
+      <description>
+        <p>Note names are unique regardless of case, the note list scrolls on its own, and Backup and Restore show one progress bar for the whole operation.</p>
+      </description>
+    </release>
     <release version="2.2.1" date="2026-11-08">
       <description>
         <p>The Windows package is a per-user MSI that needs no administrator rights.</p>
