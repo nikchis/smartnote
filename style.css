@@ -1,0 +1,89 @@
+/* The palette of the Smartnote application (v1 skin): one dark theme. */
+:root {
+  color-scheme: dark;
+  --bg: #4e5161;
+  --surface: #464958;
+  --field: #424554;
+  --field-border: #3c3f4d;
+  --text: #e6e8f2;
+  --muted: #8e92a3;
+  --border: #393c49;
+  /* A light tint of the app accent #6582b9: the accent itself is too dark for text. */
+  --link: #aebfe6;
+  scrollbar-color: #bec0cf #3e404e;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 17px/1.6 "Liberation Sans", Arial, Helvetica, sans-serif;
+}
+
+main {
+  max-width: 48rem;
+  margin: 2.5rem auto;
+  padding: 2rem 2.25rem 1.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.28);
+}
+
+@media (max-width: 52rem) {
+  main { margin: 0; border-radius: 0; border-width: 0; padding: 1.5rem 1.25rem; }
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  margin-bottom: 1.5rem;
+}
+
+header img { width: 72px; height: 72px; flex: none; }
+header h1 { margin: 0; font-size: 1.9rem; line-height: 1.2; }
+
+.brand {
+  margin: 0 0 0.2rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sub { margin: 0.3rem 0 0; color: var(--muted); }
+
+h2 { margin: 2rem 0 0.5rem; font-size: 1.3rem; }
+h3 { margin: 1.25rem 0 0.25rem; font-size: 1.05rem; }
+
+a { color: var(--link); text-underline-offset: 0.15em; }
+a:hover { color: var(--text); }
+
+ul { padding-left: 1.25rem; }
+li { margin: 0.25rem 0; }
+
+code { font-family: "DejaVu Sans Mono", "Liberation Mono", monospace; font-size: 0.88em; overflow-wrap: anywhere; }
+
+.note {
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+}
+
+.note p:first-child { margin-top: 0; }
+.note p:last-child { margin-bottom: 0; }
+
+footer {
+  margin-top: 2.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+footer a { margin-right: 1rem; }

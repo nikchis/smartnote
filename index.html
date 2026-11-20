@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smartnote - encrypted notes for the desktop</title>
+  <meta name="description" content="Smartnote is an open-source notepad for private records on Linux, Windows and macOS. Notes are encrypted on your device; backups go only to the storage you choose.">
+  <link rel="icon" href="appicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <img src="appicon.svg" alt="">
+    <div>
+      <h1>Smartnote</h1>
+      <p class="sub">A notepad for private records on Linux, Windows and macOS.</p>
+    </div>
+  </header>
+
+  <p>
+    Smartnote keeps your notes in an encrypted storage on your computer. If you want the notes on
+    several devices, Smartnote can back them up to a storage you choose and restore them from it.
+    Before anything leaves your device it is encrypted with a key derived from your sync phrase,
+    so the storage sees only ciphertext.
+  </p>
+
+  <h2>Features</h2>
+  <ul>
+    <li>Notes encrypted on the device with a key protected by your password, with a version history.</li>
+    <li>Local full-text and semantic search in Russian, English and code; nothing leaves the device.</li>
+    <li>Optional backup and restore through one of these storages:
+      <ul>
+        <li>your own PostgreSQL server reachable over SSH;</li>
+        <li>Yandex Disk, after signing in with your Yandex account;</li>
+        <li>Google Drive, after signing in with your Google account (in development).</li>
+      </ul>
+    </li>
+    <li>No accounts with the author, no servers of the author, no analytics, no ads.</li>
+  </ul>
+
+  <h2>Why Smartnote asks for access to Google Drive</h2>
+  <div class="note">
+    <p>
+      If you choose Google Drive as the storage, Smartnote asks for access only to its own hidden
+      application data folder on your Drive (the <code>drive.appdata</code> scope). It cannot see,
+      read or change any other file on your Drive.
+    </p>
+    <p>
+      In that folder Smartnote keeps one file: an encrypted container with all your notes. It uses
+      the access only to write this backup and to read it back on your other devices. The data goes
+      directly between your device and Google; the author of Smartnote never receives it.
+      Details are in the <a href="privacy.html">Privacy Policy</a>.
+    </p>
+  </div>
+
+  <h2>Download</h2>
+  <p>
+    Packages for Ubuntu (<code>.deb</code> and AppImage), Windows (MSI) and macOS on Apple Silicon
+    are on the <a href="https://github.com/nikchis/smartnote/releases">releases page</a>.
+    Installation steps and requirements are in the
+    <a href="https://github.com/nikchis/smartnote/blob/master/docs/install.md">installation guide</a>.
+  </p>
+
+  <h2>Documentation and source code</h2>
+  <ul>
+    <li><a href="https://github.com/nikchis/smartnote/blob/master/docs/README.md">Documentation</a>, in English and Russian.</li>
+    <li><a href="https://github.com/nikchis/smartnote/blob/master/docs/security.md">Security</a>: the threat model and what is not protected.</li>
+    <li><a href="https://github.com/nikchis/smartnote">Source code</a> on GitHub, under the MIT license.</li>
+    <li><a href="https://github.com/nikchis/smartnote/issues">Questions and bug reports</a>.</li>
+  </ul>
+
+  <footer>
+    <a href="privacy.html">Privacy Policy</a>
+    <a href="https://github.com/nikchis/smartnote">GitHub</a>
+    <span>© Smartnote authors · MIT license</span>
+  </footer>
+</main>
+</body>
+</html>
