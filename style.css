@@ -87,3 +87,6 @@ footer {
 }
 
 footer a { margin-right: 1rem; }
+
+.lang { margin: 0 0 1.25rem; font-size: 0.95rem; color: var(--muted); }
+.lang strong { color: var(--text); }

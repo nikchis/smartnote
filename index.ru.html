@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smartnote - зашифрованные заметки для компьютера</title>
+  <meta name="description" content="Smartnote - блокнот с открытым исходным кодом для личных записей под Linux, Windows и macOS. Заметки шифруются на устройстве, резервные копии попадают только в выбранное вами хранилище.">
+  <link rel="icon" href="appicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <link rel="alternate" hreflang="en" href="index.html">
+  <link rel="alternate" hreflang="ru" href="index.ru.html">
+</head>
+<body>
+<main>
+  <nav class="lang"><a href="index.html" hreflang="en" lang="en">English</a> | <strong>Русский</strong></nav>
+  <header>
+    <img src="appicon.svg" alt="">
+    <div>
+      <h1>Smartnote</h1>
+      <p class="sub">Блокнот для личных записей под Linux, Windows и macOS.</p>
+    </div>
+  </header>
+
+  <p>
+    Smartnote хранит заметки в зашифрованном хранилище на вашем компьютере. Если заметки нужны на
+    нескольких устройствах, Smartnote может сохранять их в выбранное вами хранилище и
+    восстанавливать оттуда. Всё, что покидает устройство, заранее шифруется ключом из вашей фразы
+    синхронизации, поэтому хранилище видит только шифротекст.
+  </p>
+
+  <h2>Возможности</h2>
+  <ul>
+    <li>Заметки зашифрованы на устройстве ключом, который защищён вашим паролем; у заметок есть история версий.</li>
+    <li>Локальный полнотекстовый и семантический поиск на русском и английском, в том числе по коду; ничего не покидает устройство.</li>
+    <li>Необязательное резервное копирование и восстановление через одно из хранилищ:
+      <ul>
+        <li>ваш собственный сервер PostgreSQL, доступный по SSH;</li>
+        <li>Яндекс Диск, после входа в аккаунт Яндекса;</li>
+        <li>Google Drive, после входа в аккаунт Google.</li>
+      </ul>
+    </li>
+    <li>Никаких учётных записей у автора, никаких серверов автора, никакой аналитики и рекламы.</li>
+  </ul>
+
+  <h2>Зачем Smartnote просит доступ к облачному хранилищу</h2>
+  <div class="note">
+    <p>
+      Если вы выбираете хранилищем Яндекс Диск или Google Drive, Smartnote просит доступ только к
+      своей папке приложения. Другие файлы на вашем Диске он не видит, не читает и не меняет:
+    </p>
+    <ul>
+      <li>
+        Яндекс Диск: папка приложения внутри <code>Приложения</code> на вашем Диске (доступ
+        <code>cloud_api:disk.app_folder</code>);
+      </li>
+      <li>
+        Google Drive: скрытая папка данных приложения на вашем Диске (доступ
+        <code>drive.appdata</code>).
+      </li>
+    </ul>
+    <p>
+      В этой папке Smartnote хранит один файл: зашифрованный контейнер со всеми заметками. Доступ
+      нужен только для того, чтобы записать эту резервную копию и прочитать её на других ваших
+      устройствах. Данные идут напрямую между вашим устройством и Яндексом или Google; автор
+      Smartnote их не получает. Подробности - в <a href="privacy.ru.html">политике конфиденциальности</a>.
+    </p>
+  </div>
+
+  <h2>Скачать</h2>
+  <p>
+    Пакеты для Ubuntu (<code>.deb</code> и AppImage), Windows (MSI) и macOS на Apple Silicon лежат
+    на <a href="https://github.com/nikchis/smartnote/releases">странице выпусков</a>. Порядок
+    установки и требования описаны в разделе
+    <a href="https://github.com/nikchis/smartnote/blob/master/docs/install.ru.md">Установка и обновление</a>.
+  </p>
+
+  <h2>Документация и исходный код</h2>
+  <ul>
+    <li><a href="https://github.com/nikchis/smartnote/blob/master/docs/README.ru.md">Документация</a> на русском и английском.</li>
+    <li><a href="https://github.com/nikchis/smartnote/blob/master/docs/security.ru.md">Безопасность</a>: модель угроз и то, что не защищено.</li>
+    <li><a href="https://github.com/nikchis/smartnote">Исходный код</a> на GitHub под лицензией MIT.</li>
+    <li><a href="https://github.com/nikchis/smartnote/issues">Вопросы и сообщения об ошибках</a>.</li>
+  </ul>
+
+  <footer>
+    <a href="privacy.ru.html">Политика конфиденциальности</a>
+    <a href="https://github.com/nikchis/smartnote">GitHub</a>
+    <span>© Авторы Smartnote · лицензия MIT</span>
+  </footer>
+</main>
+</body>
+</html>
