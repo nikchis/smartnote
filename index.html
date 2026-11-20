@@ -39,17 +39,27 @@
     <li>No accounts with the author, no servers of the author, no analytics, no ads.</li>
   </ul>
 
-  <h2>Why Smartnote asks for access to Google Drive</h2>
+  <h2>Why Smartnote asks for access to your cloud storage</h2>
   <div class="note">
     <p>
-      If you choose Google Drive as the storage, Smartnote asks for access only to its own hidden
-      application data folder on your Drive (the <code>drive.appdata</code> scope). It cannot see,
-      read or change any other file on your Drive.
+      If you choose Yandex Disk or Google Drive as the storage, Smartnote asks for access only to
+      its own application folder there. It cannot see, read or change any other file on your Disk
+      or Drive:
     </p>
+    <ul>
+      <li>
+        Yandex Disk: the folder of the application inside <code>Applications</code> on your Disk
+        (the <code>cloud_api:disk.app_folder</code> permission);
+      </li>
+      <li>
+        Google Drive: the hidden application data folder on your Drive (the
+        <code>drive.appdata</code> scope).
+      </li>
+    </ul>
     <p>
       In that folder Smartnote keeps one file: an encrypted container with all your notes. It uses
       the access only to write this backup and to read it back on your other devices. The data goes
-      directly between your device and Google; the author of Smartnote never receives it.
+      directly between your device and Yandex or Google; the author of Smartnote never receives it.
       Details are in the <a href="privacy.html">Privacy Policy</a>.
     </p>
   </div>
