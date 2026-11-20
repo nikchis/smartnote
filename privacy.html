@@ -57,7 +57,8 @@
   <h2>Remote storage you choose</h2>
   <p>
     Remote storage is optional. By default Smartnote works only on your device. If you choose one,
-    Smartnote sends your notes there to back them up and reads them back to restore them:
+    Smartnote sends your notes there to back them up and reads them back to restore them. The first
+    connection to an empty storage makes the first backup automatically:
   </p>
   <ul>
     <li>your own PostgreSQL server reachable over SSH;</li>
@@ -80,13 +81,18 @@
     Smartnote requests only the <code>https://www.googleapis.com/auth/drive.appdata</code> scope.
     This gives access to Smartnote's own hidden application data folder on your Google Drive. It
     gives no access to any other file, folder or data in your Google account. In that folder
-    Smartnote creates and reads one file: the encrypted container with your notes.
+    Smartnote keeps one file: the encrypted container with your notes. If two of your devices
+    create the storage at the same moment, a second copy of the container may stay there for a
+    while; Smartnote removes it during a later backup.
   </p>
 
   <h3>How Smartnote uses it</h3>
   <p>
-    Smartnote uses this access only to write the encrypted backup of your notes when you press
-    Backup, and to read it when you connect or restore, including on your other devices. The data
+    Smartnote uses this access only to keep the encrypted backup of your notes. It writes the
+    backup when you press Backup, and when it connects to an empty storage for the first time (the
+    first backup is made automatically then, for example after you press OK in Settings). It reads
+    the backup when it connects, when you test the connection in Settings, when it prepares or
+    makes a backup and when you restore, including on your other devices. The data
     travels directly between your device and Google. It is not sent to the author of Smartnote or
     to any other party.
   </p>
@@ -124,8 +130,10 @@
       <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
     </li>
     <li>
-      To delete the backup, open Google Drive settings, choose <em>Manage apps</em>, find Smartnote
-      and choose <em>Delete hidden app data</em>.
+      To delete the backup, first choose another storage, or sign out, in Smartnote on every device
+      that uses Google Drive: otherwise the next connection creates the backup again. Then open
+      Google Drive settings, choose <em>Manage apps</em>, find Smartnote and choose
+      <em>Delete hidden app data</em>.
     </li>
     <li>
       Uninstalling Smartnote and deleting its data folder removes everything it stored on your
@@ -138,7 +146,8 @@
     When you choose Yandex Disk, Smartnote requests access only to its own application folder on
     your Disk. It uses this access, stores the tokens and keeps the data exactly as described above
     for Google. To revoke the access, use the list of applications with access in your Yandex ID
-    settings. To delete the backup, delete the file <code>smartnote.v1.bin</code> in the
+    settings. To delete the backup, first choose another storage, or sign out, in Smartnote on every
+    device that uses Yandex Disk, then delete the file <code>smartnote.v1.bin</code> in the
     Smartnote application folder inside <code>Applications</code> on your Disk.
   </p>
 
