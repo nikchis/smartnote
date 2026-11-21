@@ -30,7 +30,7 @@
 </script>
 
 <form class="card" onsubmit={create}>
-  <p>Create a password for the local storage ({LIMITS.passwordMin}–{LIMITS.passwordMax} characters).</p>
+  <p>Create a password for the local storage ({LIMITS.passwordMin}-{LIMITS.passwordMax} characters).</p>
   <label>
     Password
     <input type="password" bind:value={password} autocomplete="new-password" />

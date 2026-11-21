@@ -4,6 +4,7 @@
   // a key trusted during Test, like a reset, is saved only with OK (spec §6.1).
   import { onMount } from "svelte";
   import exportIcon from "../assets/icons/export.png";
+  import eyeIcon from "../assets/icons/eye.png";
   import gearIcon from "../assets/icons/gear.png";
   import importIcon from "../assets/icons/import.png";
   import StrengthMeter from "../components/StrengthMeter.svelte";
@@ -28,6 +29,8 @@
   const allowed = $derived(settingsButtons(loaded, hasKey, form.kind, phase !== "idle"));
   let busy = $state("");
   let invalid = $state("");
+  /** phraseShown reveals the sync phrase; every opening of the dialog starts hidden. */
+  let phraseShown = $state(false);
   let passphrase: { value: string; retry: boolean } | undefined = $state();
 
   onMount(async () => {
@@ -215,7 +218,12 @@
       <div class="fields">
         <label class="wide">
           Phrase (at least {LIMITS.phraseMin} characters, the same on every device)
-          <input type="password" bind:value={form.syncPhrase} autocomplete="off" aria-invalid={invalid === "sync_phrase" || phraseShort} />
+          <span class="reveal-row">
+            <input type={phraseShown ? "text" : "password"} bind:value={form.syncPhrase} autocomplete="off" aria-invalid={invalid === "sync_phrase" || phraseShort} />
+            <button class="reveal" type="button" aria-pressed={phraseShown} aria-label={phraseShown ? "Hide sync phrase" : "Show sync phrase"} title={phraseShown ? "Hide sync phrase" : "Show sync phrase"} onclick={() => (phraseShown = !phraseShown)}>
+              <img class="mono" src={eyeIcon} alt="" />
+            </button>
+          </span>
         </label>
         <div class="wide"><StrengthMeter phrase={form.syncPhrase} /></div>
       </div>
@@ -324,6 +332,16 @@
   }
   .wide {
     grid-column: 1 / -1;
+  }
+  .reveal-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  /* The eye glyph is black; the dark skin shows it light. */
+  img.mono {
+    filter: invert(1);
   }
   .row {
     display: flex;

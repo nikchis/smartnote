@@ -195,7 +195,7 @@
     </button>
     <span class="spacer"></span>
     <span class="credit">MIT License</span>
-    <span class="credit">© Nikita Chisnikov, 2015–2026</span>
+    <span class="credit">© Nikita Chisnikov, 2015-2026</span>
     <span class="credit">github.com/nikchis/smartnote</span>
     <span class="spacer"></span>
     <button title="Set new password" aria-label="Set new password" onclick={() => (changingPassword = true)}>

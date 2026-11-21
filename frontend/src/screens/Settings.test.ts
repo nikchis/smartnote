@@ -384,3 +384,36 @@ describe("openExternal", () => {
     expect(go.openURL).not.toHaveBeenCalled();
   });
 });
+
+describe("Settings sync phrase reveal", () => {
+  const phraseInput = () => target.querySelector<HTMLInputElement>('section[aria-labelledby="settings-phrase"] input')!;
+  const reveal = () => target.querySelector<HTMLButtonElement>('button[aria-label$="sync phrase"]')!;
+
+  it("sync phrase reveal toggles input type", async () => {
+    await open({ kind: "yandex_disk", syncPhrase: "secret phrase" });
+    expect(reveal().getAttribute("aria-pressed")).toBe("false");
+    expect(reveal().getAttribute("aria-label")).toBe("Show sync phrase");
+    expect(phraseInput().type).toBe("password");
+    expect(phraseInput().nextElementSibling).toBe(reveal());
+
+    reveal().click();
+    await settle();
+    expect(phraseInput().type).toBe("text");
+    expect(reveal().getAttribute("aria-pressed")).toBe("true");
+    expect(reveal().getAttribute("aria-label")).toBe("Hide sync phrase");
+
+    reveal().click();
+    await settle();
+    expect(phraseInput().type).toBe("password");
+  });
+
+  it("sync phrase hidden on reopen", async () => {
+    await open({ kind: "yandex_disk", syncPhrase: "secret phrase" });
+    reveal().click();
+    await settle();
+    expect(phraseInput().type).toBe("text");
+    await unmount(screen);
+    await open({ kind: "yandex_disk", syncPhrase: "secret phrase" });
+    expect(phraseInput().type).toBe("password");
+  });
+});

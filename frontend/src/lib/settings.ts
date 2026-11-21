@@ -19,7 +19,7 @@ export type SignInPhase = "idle" | "browser" | "manual";
 export type SettingsForm = Omit<SettingsDTO, "sshPort" | "dbPort"> & { sshPort: string; dbPort: string };
 
 /**
- * portValue converts a port field: empty is 0 (unset), a port 1–65535 is
+ * portValue converts a port field: empty is 0 (unset), a port 1-65535 is
  * itself, anything else is -1, which Go rejects as invalid. Other numbers
  * would not reach the validation intact: 0 means unset, and a long one fails
  * JSON decoding in Go or turns into null, that is 0.
