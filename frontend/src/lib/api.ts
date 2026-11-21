@@ -4,11 +4,13 @@ export {
   ConnectionService,
   KeyService,
   NotesService,
+  PrefsService,
   SearchService,
   SyncService,
   VaultService,
 } from "../../bindings/github.com/nikchis/smartnote/internal/adapter/wailsui";
 export type {
+  AccountDTO,
   BackupPreviewDTO,
   ConnectDTO,
   CountsDTO,

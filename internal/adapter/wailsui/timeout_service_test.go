@@ -91,7 +91,7 @@ func TestSyncServiceTimeoutByKind(t *testing.T) {
 			syncer, err := usecase.NewSync(usecase.SyncDeps{
 				Local: emptyLocal{}, Settings: store, Remote: remote, Changes: &usecase.ChangeTracker{},
 				IDs: uuid.New, Gate: &usecase.Gate{}, Offer: &usecase.HostKeyOffer{}, Warn: func(error) {},
-				Tokens: store, BuiltinClientID: "builtin",
+				Tokens: store, Builtin: map[domain.StorageKind]usecase.CloudClient{domain.KindYandexDisk: {ID: "builtin"}},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -158,5 +158,21 @@ func TestConnectionServiceTestTimeoutByKind(t *testing.T) {
 
 			wantLeft(t, remote.left, 1, tc.want)
 		})
+	}
+}
+
+func TestTimeoutForCloudKinds(t *testing.T) {
+	cases := []struct {
+		kind domain.StorageKind
+		want time.Duration
+	}{
+		{domain.KindYandexDisk, 600 * time.Second},
+		{domain.KindGoogleDrive, 600 * time.Second},
+		{domain.KindSSHPostgres, 60 * time.Second},
+	}
+	for _, c := range cases {
+		if got := timeoutFor(c.kind); got != c.want {
+			t.Errorf("timeoutFor(%q) = %v, want %v", c.kind, got, c.want)
+		}
 	}
 }

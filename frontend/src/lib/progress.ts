@@ -1,5 +1,7 @@
 // Progress of a transfer with the remote storage, from the sync:progress
-// event (internal/adapter/wailsui/progress.go), as the overlay shows it.
+// event (internal/adapter/wailsui/progress.go), as the overlay shows it, in
+// the current language.
+import { i18n } from "./i18n.svelte";
 
 /** Progress is the ProgressDTO of the event; direction "" ends the operation. */
 export type Progress = { storage: string; direction: string; unit: string; done: number; total: number };
@@ -13,7 +15,7 @@ export type ProgressView = {
    * "Step 2 of 3 · " and its percent is of the whole process.
    */
   detail: string;
-  /** warning is shown under the bar for Yandex Disk, "" otherwise. */
+  /** warning is shown under the bar for a cloud storage, "" otherwise. */
   warning: string;
   /** value is the share of the whole process done, from 0 to 1. */
   value: number;
@@ -28,33 +30,55 @@ export type Step = { index: number; count: number };
 
 const ONLY: Step = { index: 0, count: 1 };
 
-const YANDEX_DISK = "yandex_disk";
-const SLOW = "This can take several minutes on a slow connection. Do not close Smartnote.";
+/**
+ * Activity is what a transfer serves: "restore" is the Restore download the
+ * user started, "backup" a transfer of a Backup process (also the one on
+ * close), "sync" any other, as the reads of Connect.
+ */
+export type Activity = "sync" | "backup" | "restore";
 
-/** megabytes are 10^6 bytes with one decimal. */
+/**
+ * CLOUDS name the cloud storages; the names are the same in every language.
+ * A transfer with a cloud can take minutes: the prototype found Google Drive
+ * no faster than Yandex Disk (spec §13, П7), so both warn about it.
+ */
+const CLOUDS: Record<string, string> = { yandex_disk: "Yandex Disk", google_drive: "Google Drive" };
+
+/** megabytes are 10^6 bytes with one decimal, written as the language writes it. */
 function megabytes(bytes: number): string {
-  return (bytes / 1e6).toFixed(1);
+  return new Intl.NumberFormat(i18n.lang, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false }).format(bytes / 1e6);
 }
 
 /**
- * title says what the user is doing: an upload is a Save, a download is
+ * title says what the user is doing: an upload is a Backup, a download is
  * "Downloading" only for the Restore the user started, else a synchronization.
+ * In Russian the reads of a Backup are named after the Backup too, and the
+ * Backup and the Restore are named by their nouns (spec §16.4, glossary).
  */
-function title(p: Progress, restoring: boolean): string {
-  const place = p.storage === YANDEX_DISK ? "Yandex Disk" : "the server";
-  if (p.direction === "upload") return `Uploading to ${place}…`;
-  return restoring ? `Downloading from ${place}…` : `Synchronizing with ${place}…`;
+function title(p: Progress, activity: Activity): string {
+  const provider = CLOUDS[p.storage];
+  if (p.direction === "upload") return provider ? i18n.t("progress.uploadCloud", { provider }) : i18n.t("progress.uploadServer");
+  switch (activity) {
+    case "restore":
+      return provider ? i18n.t("progress.downloadCloud", { provider }) : i18n.t("progress.downloadServer");
+    case "backup":
+      return provider ? i18n.t("progress.backupReadCloud", { provider }) : i18n.t("progress.backupReadServer");
+    case "sync":
+      return provider ? i18n.t("progress.syncCloud", { provider }) : i18n.t("progress.syncServer");
+  }
 }
 
 function amount(p: Progress): string {
-  return p.unit === "bytes" ? `${megabytes(p.done)} of ${megabytes(p.total)} MB` : `${p.done} of ${p.total} notes`;
+  return p.unit === "bytes"
+    ? i18n.t("progress.megabytes", { done: megabytes(p.done), total: megabytes(p.total) })
+    : i18n.t("progress.notes", { done: p.done, total: p.total });
 }
 
 /**
  * progressView describes p for the overlay; undefined without a transfer.
- * restoring is the Restore download; step is the place of p in its process.
+ * activity is what the transfer serves; step is the place of p in its process.
  */
-export function progressView(p: Progress | undefined, restoring = false, step: Step = ONLY): ProgressView | undefined {
+export function progressView(p: Progress | undefined, activity: Activity = "sync", step: Step = ONLY): ProgressView | undefined {
   if (!p || p.direction === "") return undefined;
   const count = Math.max(step.count, 1);
   const index = Math.min(Math.max(step.index, 0), count - 1);
@@ -64,11 +88,11 @@ export function progressView(p: Progress | undefined, restoring = false, step: S
   const num = index * total + done;
   const den = count * total;
   const finished = index === count - 1 && p.done >= p.total;
-  const text = finished ? "Finishing…" : `${amount(p)} · ${Math.floor((num * 100) / den)}%`;
+  const text = finished ? i18n.t("progress.finishing") : `${amount(p)} · ${Math.floor((num * 100) / den)}%`;
   return {
-    title: title(p, restoring),
-    detail: count > 1 ? `Step ${index + 1} of ${count} · ${text}` : text,
-    warning: p.storage === YANDEX_DISK ? SLOW : "",
+    title: title(p, activity),
+    detail: count > 1 ? i18n.t("progress.step", { index: index + 1, count, text }) : text,
+    warning: Object.hasOwn(CLOUDS, p.storage) ? i18n.t("progress.slow") : "",
     value: num / den,
   };
 }

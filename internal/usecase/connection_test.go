@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -25,7 +26,8 @@ func newTestConnectionResets(t *testing.T, saved domain.ConnectionSettings, srv 
 	return f.c, f.settings, f.gate, f.resets
 }
 
-// connFixture is a Connection over fakes; the Yandex built-in client ID is empty.
+// connFixture is a Connection over fakes; the Yandex built-in client ID is
+// empty, the Google built-in client is googleBuiltin.
 type connFixture struct {
 	c        *Connection
 	settings *fakeSettings
@@ -91,8 +93,10 @@ func newConnFixture(t *testing.T, saved domain.ConnectionSettings, srv *fakeServ
 
 func (f *connFixture) deps() ConnectionDeps {
 	return ConnectionDeps{
-		Settings: f.settings, Store: f.store, Tokens: f.tokens, Remote: f.srv, Auth: f.auth,
+		Settings: f.settings, Store: f.store, Tokens: f.tokens, Remote: f.srv,
+		Auth: map[domain.StorageKind]CloudAuthorizer{domain.KindYandexDisk: f.auth, domain.KindGoogleDrive: f.auth},
 		Gate: f.gate, Offer: &HostKeyOffer{}, Changed: func() { *f.resets++ }, OpenURL: f.browser.open,
+		Builtin: map[domain.StorageKind]CloudClient{domain.KindGoogleDrive: googleBuiltin},
 	}
 }
 
@@ -123,7 +127,7 @@ func TestNewConnectionNil(t *testing.T) {
 	}
 
 	d := f.deps()
-	d.Auth, d.OpenURL, d.BuiltinClientID = nil, nil, ""
+	d.Auth, d.OpenURL, d.Builtin = nil, nil, nil
 
 	if _, err := NewConnection(d); err != nil {
 		t.Errorf("NewConnection without Auth, OpenURL and a built-in client ID: %v", err)
@@ -519,7 +523,7 @@ func yandexSettings(clientID string) domain.ConnectionSettings {
 }
 
 // storedToken is the token saved in local.db for client ID a.
-var storedToken = CloudToken{Provider: "yandex_disk", ClientID: "a", Access: "old", Refresh: "old-r", Account: "stored"}
+var storedToken = CloudToken{Provider: domain.KindYandexDisk, ClientID: "a", Access: "old", Refresh: "old-r", Account: "stored"}
 
 // issued is what the fake authorizer returns; Provider and ClientID are
 // deliberately wrong, Connection must set them.
@@ -559,9 +563,24 @@ func (f *connFixture) signIn(t *testing.T, s domain.ConnectionSettings, tok Clou
 
 // withStored puts storedToken into local.db.
 func (f *connFixture) withStored() *connFixture {
-	f.tokens.tok, f.tokens.has = storedToken, true
+	f.tokens.mu.Lock()
+	f.tokens.putLocked(storedToken)
+	f.tokens.mu.Unlock()
+
 	return f
 }
+
+// withStoredGoogle puts storedGoogle into local.db.
+func (f *connFixture) withStoredGoogle() *connFixture {
+	f.tokens.mu.Lock()
+	f.tokens.putLocked(storedGoogle)
+	f.tokens.mu.Unlock()
+
+	return f
+}
+
+// yandexToken returns the stored Yandex token.
+func (f *connFixture) yandexToken() (CloudToken, bool) { return f.tokens.token(domain.KindYandexDisk) }
 
 // assertNothingSaved fails if the settings or the token reached local.db.
 func (f *connFixture) assertNothingSaved(t *testing.T) {
@@ -571,13 +590,13 @@ func (f *connFixture) assertNothingSaved(t *testing.T) {
 		t.Errorf("SaveConnection calls = %d, want none", len(calls))
 	}
 
-	if len(f.tokens.saves) != 0 {
-		t.Errorf("SaveCloudToken calls = %d, want none", len(f.tokens.saves))
+	if n := f.tokens.saveCount(); n != 0 {
+		t.Errorf("SaveCloudToken calls = %d, want none", n)
 	}
 }
 
-// assertSaved fails unless exactly one SaveConnection happened with change and tok.
-func (f *connFixture) assertSaved(t *testing.T, change TokenChange, tok CloudToken) {
+// assertSaved fails unless exactly one SaveConnection happened, with updates.
+func (f *connFixture) assertSaved(t *testing.T, updates ...TokenUpdate) {
 	t.Helper()
 
 	calls := f.store.saveCalls()
@@ -585,14 +604,30 @@ func (f *connFixture) assertSaved(t *testing.T, change TokenChange, tok CloudTok
 		t.Fatalf("SaveConnection calls = %d, want 1", len(calls))
 	}
 
-	if calls[0].Change != change || calls[0].Token != tok {
-		t.Errorf("SaveConnection change %d, token %+v; want %d, %+v",
-			calls[0].Change, calls[0].Token.Access, change, tok.Access)
+	if !slices.Equal(calls[0].Updates, updates) {
+		t.Errorf("SaveConnection updates %s; want %s", describeUpdates(calls[0].Updates), describeUpdates(updates))
 	}
 }
 
+// describeUpdates shows updates with the access tokens, which are fake here.
+func describeUpdates(updates []TokenUpdate) string {
+	parts := make([]string, 0, len(updates))
+	for _, u := range updates {
+		parts = append(parts, fmt.Sprintf("{%s %d %s %s %s}", u.Provider, u.Change, u.Token.ClientID, u.Token.Access, u.Token.Refresh))
+	}
+
+	return "[" + strings.Join(parts, " ") + "]"
+}
+
+// setOf and deleteOf are the token updates of Save.
+func setOf(tok CloudToken) TokenUpdate {
+	return TokenUpdate{Provider: tok.Provider, Change: TokenSet, Token: tok}
+}
+
+func deleteOf(p domain.StorageKind) TokenUpdate { return TokenUpdate{Provider: p, Change: TokenDelete} }
+
 func pendingOf(tok CloudToken, clientID string) CloudToken {
-	tok.Provider, tok.ClientID = string(domain.KindYandexDisk), clientID
+	tok.Provider, tok.ClientID = domain.KindYandexDisk, clientID
 	return tok
 }
 
@@ -611,7 +646,7 @@ func TestSignInPendingNotSaved(t *testing.T) {
 		t.Errorf("opened URLs = %d, want the login URL once", len(got))
 	}
 
-	if calls := f.auth.beginCalls(); len(calls) != 1 || calls[0].clientID != "a" || calls[0].manual {
+	if calls := f.auth.beginCalls(); len(calls) != 1 || calls[0].client != yandexA || calls[0].manual {
 		t.Errorf("Begin calls = %+v, want one loopback for client a", calls)
 	}
 
@@ -631,7 +666,7 @@ func TestSaveWithPendingToken(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	f.assertSaved(t, TokenSet, pendingOf(issued, "a"))
+	f.assertSaved(t, setOf(pendingOf(issued, "a")))
 
 	if got := f.store.saveCalls()[0].Settings; got != yandexSettings("a").WithDefaults() {
 		t.Errorf("saved settings %+v", got)
@@ -645,8 +680,8 @@ func TestSaveWithPendingToken(t *testing.T) {
 		t.Fatalf("second Save: %v", err)
 	}
 
-	if calls := f.store.saveCalls(); calls[1].Change != TokenKeep {
-		t.Errorf("second Save change = %d, want TokenKeep: the pending token is used up", calls[1].Change)
+	if calls := f.store.saveCalls(); len(calls[1].Updates) != 0 {
+		t.Errorf("second Save updates = %s, want none: the pending token is used up", describeUpdates(calls[1].Updates))
 	}
 }
 
@@ -661,10 +696,10 @@ func TestDiscardPendingOnCancel(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	f.assertSaved(t, TokenKeep, CloudToken{})
+	f.assertSaved(t)
 
-	if f.tokens.tok != storedToken {
-		t.Errorf("stored token changed to %q", f.tokens.tok.Access)
+	if tok, _ := f.yandexToken(); tok != storedToken {
+		t.Errorf("stored token changed to %q", tok.Access)
 	}
 }
 
@@ -702,10 +737,10 @@ func TestSaveReplacesTokenOfOtherClientID(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	f.assertSaved(t, TokenSet, pendingOf(issued, "b"))
+	f.assertSaved(t, setOf(pendingOf(issued, "b")))
 
-	if f.tokens.tok.ClientID != "b" {
-		t.Errorf("stored token is for client %q, want b", f.tokens.tok.ClientID)
+	if tok, _ := f.yandexToken(); tok.ClientID != "b" {
+		t.Errorf("stored token is for client %q, want b", tok.ClientID)
 	}
 }
 
@@ -713,7 +748,7 @@ func TestSignOutThenSave(t *testing.T) {
 	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
 	f.withStored()
 
-	f.c.SignOut()
+	f.c.SignOut(domain.KindYandexDisk)
 
 	if account, ok, err := f.c.Account(context.Background(), yandexSettings("a")); err != nil || ok || account != "" {
 		t.Errorf("Account after SignOut = %q, %v, %v; want none", account, ok, err)
@@ -723,26 +758,47 @@ func TestSignOutThenSave(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	f.assertSaved(t, TokenDelete, CloudToken{})
+	f.assertSaved(t, deleteOf(domain.KindYandexDisk))
 
-	if f.tokens.has {
+	if _, ok := f.yandexToken(); ok {
 		t.Error("the token is still stored")
 	}
+}
+
+// TestSignOutIgnoresNotCloud: the kind of SignOut comes from the form; a
+// kind that is not a cloud changes nothing, so it never reaches a Save.
+func TestSignOutIgnoresNotCloud(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+	f.withStored()
+
+	for _, p := range []domain.StorageKind{domain.KindSSHPostgres, domain.KindNone, "dropbox"} {
+		f.c.SignOut(p)
+	}
+
+	if account, ok, err := f.c.Account(context.Background(), yandexSettings("a")); err != nil || !ok || account == "" {
+		t.Errorf("Account = %q, %v, %v; want the stored Yandex account", account, ok, err)
+	}
+
+	if err := f.c.Save(context.Background(), completeSettings()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	f.assertSaved(t)
 }
 
 func TestSaveAfterSignOutDeletesToken(t *testing.T) {
 	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
 	f.withStored()
 
-	f.c.SignOut()
+	f.c.SignOut(domain.KindYandexDisk)
 
 	if err := f.c.Save(context.Background(), yandexSettings("a")); err != nil {
 		t.Fatalf("Save after Sign out: %v", err)
 	}
 
-	f.assertSaved(t, TokenDelete, CloudToken{})
+	f.assertSaved(t, deleteOf(domain.KindYandexDisk))
 
-	if f.tokens.has {
+	if _, ok := f.yandexToken(); ok {
 		t.Error("the token is still stored")
 	}
 
@@ -754,7 +810,7 @@ func TestSignOutThenDiscard(t *testing.T) {
 	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
 	f.withStored()
 
-	f.c.SignOut()
+	f.c.SignOut(domain.KindYandexDisk)
 	f.c.DiscardPending()
 
 	account, ok, err := f.c.Account(context.Background(), yandexSettings("a"))
@@ -766,9 +822,9 @@ func TestSignOutThenDiscard(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	f.assertSaved(t, TokenKeep, CloudToken{})
+	f.assertSaved(t)
 
-	if f.tokens.tok != storedToken {
+	if tok, _ := f.yandexToken(); tok != storedToken {
 		t.Error("the stored token changed")
 	}
 }
@@ -778,7 +834,7 @@ func TestSignInThenSignOut(t *testing.T) {
 	f.withStored()
 
 	f.signIn(t, yandexSettings("a"), issued)
-	f.c.SignOut()
+	f.c.SignOut(domain.KindYandexDisk)
 
 	if _, err := f.c.Test(context.Background(), yandexSettings("a")); err == nil {
 		t.Error("Test after SignOut: nil error, want sign in required")
@@ -808,10 +864,10 @@ func TestTestDiscardedPendingNeverSaved(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	f.assertSaved(t, TokenKeep, CloudToken{})
+	f.assertSaved(t)
 
-	if len(f.tokens.saves) != 0 || f.tokens.tok != storedToken {
-		t.Errorf("SaveCloudToken calls = %d; stored token changed: %v", len(f.tokens.saves), f.tokens.tok != storedToken)
+	if tok, _ := f.yandexToken(); f.tokens.saveCount() != 0 || tok != storedToken {
+		t.Errorf("SaveCloudToken calls = %d; stored token changed: %v", f.tokens.saveCount(), tok != storedToken)
 	}
 }
 
@@ -969,7 +1025,7 @@ func TestSignInManualSubmitCode(t *testing.T) {
 
 	login := recv(t, f.auth.begun, "BeginManual")
 
-	if calls := f.auth.beginCalls(); len(calls) != 1 || !calls[0].manual || calls[0].clientID != "a" {
+	if calls := f.auth.beginCalls(); len(calls) != 1 || !calls[0].manual || calls[0].client != yandexA {
 		t.Errorf("Begin calls = %+v, want one manual for client a", calls)
 	}
 
@@ -1006,7 +1062,7 @@ func TestSignInManualSubmitCode(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	f.assertSaved(t, TokenSet, pendingOf(issued, "a"))
+	f.assertSaved(t, setOf(pendingOf(issued, "a")))
 }
 
 // TestSubmitCodeRetry: a rejected code keeps the manual login for another try.
@@ -1121,12 +1177,13 @@ func TestSignInOpenURLFails(t *testing.T) {
 	noBrowser := errors.New("no browser")
 	f.browser.err = noBrowser
 
-	if _, err := f.c.SignIn(context.Background(), yandexSettings("a")); !errors.Is(err, noBrowser) {
-		t.Errorf("SignIn = %v, want %v", err, noBrowser)
+	// Any failure to open the URL is a browser that is unavailable; the cause stays for errors.Is.
+	if _, err := f.c.SignIn(context.Background(), yandexSettings("a")); !errors.Is(err, domain.ErrBrowserUnavailable) || !errors.Is(err, noBrowser) {
+		t.Errorf("SignIn = %v, want ErrBrowserUnavailable wrapping %v", err, noBrowser)
 	}
 
-	if err := f.c.SignInManual(context.Background(), yandexSettings("a")); !errors.Is(err, noBrowser) {
-		t.Errorf("SignInManual = %v, want %v", err, noBrowser)
+	if err := f.c.SignInManual(context.Background(), yandexSettings("a")); !errors.Is(err, domain.ErrBrowserUnavailable) || !errors.Is(err, noBrowser) {
+		t.Errorf("SignInManual = %v, want ErrBrowserUnavailable wrapping %v", err, noBrowser)
 	}
 
 	for i, l := range f.auth.logins {
@@ -1187,7 +1244,7 @@ func TestSignInPreconditions(t *testing.T) {
 
 	t.Run("built-in client ID", func(t *testing.T) {
 		d := f.deps()
-		d.BuiltinClientID = "builtin"
+		d.Builtin = map[domain.StorageKind]CloudClient{domain.KindYandexDisk: {Provider: domain.KindYandexDisk, ID: "builtin"}}
 
 		c, err := NewConnection(d)
 		if err != nil {
@@ -1200,7 +1257,7 @@ func TestSignInPreconditions(t *testing.T) {
 
 		recv(t, f.auth.begun, "BeginManual")
 
-		if calls := f.auth.beginCalls(); len(calls) != 1 || calls[0].clientID != "builtin" {
+		if calls := f.auth.beginCalls(); len(calls) != 1 || calls[0].client.ID != "builtin" {
 			t.Errorf("Begin calls = %+v, want the built-in client ID", calls)
 		}
 
@@ -1216,13 +1273,13 @@ func TestSavePostgresUnchanged(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	f.assertSaved(t, TokenKeep, CloudToken{})
+	f.assertSaved(t)
 
 	if got := f.store.saveCalls()[0].Settings; got != completeSettings() {
 		t.Errorf("saved settings %+v", got)
 	}
 
-	if f.tokens.tok != storedToken {
+	if tok, _ := f.yandexToken(); tok != storedToken {
 		t.Error("the stored token changed")
 	}
 }
@@ -1308,15 +1365,15 @@ func TestTestYandexWithoutToken(t *testing.T) {
 		field   string
 		wantErr error
 	}{
-		{name: "no token", store: &fakeTokenStore{}, field: "yandex_account"},
-		{name: "token of another client ID", store: &fakeTokenStore{tok: storedToken, has: true}, field: "yandex_account"},
+		{name: "no token", store: tokensOf(), field: "yandex_account"},
+		{name: "token of another client ID", store: tokensOf(storedToken), field: "yandex_account"},
 		{name: "load error", store: &fakeTokenStore{loadErr: errStore}, wantErr: errStore},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := &fakeServer{}
 			f := newConnFixture(t, domain.ConnectionSettings{}, srv)
-			f.tokens.tok, f.tokens.has, f.tokens.loadErr = tt.store.tok, tt.store.has, tt.store.loadErr
+			f.tokens.toks, f.tokens.loadErr = tt.store.toks, tt.store.loadErr
 
 			_, err := f.c.Test(context.Background(), yandexSettings("b"))
 			if tt.field != "" {
@@ -1361,5 +1418,341 @@ func TestSubmitCodeConcurrentBusy(t *testing.T) {
 
 	if codes := login.submitted(); len(codes) != 1 || codes[0] != "first" {
 		t.Errorf("exchanged codes = %d, want only the first", len(codes))
+	}
+}
+
+// Google Drive clients and tokens of the tests.
+const ownGoogleID = "123-own.apps.googleusercontent.com"
+
+var (
+	googleBuiltin = CloudClient{Provider: domain.KindGoogleDrive, ID: "g-builtin", Secret: "g-builtin-secret"}
+	// storedGoogle is the Google token saved in local.db for the built-in client.
+	storedGoogle = CloudToken{Provider: domain.KindGoogleDrive, ClientID: "g-builtin", Access: "g-old", Refresh: "g-old-r", Account: "g-stored"}
+)
+
+// googleSettings are valid google_drive settings with the own client pair
+// id and secret, both empty for the built-in client.
+func googleSettings(id, secret string) domain.ConnectionSettings {
+	return domain.ConnectionSettings{
+		StorageKind: domain.KindGoogleDrive, GoogleClientID: id, GoogleClientSecret: secret,
+		SyncPhrase: strings.Repeat("p", domain.MinSyncPhraseLen),
+	}
+}
+
+func googlePending(tok CloudToken) CloudToken {
+	tok.Provider, tok.ClientID = domain.KindGoogleDrive, googleBuiltin.ID
+	return tok
+}
+
+// assertAccount fails unless Account of s is account and signedIn.
+func (f *connFixture) assertAccount(t *testing.T, s domain.ConnectionSettings, account string, signedIn bool) {
+	t.Helper()
+
+	got, ok, err := f.c.Account(context.Background(), s)
+	if err != nil || ok != signedIn || got != account {
+		t.Errorf("Account(%s) = %q, %v, %v; want %q, %v", s.Kind(), got, ok, err, account, signedIn)
+	}
+}
+
+func TestSignInGoogleUsesClientOfDraft(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+
+	f.signIn(t, googleSettings(ownGoogleID, "own-secret"), issued)
+
+	want := CloudClient{Provider: domain.KindGoogleDrive, ID: ownGoogleID, Secret: "own-secret"}
+	if calls := f.auth.beginCalls(); len(calls) != 1 || calls[0].client != want {
+		t.Errorf("Begin calls = %+v, want one for the own Google client", calls)
+	}
+
+	if err := f.c.Save(context.Background(), googleSettings(ownGoogleID, "own-secret")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	tok := issued
+	tok.Provider, tok.ClientID = domain.KindGoogleDrive, ownGoogleID
+	f.assertSaved(t, setOf(tok))
+}
+
+func TestSaveGoogleWithoutSignIn(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+	f.withStored()
+
+	assertField(t, f.c.Save(context.Background(), googleSettings("", "")), "google_account")
+	f.assertNothingSaved(t)
+}
+
+func TestSaveAppliesSignOutOfOtherProvider(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+	f.withStored().withStoredGoogle()
+
+	f.c.SignOut(domain.KindGoogleDrive)
+
+	if err := f.c.Save(context.Background(), yandexSettings("a")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	f.assertSaved(t, deleteOf(domain.KindGoogleDrive))
+
+	if _, ok := f.tokens.token(domain.KindGoogleDrive); ok {
+		t.Error("the Google token is still stored")
+	}
+
+	if tok, ok := f.yandexToken(); !ok || tok != storedToken {
+		t.Error("the Yandex token changed")
+	}
+}
+
+func TestSignOutGoogleAndSignInYandexInOneSave(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+	f.withStoredGoogle()
+
+	f.c.SignOut(domain.KindGoogleDrive)
+	f.signIn(t, yandexSettings("a"), issued)
+
+	if err := f.c.Save(context.Background(), yandexSettings("a")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// One SaveConnection call is one transaction of local.db.
+	f.assertSaved(t, deleteOf(domain.KindGoogleDrive), setOf(pendingOf(issued, "a")))
+}
+
+func TestCancelKeepsBothTokens(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+	f.withStored().withStoredGoogle()
+
+	f.c.SignOut(domain.KindGoogleDrive)
+	f.signIn(t, yandexSettings("a"), issued)
+	f.c.DiscardPending()
+
+	f.assertAccount(t, googleSettings("", ""), "g-stored", true)
+	f.assertAccount(t, yandexSettings("a"), "stored", true)
+
+	if err := f.c.Save(context.Background(), yandexSettings("a")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	f.assertSaved(t)
+
+	if tok, _ := f.tokens.token(domain.KindGoogleDrive); tok != storedGoogle {
+		t.Error("the Google token changed")
+	}
+
+	if tok, _ := f.yandexToken(); tok != storedToken {
+		t.Error("the Yandex token changed")
+	}
+}
+
+// refreshed returns tok as a refresh would leave it: a new access token and
+// a new refresh token.
+func refreshed(tok CloudToken, access, refresh string) CloudToken {
+	tok.Access, tok.Refresh = access, refresh
+	return tok
+}
+
+func TestTestRefreshThenSaveKeepsNewToken(t *testing.T) {
+	srv := &fakeServer{}
+	f := newConnFixture(t, domain.ConnectionSettings{}, srv)
+	f.signIn(t, googleSettings("", ""), issued)
+
+	srv.onOpen = func(target RemoteTarget) {
+		if target.Token == nil {
+			t.Error("Test passed no token source")
+			return
+		}
+
+		tok, err := target.Token.Token(context.Background())
+		if err != nil {
+			t.Errorf("Token: %v", err)
+			return
+		}
+
+		if err := target.Token.Update(context.Background(), refreshed(tok, "refreshed", "new-r")); err != nil {
+			t.Errorf("Update: %v", err)
+		}
+	}
+
+	if _, err := f.c.Test(context.Background(), googleSettings("", "")); err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+
+	// The pending source writes nothing to local.db.
+	f.assertNothingSaved(t)
+
+	if err := f.c.Save(context.Background(), googleSettings("", "")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	f.assertSaved(t, setOf(refreshed(googlePending(issued), "refreshed", "new-r")))
+}
+
+func TestRefreshAfterNewSignInIsDropped(t *testing.T) {
+	srv := &fakeServer{}
+	f := newConnFixture(t, domain.ConnectionSettings{}, srv)
+	f.signIn(t, googleSettings("", ""), issued)
+
+	second := CloudToken{Access: "second", Refresh: "second-r", Account: "me2"}
+
+	srv.onOpen = func(target RemoteTarget) {
+		if target.Token == nil {
+			t.Error("Test passed no token source")
+			return
+		}
+
+		tok, err := target.Token.Token(context.Background())
+		if err != nil {
+			t.Errorf("Token: %v", err)
+			return
+		}
+
+		// A new sign-in completes while the old token is being refreshed.
+		f.signIn(t, googleSettings("", ""), second)
+
+		if err := target.Token.Update(context.Background(), refreshed(tok, "refreshed", "new-r")); err != nil {
+			t.Errorf("Update: %v", err)
+		}
+	}
+
+	if _, err := f.c.Test(context.Background(), googleSettings("", "")); err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+
+	if err := f.c.Save(context.Background(), googleSettings("", "")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	f.assertSaved(t, setOf(googlePending(second)))
+}
+
+func TestAccountByDraftKind(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+	f.withStoredGoogle()
+
+	google, yandex := googleSettings("", ""), yandexSettings("a")
+
+	f.assertAccount(t, google, "g-stored", true)
+	f.assertAccount(t, yandex, "", false)
+	f.assertAccount(t, google, "g-stored", true)
+
+	// A pending Yandex sign-in survives Account calls with a Google draft.
+	f.signIn(t, yandex, issued)
+	f.assertAccount(t, google, "g-stored", true)
+	f.assertAccount(t, yandex, "me", true)
+
+	// Sign out of Google does not touch the Yandex account.
+	f.c.SignOut(domain.KindGoogleDrive)
+	f.assertAccount(t, yandex, "me", true)
+	f.assertAccount(t, google, "", false)
+
+	f.c.DiscardPending()
+	f.assertAccount(t, google, "g-stored", true)
+
+	// The stored token is for the built-in client, not for the own one.
+	f.assertAccount(t, googleSettings(ownGoogleID, "own-secret"), "", false)
+
+	// Other kinds have no account.
+	f.assertAccount(t, completeSettings(), "", false)
+}
+
+func TestSignOutOfOtherProviderKeepsSignIn(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+
+	done, login := f.startSignIn(t, yandexSettings("a"))
+
+	f.c.SignOut(domain.KindGoogleDrive)
+
+	if login.isClosed() {
+		t.Error("Sign out of Google ended the Yandex sign-in")
+	}
+
+	send(t, login.result, loginResult{tok: issued}, "the token")
+
+	if r := recv(t, done, "SignIn"); r.err != nil {
+		t.Errorf("SignIn = %v", r.err)
+	}
+}
+
+// TestSaveKeepsPendingTokenOfOtherProvider: OK saves the pending token of
+// every provider whose client in the saved settings is the one it was issued
+// for, so switching between the clouds needs no new sign-in.
+func TestSaveKeepsPendingTokenOfOtherProvider(t *testing.T) {
+	withOwnGoogle := yandexSettings("a")
+	withOwnGoogle.GoogleClientID, withOwnGoogle.GoogleClientSecret = ownGoogleID, "own-secret"
+
+	tests := []struct {
+		name    string
+		after   func(f *connFixture)
+		saved   domain.ConnectionSettings
+		updates []TokenUpdate
+	}{
+		{name: "same client", saved: yandexSettings("a"), updates: []TokenUpdate{setOf(googlePending(issued))}},
+		{name: "own client in the saved settings", saved: withOwnGoogle},
+		{name: "signed out after the sign-in", after: func(f *connFixture) { f.c.SignOut(domain.KindGoogleDrive) },
+			saved: yandexSettings("a"), updates: []TokenUpdate{deleteOf(domain.KindGoogleDrive)}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+			f.withStored()
+
+			// Sign in to Google with the built-in client, then switch the draft to Yandex.
+			f.signIn(t, googleSettings("", ""), issued)
+
+			if tc.after != nil {
+				tc.after(f)
+			}
+
+			if err := f.c.Save(context.Background(), tc.saved); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+
+			f.assertSaved(t, tc.updates...)
+		})
+	}
+}
+
+// TestGoogleWithoutBuiltinClient: a build without the built-in Google client
+// (spec §1, ред. 8) refuses Sign in, Test and Save for Google settings
+// without an own client with a ValidationError for google_client_id that
+// tells the user to set an own client; an own client still works.
+func TestGoogleWithoutBuiltinClient(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+
+	d := f.deps()
+	d.Builtin = nil
+
+	c, err := NewConnection(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertNoBuiltin := func(t *testing.T, err error) {
+		t.Helper()
+
+		ve, ok := errors.AsType[*domain.ValidationError](err)
+		if !ok || ve.Field != "google_client_id" || ve.Reason != noBuiltinGoogleReason {
+			t.Errorf("err = %v, want a ValidationError for google_client_id: %s", err, noBuiltinGoogleReason)
+		}
+	}
+
+	_, err = c.SignIn(context.Background(), googleSettings("", ""))
+	assertNoBuiltin(t, err)
+
+	_, err = c.Test(context.Background(), googleSettings("", ""))
+	assertNoBuiltin(t, err)
+
+	assertNoBuiltin(t, c.Save(context.Background(), googleSettings("", "")))
+
+	if calls := f.auth.beginCalls(); len(calls) != 0 {
+		t.Errorf("Begin calls = %+v, want none", calls)
+	}
+
+	f.c = c
+	f.signIn(t, googleSettings(ownGoogleID, "own-secret"), issued)
+
+	want := CloudClient{Provider: domain.KindGoogleDrive, ID: ownGoogleID, Secret: "own-secret"}
+	if calls := f.auth.beginCalls(); len(calls) != 1 || calls[0].client != want {
+		t.Errorf("Begin calls = %+v, want one for the own Google client", calls)
 	}
 }

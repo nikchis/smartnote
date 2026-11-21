@@ -2,7 +2,8 @@
 // and the jump to a search hit (search spec §9.2, §9.3).
 import type { NoteDTO, SearchHitDTO, VersionDTO } from "./api";
 import type { Dialogs } from "./dialogs.svelte";
-import { parseError } from "./errors";
+import { errorMsg } from "./errors";
+import { msg, type Key, type Msg } from "./i18n.svelte";
 import { textMatches } from "./jump";
 import { buttons, hasDraft, type Buttons, type EditorState } from "./rules";
 
@@ -32,7 +33,7 @@ export type Jump = "selected" | "unselected" | "cancelled" | "gone";
 
 // Cancel has the focus: the question comes up on Enter in the search field,
 // and a held or repeated Enter must not discard the draft.
-const DISCARD = { message: "Discard unsaved changes in the editor?", labels: { yes: "Discard", no: "Cancel", primary: "no" } } as const;
+const DISCARD = { message: msg("editor.discard"), labels: { yes: "editor.discardYes", no: "common.cancel", primary: "no" } } as const;
 
 export class Editor {
   notes: NoteDTO[] = $state([]);
@@ -97,7 +98,7 @@ export class Editor {
         this.clear();
       }
     } catch (e) {
-      await this.dialogs.error(parseError(e).message);
+      await this.dialogs.error(errorMsg(e));
     } finally {
       this.loading = false;
     }
@@ -190,18 +191,18 @@ export class Editor {
     await this.exclusive(async () => {
       const note = creating ? await this.api.Create(this.name, this.info) : await this.api.Save(id!, this.name, this.info);
       await this.reload(note);
-    }, creating ? "Note has been successfully added." : "Note has been successfully updated.");
+    }, creating ? "editor.added" : "editor.updated");
   }
 
   async remove(): Promise<void> {
     const note = this.selected;
     if (!note || !this.buttons.delete) return;
-    if (!(await this.dialogs.ask("Are you sure you want to remove this note?"))) return;
+    if (!(await this.dialogs.ask(msg("editor.removeConfirm")))) return;
     await this.exclusive(async () => {
       await this.api.Delete(note.id);
       this.selected = undefined;
       await this.load();
-    }, "Note has been successfully removed.");
+    }, "editor.removed");
   }
 
   /** useVersion puts an old text into the editor; only Apply saves it. */
@@ -233,18 +234,18 @@ export class Editor {
    * exclusive runs call with the editor locked, so that nothing typed or
    * selected meanwhile is replaced by the answer, then shows done or the error.
    */
-  private async exclusive(call: () => Promise<void>, done: string): Promise<void> {
+  private async exclusive(call: () => Promise<void>, done: Key): Promise<void> {
     if (this.blocked) return;
     this.busy = true;
-    let message: string | undefined;
+    let failure: Msg | undefined;
     try {
       await call();
     } catch (e) {
-      message = parseError(e).message;
+      failure = errorMsg(e);
     } finally {
       this.busy = false;
     }
-    await (message === undefined ? this.dialogs.info(done) : this.dialogs.error(message));
+    await (failure === undefined ? this.dialogs.info(msg(done)) : this.dialogs.error(failure));
   }
 
   private async reload(saved: NoteDTO): Promise<void> {
@@ -262,7 +263,7 @@ export class Editor {
       const versions = await this.api.Versions(note.id);
       if (this.selected?.id === note.id) this.versions = versions ?? [];
     } catch (e) {
-      await this.dialogs.error(parseError(e).message);
+      await this.dialogs.error(errorMsg(e));
     }
   }
 

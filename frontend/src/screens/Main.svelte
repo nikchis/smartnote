@@ -9,11 +9,15 @@
   import removeIcon from "../assets/icons/remove.png";
   import restoreIcon from "../assets/icons/restore.png";
   import saveIcon from "../assets/icons/save.png";
+  import shieldIcon from "../assets/icons/shield.png";
   import { Events } from "@wailsio/runtime";
+  import LanguageToggle from "../components/LanguageToggle.svelte";
+  import PrivacyPolicy from "../components/PrivacyPolicy.svelte";
   import SearchBar from "../components/SearchBar.svelte";
   import { NotesService, SearchService, type SearchHitDTO, type StateDTO } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
   import { Editor, type Place } from "../lib/editor.svelte";
+  import { i18n } from "../lib/i18n.svelte";
   import { scrollTopFor } from "../lib/jump";
   import { isFindShortcut, SearchBox } from "../lib/search.svelte";
   import { LIMITS, utf16Len } from "../lib/text";
@@ -32,6 +36,7 @@
   const b = $derived(editor.buttons);
   let showHistory = $state(false);
   let changingPassword = $state(false);
+  let privacyOpen = $state(false);
   let list: HTMLElement | undefined = $state();
   let searchBar: ReturnType<typeof SearchBar> | undefined = $state();
   let nameField: HTMLInputElement | undefined = $state();
@@ -128,7 +133,7 @@
     void editor.step(delta).then(focusSelected);
   }
 
-  const updated = $derived(editor.mode === "edit" && editor.selected ? new Date(editor.selected.updated).toLocaleString() : "");
+  const updated = $derived(editor.mode === "edit" && editor.selected ? new Date(editor.selected.updated).toLocaleString(i18n.lang) : "");
 </script>
 
 <svelte:window onkeydown={onWindowKey} />
@@ -136,19 +141,26 @@
 <div class="main">
   <div class="find">
     <div class="notes">
-      <button title="Add a new note" onclick={() => void editor.startNew()} disabled={!b.new}>
-        <img src={newIcon} alt="" />New
+      <button title={i18n.t("main.newTitle")} onclick={() => void editor.startNew()} disabled={!b.new}>
+        <img src={newIcon} alt="" />{i18n.t("main.new")}
       </button>
-      <button title="Remove current note" onclick={() => editor.remove()} disabled={!b.delete}>
-        <img src={removeIcon} alt="" />Remove
+      <button title={i18n.t("main.removeTitle")} onclick={() => editor.remove()} disabled={!b.delete}>
+        <img src={removeIcon} alt="" />{i18n.t("main.remove")}
       </button>
     </div>
     <SearchBar bind:this={searchBar} box={search} {nameOf} onOpen={(hit) => void openHit(hit)} />
+    <!-- The buttons at the right end of the row, the language first (spec §16.4). -->
+    <div class="tools">
+      <LanguageToggle />
+      <button type="button" title={i18n.t("privacy.title")} aria-label={i18n.t("privacy.title")} onclick={() => (privacyOpen = true)}>
+        <img class="mono" src={shieldIcon} alt="" />
+      </button>
+    </div>
   </div>
   <div class="content">
     <div class="list" bind:this={list}>
-      <div class="head">Name</div>
-      <ul aria-label="Notes">
+      <div class="head">{i18n.t("main.listHead")}</div>
+      <ul aria-label={i18n.t("main.notes")}>
         {#each editor.notes as note (note.id)}
           {@const active = editor.selected?.id === note.id}
           <li>
@@ -163,45 +175,44 @@
     <section class="editor">
       <div class="fields">
         <label class="name">
-          Name:
+          {i18n.t("main.name")}
           <input bind:this={nameField} bind:value={editor.name} maxlength={LIMITS.name} disabled={editor.locked} />
         </label>
         <label class="muted">
-          Updated:
+          {i18n.t("main.updated")}
           <input class="updated" value={updated} readonly tabindex="-1" />
         </label>
         <label class="muted">
-          Length:
+          {i18n.t("main.length")}
           <input class="length" value="{utf16Len(editor.info)}/{LIMITS.info}" readonly tabindex="-1" />
         </label>
         <button class="history" onclick={() => (showHistory = true)} disabled={!b.history}>
-          <img src={historyIcon} alt="" />History
+          <img src={historyIcon} alt="" />{i18n.t("history.title")}
         </button>
       </div>
-      <textarea bind:this={textField} bind:value={editor.info} maxlength={LIMITS.info} disabled={editor.locked} aria-label="Text"></textarea>
+      <textarea bind:this={textField} bind:value={editor.info} maxlength={LIMITS.info} disabled={editor.locked} aria-label={i18n.t("main.text")}></textarea>
       <div class="actions">
-        <button class="apply" type="submit" onclick={() => editor.apply()} disabled={!b.apply}>Apply changes</button>
-        <button class="cancel" onclick={() => editor.cancel()} disabled={!b.cancel}>Cancel changes</button>
+        <button class="apply" type="submit" onclick={() => editor.apply()} disabled={!b.apply}>{i18n.t("main.apply")}</button>
+        <button class="cancel" onclick={() => editor.cancel()} disabled={!b.cancel}>{i18n.t("main.cancel")}</button>
       </div>
     </section>
   </div>
 
   <footer class="bar">
-    <button title="Back up data to remote storage" onclick={onBackup} disabled={!sync.connected || !sync.dirty || sync.busy}>
-      <img class="mono" src={saveIcon} alt="" />Backup
+    <button title={i18n.t("main.backupTitle")} onclick={onBackup} disabled={!sync.connected || !sync.dirty || sync.busy}>
+      <img class="mono" src={saveIcon} alt="" />{i18n.t("main.backup")}
     </button>
-    <button title="Restore data from remote storage" onclick={onRestore} disabled={!sync.connected || !sync.restoreAvailable || sync.busy}>
-      <img class="mono" src={restoreIcon} alt="" />Restore
+    <button title={i18n.t("main.restoreTitle")} onclick={onRestore} disabled={!sync.connected || !sync.restoreAvailable || sync.busy}>
+      <img class="mono" src={restoreIcon} alt="" />{i18n.t("main.restore")}
     </button>
     <span class="spacer"></span>
-    <span class="credit">MIT License</span>
-    <span class="credit">© Nikita Chisnikov, 2015–2026</span>
-    <span class="credit">github.com/nikchis/smartnote</span>
+    <span class="credit">{i18n.t("main.license")}</span>
+    <span class="credit">© Nikita Chisnikov, 2015-2026</span>
     <span class="spacer"></span>
-    <button title="Set new password" aria-label="Set new password" onclick={() => (changingPassword = true)}>
+    <button title={i18n.t("main.password")} aria-label={i18n.t("main.password")} onclick={() => (changingPassword = true)}>
       <img src={passwordIcon} alt="" />
     </button>
-    <button title="Connection settings" onclick={onSettings}>Settings</button>
+    <button title={i18n.t("main.settingsTitle")} onclick={onSettings}>{i18n.t("main.settings")}</button>
   </footer>
 </div>
 
@@ -220,6 +231,10 @@
   <ChangePassword onClose={() => (changingPassword = false)} />
 {/if}
 
+{#if privacyOpen}
+  <PrivacyPolicy onClose={() => (privacyOpen = false)} />
+{/if}
+
 <style>
   .main {
     width: 100%;
@@ -232,7 +247,8 @@
     grid-template-rows: auto 1fr auto;
   }
   /* The top row shares the columns of the list and the editor below it:
-     New and Remove over the list, the search over the editor. */
+     New and Remove over the list, the search over the editor; the buttons
+     at the right end take a column of their own. */
   .find,
   .content {
     display: grid;
@@ -240,8 +256,13 @@
     gap: 0.75rem;
   }
   .find {
+    grid-template-columns: 13.6rem 1fr auto;
     align-items: stretch;
     padding: 0.75rem 0.75rem 0;
+  }
+  .tools {
+    display: flex;
+    gap: 0.5rem;
   }
   .notes {
     display: grid;
@@ -325,10 +346,13 @@
     padding: 0.6rem;
     border: 1px solid var(--border);
   }
+  /* The title never collapses: when the width is short, the date, the length and
+     History wrap to a second line instead of squeezing it. */
   .fields {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.5rem 0.75rem;
   }
   .fields label {
     flex-direction: row;
@@ -337,13 +361,13 @@
     white-space: nowrap;
   }
   .fields .name {
-    flex: 1;
-    min-width: 0;
+    flex: 1 1 18rem;
+    min-width: 16rem;
     color: inherit;
   }
   .name input {
     flex: 1;
-    min-width: 0;
+    min-width: 10rem;
   }
   .updated,
   .length {
@@ -351,7 +375,7 @@
     text-align: center;
   }
   .updated {
-    width: 11rem;
+    width: 10rem;
   }
   .length {
     width: 6rem;
@@ -384,6 +408,7 @@
   }
   .credit {
     padding: 0 0.75rem;
+    white-space: nowrap;
     color: var(--muted);
   }
   .credit + .credit {

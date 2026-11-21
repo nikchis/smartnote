@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseError } from "./errors";
+import { errorMsg, parseError } from "./errors";
 // The exact bytes Go produces (TestUIErrorGolden in internal/adapter/wailsui).
 import golden from "./testdata/uierror-host-key-unknown.json?raw";
 
 describe("parseError", () => {
   it("reads the UIError JSON of a rejected binding call", () => {
     const e = parseError(new Error(golden));
-    expect(e).toEqual({ code: "host_key_unknown", message: "m", fingerprint: "SHA256:x", address: "example.org:22" });
+    expect(e).toEqual({ code: "host_key_unknown", message: "m", messages: { en: "m", ru: "м" }, fingerprint: "SHA256:x", address: "example.org:22" });
   });
 
   it("treats a plain string as internal", () => {
@@ -22,7 +22,18 @@ describe("parseError", () => {
   });
 
   it("drops fields of the wrong type", () => {
-    const e = parseError(new Error('{"code":"validation","message":"m","field":7}'));
+    const e = parseError(new Error('{"code":"validation","message":"m","field":7,"messages":{"en":"m"}}'));
     expect(e).toEqual({ code: "validation", message: "m" });
+  });
+});
+
+describe("errorMsg", () => {
+  it("keeps both languages of a Go error", () => {
+    expect(errorMsg(new Error(golden))).toEqual({ messages: { en: "m", ru: "м" } });
+  });
+
+  it("shows the message as it is without a translation", () => {
+    expect(errorMsg(new Error('{"code":"internal","message":"m"}'))).toEqual({ raw: "m" });
+    expect(errorMsg(new Error("network down"))).toEqual({ raw: "network down" });
   });
 });

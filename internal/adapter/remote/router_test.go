@@ -28,7 +28,7 @@ func TestRouterDispatch(t *testing.T) {
 		{name: "unknown", kind: "future", wantSame: domain.ErrUnsupportedFormat},
 	}
 
-	r := NewRouter(tagConnector{"ssh"}, tagConnector{"yandex"})
+	r := NewRouter(tagConnector{"ssh"}, tagConnector{"yandex"}, tagConnector{"google"})
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -49,5 +49,16 @@ func TestRouterDispatch(t *testing.T) {
 				t.Errorf("routed to %q, want %q", err, tc.wantTag)
 			}
 		})
+	}
+}
+
+// TestRouterGoogleDrive: the settings of Google Drive go to the third
+// connector.
+func TestRouterGoogleDrive(t *testing.T) {
+	r := NewRouter(tagConnector{"ssh"}, tagConnector{"yandex"}, tagConnector{"google"})
+
+	_, err := r.Open(t.Context(), usecase.RemoteTarget{Settings: domain.ConnectionSettings{StorageKind: domain.KindGoogleDrive}}, usecase.OpenCheck)
+	if err == nil || err.Error() != "google" {
+		t.Errorf("Open(google_drive) = %v, want the Google Drive connector", err)
 	}
 }

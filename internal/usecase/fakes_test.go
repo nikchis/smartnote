@@ -393,6 +393,9 @@ type fakeServer struct {
 	backupBlocks    bool   // Backup waits for the context to end
 	afterBackup     func() // runs after a successful Backup, before it returns
 	closeErr        error  // returned by Close
+	// onOpen, when set, runs at the start of Open with the target, as a
+	// store would use its token source.
+	onOpen func(t RemoteTarget)
 
 	opens    []OpenMode
 	settings []domain.ConnectionSettings
@@ -404,6 +407,10 @@ type fakeServer struct {
 var errAckLost = errors.New("connection lost after COMMIT")
 
 func (f *fakeServer) Open(_ context.Context, t RemoteTarget, mode OpenMode) (RemoteSession, error) {
+	if f.onOpen != nil {
+		f.onOpen(t)
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -850,12 +857,11 @@ func (f *fakeEmbeddingStore) putCalls() []embeddingPut {
 // saveConnectionCall is one ConnectionStore.SaveConnection call.
 type saveConnectionCall struct {
 	Settings domain.ConnectionSettings
-	Change   TokenChange
-	Token    CloudToken
+	Updates  []TokenUpdate
 }
 
 // fakeConnectionStore saves the settings into settings and applies the token
-// change to tokens, as one transaction of local.db would.
+// updates to tokens, as one transaction of local.db would.
 type fakeConnectionStore struct {
 	settings *fakeSettings
 	tokens   *fakeTokenStore
@@ -864,18 +870,19 @@ type fakeConnectionStore struct {
 	calls []saveConnectionCall
 }
 
-func (f *fakeConnectionStore) SaveConnection(ctx context.Context, s domain.ConnectionSettings, change TokenChange, t CloudToken) error {
+func (f *fakeConnectionStore) SaveConnection(ctx context.Context, s domain.ConnectionSettings, updates []TokenUpdate) error {
 	f.mu.Lock()
-	f.calls = append(f.calls, saveConnectionCall{Settings: s, Change: change, Token: t})
+	f.calls = append(f.calls, saveConnectionCall{Settings: s, Updates: slices.Clone(updates)})
 	f.mu.Unlock()
 
 	f.tokens.mu.Lock()
-	switch change {
-	case TokenKeep:
-	case TokenSet:
-		f.tokens.tok, f.tokens.has = t, true
-	case TokenDelete:
-		f.tokens.tok, f.tokens.has = CloudToken{}, false
+	for _, u := range updates {
+		switch u.Change {
+		case TokenSet:
+			f.tokens.putLocked(u.Token)
+		case TokenDelete:
+			delete(f.tokens.toks, u.Provider)
+		}
 	}
 	f.tokens.mu.Unlock()
 
@@ -977,8 +984,8 @@ func (l *fakeLogin) submitted() []string {
 
 // beginCall is one CloudAuthorizer.Begin* call.
 type beginCall struct {
-	clientID string
-	manual   bool
+	client CloudClient
+	manual bool
 	// prevClosed reports whether every earlier login was closed at the call.
 	prevClosed bool
 }
@@ -998,15 +1005,15 @@ func newFakeAuthorizer() *fakeAuthorizer {
 	return &fakeAuthorizer{begun: make(chan *fakeLogin, 8)}
 }
 
-func (a *fakeAuthorizer) BeginLoopback(_ context.Context, clientID string) (CloudLogin, error) {
-	return a.begin(clientID, false)
+func (a *fakeAuthorizer) BeginLoopback(_ context.Context, c CloudClient) (CloudLogin, error) {
+	return a.begin(c, false)
 }
 
-func (a *fakeAuthorizer) BeginManual(_ context.Context, clientID string) (CloudLogin, error) {
-	return a.begin(clientID, true)
+func (a *fakeAuthorizer) BeginManual(_ context.Context, c CloudClient) (CloudLogin, error) {
+	return a.begin(c, true)
 }
 
-func (a *fakeAuthorizer) begin(clientID string, manual bool) (CloudLogin, error) {
+func (a *fakeAuthorizer) begin(c CloudClient, manual bool) (CloudLogin, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -1018,7 +1025,7 @@ func (a *fakeAuthorizer) begin(clientID string, manual bool) (CloudLogin, error)
 		}
 	}
 
-	a.calls = append(a.calls, beginCall{clientID: clientID, manual: manual, prevClosed: prevClosed})
+	a.calls = append(a.calls, beginCall{client: c, manual: manual, prevClosed: prevClosed})
 	if a.beginErr != nil {
 		return nil, a.beginErr
 	}

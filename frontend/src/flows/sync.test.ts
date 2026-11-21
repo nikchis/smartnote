@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Dialogs } from "../lib/dialogs.svelte";
+import { i18n, type Msg } from "../lib/i18n.svelte";
 import { backupFlow, closeFlow, connectFlow, restoreFlow, type BackupPreview, type Counts, type RestorePreview, type SyncApi, type SyncState } from "./sync";
 
 const zero: Counts = { added: 0, updated: 0, deleted: 0 };
@@ -56,21 +57,21 @@ class FakeDialogs implements Dialogs {
   log: string[] = [];
   /** answers for ask and choose in order; true is Yes, false is No. */
   answers: (boolean | "cancel")[] = [];
-  async info(msg: string) {
-    this.log.push(`info: ${msg}`);
+  async info(msg: Msg) {
+    this.log.push(`info: ${i18n.text(msg)}`);
   }
-  async warning(msg: string) {
-    this.log.push(`warning: ${msg}`);
+  async warning(msg: Msg) {
+    this.log.push(`warning: ${i18n.text(msg)}`);
   }
-  async error(msg: string) {
-    this.log.push(`error: ${msg}`);
+  async error(msg: Msg) {
+    this.log.push(`error: ${i18n.text(msg)}`);
   }
-  async ask(msg: string) {
-    this.log.push(`ask: ${msg}`);
+  async ask(msg: Msg) {
+    this.log.push(`ask: ${i18n.text(msg)}`);
     return this.answers.shift() === true;
   }
-  async choose(msg: string) {
-    this.log.push(`ask: ${msg}`);
+  async choose(msg: Msg) {
+    this.log.push(`ask: ${i18n.text(msg)}`);
     const a = this.answers.shift() ?? false;
     return a === "cancel" ? "cancel" : a ? "yes" : "no";
   }

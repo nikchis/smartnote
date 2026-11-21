@@ -330,6 +330,33 @@ func TestCreateRaceWrongPhrase(t *testing.T) {
 	}
 }
 
+// TestCreateRaceContainerGone: the creation gives way to another device,
+// but the re-read finds no container, as when both creating devices
+// yielded. The open fails with ErrRemoteChanged after its one write, and
+// the next open creates the container as usual.
+func TestCreateRaceContainerGone(t *testing.T) {
+	f := newFakeStore()
+	f.writeHook = func(n int, _, _ string) error {
+		if n == 1 {
+			return ErrVersionMismatch
+		}
+
+		return nil
+	}
+
+	if _, err := openOver(f, testPhrase, usecase.OpenCreate); !errors.Is(err, domain.ErrRemoteChanged) {
+		t.Fatalf("err = %v, want ErrRemoteChanged", err)
+	}
+
+	if f.writes != 1 || f.reads != 2 {
+		t.Errorf("writes = %d, reads = %d; want 1 write and 2 reads", f.writes, f.reads)
+	}
+
+	if s := mustOpenOver(t, f, usecase.OpenCreate); !s.Created() {
+		t.Error("the next open did not create the container")
+	}
+}
+
 func TestDamagedContainer(t *testing.T) {
 	f := newFakeStore()
 	f.objects[ContainerName] = []byte("garbage")

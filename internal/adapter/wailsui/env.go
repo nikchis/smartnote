@@ -6,14 +6,15 @@ import (
 	"time"
 
 	"github.com/nikchis/smartnote/internal/domain"
+	"github.com/nikchis/smartnote/internal/i18n"
 )
 
 const (
 	// operationTimeout bounds one operation with the server (spec §6.1).
 	operationTimeout = 60 * time.Second
-	// yandexOperationTimeout bounds one operation with Yandex Disk: uploads
+	// cloudOperationTimeout bounds one operation with a cloud storage: uploads
 	// can run at about 120 KB/s (spec §14).
-	yandexOperationTimeout = 600 * time.Second
+	cloudOperationTimeout = 600 * time.Second
 )
 
 // Env is what every service needs. Ctx is the application's root context:
@@ -25,12 +26,26 @@ type Env struct {
 	// SavedKind returns the kind of the saved connection settings; nil means
 	// the default timeout for every operation.
 	SavedKind func(context.Context) (domain.StorageKind, error)
+
+	// Lang is the current language of the interface, which titles the file
+	// dialogs and which PrefsService sets; nil means English.
+	Lang *i18n.Current
+}
+
+// text is the text of k in the current language.
+func (e Env) text(k i18n.Key) string {
+	l := i18n.EN
+	if e.Lang != nil {
+		l = e.Lang.Get()
+	}
+
+	return i18n.T(l, k)
 }
 
 // timeoutFor returns the limit of one operation with the storage of kind.
 func timeoutFor(kind domain.StorageKind) time.Duration {
-	if kind == domain.KindYandexDisk {
-		return yandexOperationTimeout
+	if domain.IsCloud(kind) {
+		return cloudOperationTimeout
 	}
 
 	return operationTimeout

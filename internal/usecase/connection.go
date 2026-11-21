@@ -3,6 +3,8 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 
 	"github.com/nikchis/smartnote/internal/domain"
@@ -20,18 +22,19 @@ type TestResult struct {
 // operation with the server; Load, Account and the sign-in methods do not.
 //
 // A sign-in gives a pending token that lives only in memory: Test uses it,
-// and only Save writes it to local.db. At most one sign-in is active; it runs
+// and only Save writes it to local.db. The pending token and a Sign out are
+// kept for each cloud provider apart. At most one sign-in is active; it runs
 // in the caller's goroutine, and Connection starts none of its own.
 type Connection struct {
 	settings SettingsStore
 	store    ConnectionStore
 	tokens   CloudTokenStore
 	remote   RemoteConnector
-	auth     CloudAuthorizer
+	auth     map[domain.StorageKind]CloudAuthorizer
 	gate     *Gate
 	offer    *HostKeyOffer
 	changed  func()
-	builtin  string
+	builtin  map[domain.StorageKind]CloudClient
 	openURL  func(string) error
 
 	// beginMu serializes ending the previous login and starting the next, so
@@ -39,19 +42,26 @@ type Connection struct {
 	beginMu sync.Mutex
 
 	mu      sync.Mutex
-	current *signIn     // the active sign-in, or nil
+	current *signIn // the active sign-in, or nil
+	// signIns is the sign-in state of each provider since the settings form
+	// opened; a missing entry has neither a pending token nor a Sign out.
+	signIns map[domain.StorageKind]*signInState
+	gen     uint64 // changes with every pending token and Sign out
+}
+
+// signInState is the sign-in state of one provider, guarded by Connection.mu.
+type signInState struct {
 	pending *CloudToken // replaced, never changed in place
 	signOut bool        // the saved token is to be deleted by Save
-	gen     uint64      // changes with pending and signOut
 }
 
 // signIn is one active sign-in. Its fields are guarded by Connection.mu while
 // it is current; once detached they are only read.
 type signIn struct {
-	clientID string
-	manual   bool
-	login    CloudLogin // nil until Begin* returns
-	cancel   context.CancelFunc
+	client CloudClient
+	manual bool
+	login  CloudLogin // nil until Begin* returns
+	cancel context.CancelFunc
 	// exchanging is set while SubmitCode exchanges a code.
 	exchanging bool
 }
@@ -72,22 +82,23 @@ func (s *signIn) stop() {
 }
 
 // ConnectionDeps are the dependencies of Connection. Auth, OpenURL and
-// BuiltinClientID are optional: without Auth signing in returns
-// domain.ErrNotConnected, without OpenURL the browser is not opened.
+// Builtin are optional: without the Auth of a provider signing in to it
+// returns domain.ErrNotConnected, without OpenURL the browser is not opened,
+// without the Builtin client of a provider an own client is required.
 type ConnectionDeps struct {
 	Settings SettingsStore
 	Store    ConnectionStore
 	Tokens   CloudTokenStore
 	Remote   RemoteConnector
-	Auth     CloudAuthorizer
+	Auth     map[domain.StorageKind]CloudAuthorizer
 	// Gate and Offer are shared with Sync.
 	Gate  *Gate
 	Offer *HostKeyOffer
 	// Changed runs after the settings or the trusted key are saved (main
 	// connects it to Sync.ResetConnection).
-	Changed         func()
-	BuiltinClientID string
-	OpenURL         func(url string) error
+	Changed func()
+	Builtin map[domain.StorageKind]CloudClient
+	OpenURL func(url string) error
 }
 
 // NewConnection returns a Connection over d.
@@ -111,7 +122,7 @@ func NewConnection(d ConnectionDeps) (*Connection, error) {
 
 	return &Connection{
 		settings: d.Settings, store: d.Store, tokens: d.Tokens, remote: d.Remote, auth: d.Auth,
-		gate: d.Gate, offer: d.Offer, changed: d.Changed, builtin: d.BuiltinClientID, openURL: d.OpenURL,
+		gate: d.Gate, offer: d.Offer, changed: d.Changed, builtin: d.Builtin, openURL: d.OpenURL,
 	}, nil
 }
 
@@ -127,9 +138,11 @@ func (c *Connection) Load(ctx context.Context) (domain.ConnectionSettings, error
 
 // Test opens a session with s in OpenCheck mode and closes it, without saving
 // s or creating the schema. Empty settings return domain.ErrNotConnected. An
-// unknown server key is remembered for TrustOfferedKey. A Yandex Disk test
-// uses the pending token, or else the saved one; without either it is
-// refused before Open (ValidationError for "yandex_account").
+// unknown server key is remembered for TrustOfferedKey. A cloud test uses the
+// pending token of its provider, or else the saved one; without either it is
+// refused before Open (ValidationError for "yandex_account" or
+// "google_account"). A refresh of the pending token during the test updates
+// it for Save; a refresh of the saved one writes local.db.
 func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res TestResult, err error) {
 	leave, err := c.gate.Enter()
 	if err != nil {
@@ -147,7 +160,7 @@ func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res
 	}
 
 	target := RemoteTarget{Settings: s}
-	if s.Kind() == domain.KindYandexDisk {
+	if domain.IsCloud(s.Kind()) {
 		if target.Token, err = c.testTokenSource(ctx, s); err != nil {
 			return TestResult{}, err
 		}
@@ -164,11 +177,13 @@ func (c *Connection) Test(ctx context.Context, s domain.ConnectionSettings) (res
 }
 
 // Save validates s and saves it with defaults, together with the token
-// change: a pending token is saved, Sign out deletes the saved one. A trusted
-// key bound to another address than s's is dropped, so the user is asked
-// again. Empty settings are allowed and switch the app to local-only work.
-// Save ends an active sign-in. Yandex Disk settings without a token for their
-// client ID are refused with a ValidationError for "yandex_account".
+// updates, in one transaction: the pending token of s's provider is saved,
+// and a Sign out of any provider deletes its saved token, whatever the kind
+// of s. A trusted key bound to another address than s's is dropped, so the
+// user is asked again. Empty settings are allowed and switch the app to
+// local-only work. Save ends an active sign-in. Cloud settings without a
+// token for their client ID are refused with a ValidationError for
+// "yandex_account" or "google_account".
 func (c *Connection) Save(ctx context.Context, s domain.ConnectionSettings) error {
 	s = s.WithDefaults()
 	if err := s.Validate(); err != nil {
@@ -183,7 +198,7 @@ func (c *Connection) Save(ctx context.Context, s domain.ConnectionSettings) erro
 			return err
 		}
 
-		if err := c.store.SaveConnection(ctx, s.WithoutStaleTrust(), plan.change, plan.tok); err != nil {
+		if err := c.store.SaveConnection(ctx, s.WithoutStaleTrust(), plan.updates); err != nil {
 			return fmt.Errorf("save connection: %w", err)
 		}
 
@@ -361,63 +376,95 @@ func (c *Connection) CancelSignIn() {
 	sess.stop()
 }
 
-// DiscardPending ends the active sign-in and forgets the pending token and a
-// Sign out: the saved token stays as it is (Cancel or closing Settings).
+// DiscardPending ends the active sign-in and forgets the pending tokens and
+// the Sign outs of every provider: the saved tokens stay as they are (Cancel
+// or closing Settings).
 func (c *Connection) DiscardPending() {
 	c.CancelSignIn()
-	c.setSignInState(nil, false)
-}
-
-// SignOut ends the active sign-in, forgets the pending token and marks the
-// saved token for deletion by Save.
-func (c *Connection) SignOut() {
-	c.CancelSignIn()
-	c.setSignInState(nil, true)
-}
-
-// Account returns the account of the token Save would keep for the
-// effective client ID of s: the pending one, else the saved one. After
-// SignOut, or without a token for that client ID, signedIn is false.
-func (c *Connection) Account(ctx context.Context, s domain.ConnectionSettings) (account string, signedIn bool, err error) {
-	clientID := EffectiveClientID(s, c.builtin)
 
 	c.mu.Lock()
-	pending, signOut := c.pending, c.signOut
+	defer c.mu.Unlock()
+
+	c.signIns = nil
+	c.gen++
+}
+
+// SignOut ends the active sign-in to p, forgets the pending token of p and
+// marks the saved token of p for deletion by Save. Other providers keep
+// their state. p comes from the form: a kind that is not a cloud changes
+// nothing.
+func (c *Connection) SignOut(p domain.StorageKind) {
+	if !domain.IsCloud(p) {
+		return
+	}
+
+	c.mu.Lock()
+
+	sess := c.current
+	if sess != nil && sess.client.Provider == p {
+		c.current = nil
+	} else {
+		sess = nil
+	}
+
+	st := c.stateLocked(p)
+	st.pending, st.signOut = nil, true
+	c.gen++
+	c.mu.Unlock()
+
+	sess.stop()
+}
+
+// Account returns the account of the token Save would keep for the kind and
+// the effective client of the draft s: the pending one of that provider,
+// else the saved one. After a Sign out of that provider, without a token for
+// that client, or for a kind that is not a cloud, signedIn is false. The
+// pending tokens and Sign outs stay as they are.
+func (c *Connection) Account(ctx context.Context, s domain.ConnectionSettings) (account string, signedIn bool, err error) {
+	client, ok := EffectiveClient(s, c.builtin)
+	if !ok {
+		return "", false, nil
+	}
+
+	c.mu.Lock()
+	st := c.stateOf(client.Provider)
 	c.mu.Unlock()
 
 	switch {
-	case signOut || clientID == "":
+	case st.signOut:
 		return "", false, nil
-	case pending != nil && pending.ClientID == clientID:
-		return pending.Account, true, nil
+	case st.pending != nil && st.pending.ClientID == client.ID:
+		return st.pending.Account, true, nil
 	}
 
-	tok, ok, err := c.tokens.LoadCloudToken(ctx)
+	tok, ok, err := c.tokens.LoadCloudToken(ctx, client.Provider)
 	if err != nil {
 		return "", false, fmt.Errorf("load cloud token: %w", err)
 	}
 
-	if !ok || tok.ClientID != clientID {
+	if !ok || tok.ClientID != client.ID {
 		return "", false, nil
 	}
 
 	return tok.Account, true, nil
 }
 
-// beginSignIn ends the previous sign-in, starts a new one for the effective
-// client ID of s and opens its URL. It returns the sign-in and its context,
-// which CancelSignIn cancels.
+// beginSignIn ends the previous sign-in, starts a new one with the
+// authorizer of s's kind for the effective client of s and opens its URL; a
+// URL that does not open is domain.ErrBrowserUnavailable. It returns the
+// sign-in and its context, which CancelSignIn cancels.
 func (c *Connection) beginSignIn(ctx context.Context, s domain.ConnectionSettings, manual bool) (*signIn, context.Context, error) {
-	if c.auth == nil {
+	auth := c.auth[s.Kind()]
+	if auth == nil {
 		return nil, nil, fmt.Errorf("sign in: %w", domain.ErrNotConnected)
 	}
 
-	clientID, err := c.clientID(s)
+	client, err := c.client(s)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	sess, ctx, err := c.startLogin(ctx, clientID, manual)
+	sess, ctx, err := c.startLogin(ctx, auth, client, manual)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -430,7 +477,7 @@ func (c *Connection) beginSignIn(ctx context.Context, s domain.ConnectionSetting
 	if c.openURL != nil {
 		if err := c.openURL(sess.login.URL()); err != nil {
 			c.endSignIn(sess)
-			return nil, nil, fmt.Errorf("open browser: %w", err)
+			return nil, nil, fmt.Errorf("open browser: %w: %w", domain.ErrBrowserUnavailable, err)
 		}
 	}
 
@@ -439,12 +486,12 @@ func (c *Connection) beginSignIn(ctx context.Context, s domain.ConnectionSetting
 
 // startLogin makes a new sign-in current, ending the previous one, and starts
 // its login. Errors of Begin* are returned as is.
-func (c *Connection) startLogin(ctx context.Context, clientID string, manual bool) (*signIn, context.Context, error) {
+func (c *Connection) startLogin(ctx context.Context, auth CloudAuthorizer, client CloudClient, manual bool) (*signIn, context.Context, error) {
 	c.beginMu.Lock()
 	defer c.beginMu.Unlock()
 
 	ctx, cancel := context.WithCancel(ctx)
-	sess := &signIn{clientID: clientID, manual: manual, cancel: cancel}
+	sess := &signIn{client: client, manual: manual, cancel: cancel}
 
 	c.mu.Lock()
 	prev := c.current
@@ -453,12 +500,12 @@ func (c *Connection) startLogin(ctx context.Context, clientID string, manual boo
 
 	prev.stop()
 
-	begin := c.auth.BeginLoopback
+	begin := auth.BeginLoopback
 	if manual {
-		begin = c.auth.BeginManual
+		begin = auth.BeginManual
 	}
 
-	login, err := begin(ctx, clientID)
+	login, err := begin(ctx, client)
 	if err != nil {
 		c.endSignIn(sess)
 		return nil, nil, err
@@ -484,10 +531,11 @@ func (c *Connection) startLogin(ctx context.Context, clientID string, manual boo
 	return sess, ctx, nil
 }
 
-// complete makes tok, issued for sess's client ID, the pending token and
-// ends sess. A sess that is no longer current returns context.Canceled.
+// complete makes tok, issued for sess's client, the pending token of its
+// provider and ends sess. A sess that is no longer current returns
+// context.Canceled.
 func (c *Connection) complete(sess *signIn, tok CloudToken) (string, error) {
-	tok.Provider, tok.ClientID = string(domain.KindYandexDisk), sess.clientID
+	tok.Provider, tok.ClientID = sess.client.Provider, sess.client.ID
 
 	c.mu.Lock()
 	if c.current != sess {
@@ -496,7 +544,8 @@ func (c *Connection) complete(sess *signIn, tok CloudToken) (string, error) {
 	}
 
 	c.current = nil
-	c.pending, c.signOut = &tok, false
+	st := c.stateLocked(tok.Provider)
+	st.pending, st.signOut = &tok, false
 	c.gen++
 	c.mu.Unlock()
 
@@ -527,141 +576,220 @@ func (c *Connection) isCurrent(sess *signIn) bool {
 	return c.current == sess
 }
 
-func (c *Connection) setSignInState(pending *CloudToken, signOut bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// stateLocked returns the sign-in state of p for a change, creating it.
+// c.mu must be held.
+func (c *Connection) stateLocked(p domain.StorageKind) *signInState {
+	if c.signIns == nil {
+		c.signIns = map[domain.StorageKind]*signInState{}
+	}
 
-	c.pending, c.signOut = pending, signOut
-	c.gen++
+	st := c.signIns[p]
+	if st == nil {
+		st = &signInState{}
+		c.signIns[p] = st
+	}
+
+	return st
 }
 
-// clearSignInState forgets the pending token and Sign out after a Save,
+// stateOf returns a copy of the sign-in state of p. c.mu must be held.
+func (c *Connection) stateOf(p domain.StorageKind) signInState {
+	if st := c.signIns[p]; st != nil {
+		return *st
+	}
+
+	return signInState{}
+}
+
+// clearSignInState forgets the pending tokens and Sign outs after a Save,
 // unless they changed since generation gen.
 func (c *Connection) clearSignInState(gen uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.gen == gen {
-		c.pending, c.signOut = nil, false
+		c.signIns = nil
 		c.gen++
 	}
 }
 
-// clientID checks the format of the own client ID of s and returns the
-// effective client ID.
-func (c *Connection) clientID(s domain.ConnectionSettings) (string, error) {
-	if err := domain.ValidateYandexClientID(s.YandexClientID); err != nil {
-		return "", err
+// refreshPending makes t, a refresh of a pending token during Test, the
+// pending token of t.Provider. The refresh is dropped if the sign-in state
+// changed since generation gen, which the source was made from, or the
+// pending token is of another client: a newer sign-in or a Sign out wins.
+func (c *Connection) refreshPending(t CloudToken, gen uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st := c.signIns[t.Provider]
+	if c.gen != gen || st == nil || st.pending == nil || st.pending.ClientID != t.ClientID {
+		return
 	}
 
-	id := EffectiveClientID(s, c.builtin)
-	if id == "" {
-		return "", &domain.ValidationError{Field: "yandex_client_id", Reason: "set your own client ID in Advanced"}
+	st.pending = &t
+}
+
+// client checks the format of the own client of the cloud settings s and
+// returns the effective client. Settings of another kind are a
+// ValidationError for "kind".
+func (c *Connection) client(s domain.ConnectionSettings) (CloudClient, error) {
+	switch s.Kind() {
+	case domain.KindYandexDisk:
+		if err := domain.ValidateYandexClientID(s.YandexClientID); err != nil {
+			return CloudClient{}, err
+		}
+	case domain.KindGoogleDrive:
+		if err := domain.ValidateGoogleClient(s.GoogleClientID, s.GoogleClientSecret); err != nil {
+			return CloudClient{}, err
+		}
+	default:
+		return CloudClient{}, &domain.ValidationError{Field: "kind", Reason: "is not a cloud storage"}
 	}
 
-	return id, nil
+	cl, ok := EffectiveClient(s, c.builtin)
+	if !ok {
+		return CloudClient{}, errNoClient(s.Kind())
+	}
+
+	return cl, nil
 }
 
-func errSignInRequired() error {
-	return &domain.ValidationError{Field: "yandex_account", Reason: "sign in required"}
+// errSignInRequired refuses cloud settings of provider p without a token.
+func errSignInRequired(p domain.StorageKind) error {
+	field := "yandex_account"
+	if p == domain.KindGoogleDrive {
+		field = "google_account"
+	}
+
+	return &domain.ValidationError{Field: field, Reason: "sign in required"}
 }
 
-// dropOtherPendingLocked forgets a pending token of another client ID than
-// clientID. c.mu must be held.
-func (c *Connection) dropOtherPendingLocked(clientID string) {
-	if c.pending != nil && c.pending.ClientID != clientID {
-		c.pending = nil
+// dropOtherPendingLocked forgets a pending token of client's provider issued
+// for another client. c.mu must be held.
+func (c *Connection) dropOtherPendingLocked(client CloudClient) {
+	if st := c.signIns[client.Provider]; st != nil && st.pending != nil && st.pending.ClientID != client.ID {
+		st.pending = nil
 		c.gen++
 	}
 }
 
-// testTokenSource returns the token source Test uses for Yandex Disk
-// settings s: the pending token, or the saved token unless Sign out marked
-// it for deletion. Without either for the effective client ID it returns a
-// ValidationError for "yandex_account".
+// testTokenSource returns the token source Test uses for cloud settings s:
+// the pending token of s's provider, or the saved token unless Sign out
+// marked it for deletion. Without either for the effective client it returns
+// a ValidationError for the account of the provider.
 func (c *Connection) testTokenSource(ctx context.Context, s domain.ConnectionSettings) (CloudTokenSource, error) {
-	clientID, err := c.clientID(s)
+	client, err := c.client(s)
 	if err != nil {
 		return nil, err
 	}
 
 	c.mu.Lock()
-	c.dropOtherPendingLocked(clientID)
-	pending, signOut := c.pending, c.signOut
+	c.dropOtherPendingLocked(client)
+	st, gen := c.stateOf(client.Provider), c.gen
 	c.mu.Unlock()
 
 	switch {
-	case pending != nil:
-		return NewMemoryTokenSource(*pending, clientID), nil
-	case signOut:
-		return nil, errSignInRequired()
+	case st.pending != nil:
+		return c.pendingSource(*st.pending, client, gen), nil
+	case st.signOut:
+		return nil, errSignInRequired(client.Provider)
 	}
 
-	if err := c.requireStoredToken(ctx, clientID); err != nil {
+	if err := c.requireStoredToken(ctx, client); err != nil {
 		return nil, err
 	}
 
-	return NewStoredTokenSource(c.tokens, clientID), nil
+	return NewStoredTokenSource(c.tokens, client), nil
 }
 
-// requireStoredToken returns a ValidationError for "yandex_account" unless
-// local.db has a token for clientID.
-func (c *Connection) requireStoredToken(ctx context.Context, clientID string) error {
-	tok, ok, err := c.tokens.LoadCloudToken(ctx)
+// requireStoredToken returns a ValidationError for the account of the
+// provider unless local.db has a token of client.
+func (c *Connection) requireStoredToken(ctx context.Context, client CloudClient) error {
+	tok, ok, err := c.tokens.LoadCloudToken(ctx, client.Provider)
 	if err != nil {
 		return fmt.Errorf("load cloud token: %w", err)
 	}
 
-	if !ok || tok.ClientID != clientID {
-		return errSignInRequired()
+	if !ok || tok.ClientID != client.ID {
+		return errSignInRequired(client.Provider)
 	}
 
 	return nil
 }
 
-// tokenPlan is what Save does with the saved token.
-type tokenPlan struct {
-	change TokenChange
-	tok    CloudToken
-	gen    uint64 // the sign-in state generation the plan was made from
+// issuedFor reports whether tok was issued for the effective client of its
+// provider in s, whatever the kind of s: switching the clouds keeps the
+// client fields of the other one.
+func (c *Connection) issuedFor(tok CloudToken, s domain.ConnectionSettings) bool {
+	s.StorageKind = tok.Provider
+	client, ok := EffectiveClient(s, c.builtin)
+
+	return ok && client.ID == tok.ClientID
 }
 
-// tokenPlan decides the token change for saving s. Other kinds than
-// yandex_disk keep the saved token unless Sign out deletes it.
-func (c *Connection) tokenPlan(ctx context.Context, s domain.ConnectionSettings) (tokenPlan, error) {
-	if s.Kind() != domain.KindYandexDisk {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-
-		if c.signOut {
-			return tokenPlan{change: TokenDelete, gen: c.gen}, nil
-		}
-
-		return tokenPlan{change: TokenKeep, gen: c.gen}, nil
+// pendingSource is the source of the pending token tok of client made at
+// generation gen: Test uses it, and a refresh updates the pending token
+// itself through refreshPending, never local.db.
+func (c *Connection) pendingSource(tok CloudToken, client CloudClient, gen uint64) CloudTokenSource {
+	return &memoryTokenSource{
+		tok: tok, client: client,
+		updated: func(t CloudToken) { c.refreshPending(t, gen) },
 	}
+}
 
-	clientID, err := c.clientID(s)
-	if err != nil {
-		return tokenPlan{}, err
+// tokenPlan is what Save does with the saved tokens.
+type tokenPlan struct {
+	updates []TokenUpdate
+	gen     uint64 // the sign-in state generation the plan was made from
+}
+
+// tokenPlan decides the token updates for saving s, ordered by provider:
+// the pending token of any provider is set if it was issued for the
+// effective client of that provider in s, and dropped otherwise; a Sign out
+// of any provider deletes its token. Cloud settings with neither a pending
+// token nor a Sign out need a saved token of their client.
+func (c *Connection) tokenPlan(ctx context.Context, s domain.ConnectionSettings) (tokenPlan, error) {
+	kind := s.Kind()
+	cloud := domain.IsCloud(kind)
+
+	var client CloudClient
+
+	if cloud {
+		var err error
+		if client, err = c.client(s); err != nil {
+			return tokenPlan{}, err
+		}
 	}
 
 	c.mu.Lock()
-	c.dropOtherPendingLocked(clientID)
-	pending, signOut, gen := c.pending, c.signOut, c.gen
-	c.mu.Unlock()
 
-	switch {
-	case pending != nil:
-		return tokenPlan{change: TokenSet, tok: *pending, gen: gen}, nil
-	case signOut:
-		// Sign out then OK: the settings are saved and the token is deleted;
-		// the notes on the Disk stay.
-		return tokenPlan{change: TokenDelete, gen: gen}, nil
+	if cloud {
+		c.dropOtherPendingLocked(client)
 	}
 
-	if err := c.requireStoredToken(ctx, clientID); err != nil {
+	plan := tokenPlan{gen: c.gen}
+
+	for _, p := range slices.Sorted(maps.Keys(c.signIns)) {
+		switch st := c.signIns[p]; {
+		case st.pending != nil && c.issuedFor(*st.pending, s):
+			plan.updates = append(plan.updates, TokenUpdate{Provider: p, Change: TokenSet, Token: *st.pending})
+		case st.signOut:
+			// Sign out then OK: the token is deleted; the notes in the
+			// storage stay.
+			plan.updates = append(plan.updates, TokenUpdate{Provider: p, Change: TokenDelete})
+		}
+	}
+
+	st := c.stateOf(kind)
+	c.mu.Unlock()
+
+	if !cloud || st.pending != nil || st.signOut {
+		return plan, nil
+	}
+
+	if err := c.requireStoredToken(ctx, client); err != nil {
 		return tokenPlan{}, err
 	}
 
-	return tokenPlan{change: TokenKeep, gen: gen}, nil
+	return plan, nil
 }

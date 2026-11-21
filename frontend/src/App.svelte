@@ -8,14 +8,15 @@
   import { backupFlow, closeFlow, connectFlow, restoreFlow, type SyncApi } from "./flows/sync";
   import { AppService, ConnectionService, SyncService, VaultService, type StateDTO } from "./lib/api";
   import { dialogs } from "./lib/dialogs.svelte";
-  import { parseError } from "./lib/errors";
+  import { errorMsg } from "./lib/errors";
+  import { i18n, type Msg } from "./lib/i18n.svelte";
   import { SyncOverlay } from "./lib/overlay.svelte";
   import Main from "./screens/Main.svelte";
   import NewStorage from "./screens/NewStorage.svelte";
   import Settings from "./screens/Settings.svelte";
   import Unlock from "./screens/Unlock.svelte";
 
-  type Screen = { kind: "loading" } | { kind: "new" } | { kind: "unlock" } | { kind: "main" } | { kind: "failed"; message: string };
+  type Screen = { kind: "loading" } | { kind: "new" } | { kind: "unlock" } | { kind: "main" } | { kind: "failed"; message: Msg };
 
   let screen: Screen = $state({ kind: "loading" });
   let sync: StateDTO = $state({ connected: false, dirty: false, restoreAvailable: false, busy: false });
@@ -73,11 +74,16 @@
     try {
       await overlay.process("backup", () => closeFlow(syncApi, syncDialogs, () => AppService.ConfirmQuit(), discardDraft));
     } catch (e) {
-      await dialogs.error(parseError(e).message);
+      await dialogs.error(errorMsg(e));
     } finally {
       closing = false;
     }
   }
+
+  // The page speaks the language of the interface, for screen readers and spell checking.
+  $effect(() => {
+    document.documentElement.lang = i18n.lang;
+  });
 
   onMount(() => {
     const offState = Events.On("sync:state", (ev) => (sync = ev.data));
@@ -92,7 +98,7 @@
         sync = await SyncService.State();
         screen = (await VaultService.Exists()) ? { kind: "unlock" } : { kind: "new" };
       } catch (err) {
-        screen = { kind: "failed", message: parseError(err).message };
+        screen = { kind: "failed", message: errorMsg(err) };
       }
     })();
 
@@ -117,7 +123,7 @@
   {:else if screen.kind === "failed"}
     <div class="card">
       <h1>Smartnote</h1>
-      <p class="error">{screen.message}</p>
+      <p class="error">{i18n.text(screen.message)}</p>
     </div>
   {/if}
 </main>

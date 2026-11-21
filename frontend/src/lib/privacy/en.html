@@ -1,0 +1,153 @@
+  <p class="effective">Effective November 21, 2026</p>
+
+  <div class="note">
+    <p>
+      <strong>In short:</strong> Smartnote is a desktop application that runs on your computer. Its
+      author operates no servers and receives none of your data. Your notes are encrypted on your
+      device. If you choose a remote storage, only encrypted data is sent there, directly from your
+      device. Smartnote has no analytics, telemetry, crash reporting or ads.
+    </p>
+  </div>
+
+  <h2>Who this policy is about</h2>
+  <p>
+    This policy covers the Smartnote application published at
+    <a href="https://github.com/nikchis/smartnote">github.com/nikchis/smartnote</a> (“Smartnote”,
+    “we”). It describes what the application does with your data. Smartnote is open-source software,
+    so every statement here can be checked against its source code.
+  </p>
+
+  <h2>Data on your device</h2>
+  <p>Smartnote stores the following in its local database on your computer:</p>
+  <ul>
+    <li>your notes and their version history;</li>
+    <li>the vectors used for semantic search;</li>
+    <li>the sign-in tokens of a cloud storage, if you sign in to one.</li>
+  </ul>
+  <p>
+    These items are encrypted with a key protected by your password. Smartnote also stores its
+    settings there, and writes a log file. The log never contains the text of your notes, your
+    search queries, passwords, sync phrases or sign-in tokens. The search index exists only in
+    memory while Smartnote runs.
+  </p>
+  <p>None of this data is sent to the author of Smartnote or to anyone else.</p>
+
+  <h2>Remote storage you choose</h2>
+  <p>
+    Remote storage is optional. By default Smartnote works only on your device. If you choose one,
+    Smartnote sends your notes there to back them up and reads them back to restore them. The first
+    connection to an empty storage makes the first backup automatically:
+  </p>
+  <ul>
+    <li>your own PostgreSQL server reachable over SSH;</li>
+    <li>Yandex Disk;</li>
+    <li>Google Drive.</li>
+  </ul>
+  <p>
+    Before the notes leave your device they are encrypted with a key derived from your sync phrase,
+    which never leaves your device. The storage provider receives only ciphertext and cannot read
+    your notes. The provider still sees what any file storage sees: your account, your IP address,
+    when data is written, and the approximate size of the stored data. The provider's own privacy
+    policy applies to that information.
+  </p>
+
+  <h2>Google user data</h2>
+  <p>This section applies when you choose Google Drive as the storage and sign in with Google.</p>
+
+  <h3>What Smartnote accesses</h3>
+  <p>
+    Smartnote requests only the <code>https://www.googleapis.com/auth/drive.appdata</code> scope.
+    This gives access to Smartnote's own hidden application data folder on your Google Drive. It
+    gives no access to any other file, folder or data in your Google account. In that folder
+    Smartnote keeps one file: the encrypted container with your notes. If two of your devices
+    create the storage at the same moment, a second copy of the container may stay there for a
+    while; Smartnote removes it during a later backup.
+  </p>
+
+  <h3>How Smartnote uses it</h3>
+  <p>
+    Smartnote uses this access only to keep the encrypted backup of your notes. It writes the
+    backup when you press Backup, and when it connects to an empty storage for the first time (the
+    first backup is made automatically then, for example after you press OK in Settings). It reads
+    the backup when it connects, when you test the connection in Settings, when it prepares or
+    makes a backup and when you restore, including on your other devices. The data
+    travels directly between your device and Google. It is not sent to the author of Smartnote or
+    to any other party.
+  </p>
+
+  <h3>Storage and protection</h3>
+  <p>
+    The tokens issued by Google at sign-in are stored only on your device, encrypted in the local
+    database with the key protected by your password. They are sent only to Google, over TLS.
+    Smartnote never writes them to its log.
+  </p>
+
+  <h3>Sharing</h3>
+  <p>
+    Smartnote does not share, transfer, sell or disclose Google user data to anyone. It does not use
+    it for advertising, and does not use it to develop, improve or train artificial intelligence or
+    machine learning models. No person reads it. The author has no copy of it.
+  </p>
+
+  <h3>Limited Use</h3>
+  <p>
+    Smartnote's use and transfer of information received from Google APIs will adhere to the
+    <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
+    including the Limited Use requirements.
+  </p>
+
+  <h3>Retention and deletion</h3>
+  <ul>
+    <li>
+      <strong>Sign out</strong> in Smartnote settings, confirmed with <strong>OK</strong>, deletes
+      the Google tokens from your device.
+      The backup on your Drive stays, so you can restore it after signing in again.
+    </li>
+    <li>
+      To revoke Smartnote's access, remove it at
+      <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
+    </li>
+    <li>
+      To delete the backup, first choose another storage, or sign out, in Smartnote on every device
+      that uses Google Drive: otherwise the next connection creates the backup again. Then open
+      Google Drive settings, choose <em>Manage apps</em>, find Smartnote and choose
+      <em>Delete hidden app data</em>.
+    </li>
+    <li>
+      Uninstalling Smartnote and deleting its data folder removes everything it stored on your
+      device.
+    </li>
+  </ul>
+
+  <h2>Yandex user data</h2>
+  <p>
+    When you choose Yandex Disk, Smartnote requests access only to its own application folder on
+    your Disk. It uses this access, stores the tokens and keeps the data exactly as described above
+    for Google. To revoke the access, use the list of applications with access in your Yandex ID
+    settings. To delete the backup, first choose another storage, or sign out, in Smartnote on every
+    device that uses Yandex Disk, then delete the file <code>smartnote.v1.bin</code> in the
+    Smartnote application folder inside <code>Applications</code> on your Disk.
+  </p>
+
+  <h2>Network connections</h2>
+  <p>
+    Smartnote connects to the network only to reach the storage you configured, and to complete a
+    sign-in, which happens in your web browser. It does not check for updates in the background,
+    does not load remote content and does not contact the author. Links to documentation open in
+    your browser only when you click them.
+  </p>
+
+  <h2>Children</h2>
+  <p>Smartnote is a general-purpose tool and is not directed at children.</p>
+
+  <h2>Changes to this policy</h2>
+  <p>
+    Changes are published on this page with a new effective date. The history of every change is
+    kept in the project's public Git repository.
+  </p>
+
+  <h2>Contact</h2>
+  <p>
+    Questions about this policy:
+    <a href="https://github.com/nikchis/smartnote/issues">open an issue on GitHub</a>.
+  </p>

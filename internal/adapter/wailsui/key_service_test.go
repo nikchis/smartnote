@@ -16,6 +16,7 @@ import (
 
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
 	"github.com/nikchis/smartnote/internal/domain"
+	"github.com/nikchis/smartnote/internal/i18n"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
@@ -36,15 +37,20 @@ type fakeFiles struct {
 	open, save   string
 	opens, saves int
 	clipboard    string
+	titles       []string
 }
 
-func (f *fakeFiles) OpenFile(string) (string, error) {
+func (f *fakeFiles) OpenFile(title string) (string, error) {
 	f.opens++
+	f.titles = append(f.titles, title)
+
 	return f.open, nil
 }
 
-func (f *fakeFiles) SaveFile(string, string) (string, error) {
+func (f *fakeFiles) SaveFile(title, _ string) (string, error) {
 	f.saves++
+	f.titles = append(f.titles, title)
+
 	return f.save, nil
 }
 
@@ -235,4 +241,36 @@ func codeOf(err error) string {
 	}
 
 	return ""
+}
+
+// The file dialogs are titled in the language of the moment they open.
+func TestFileDialogTitlesFollowLanguage(t *testing.T) {
+	files := &fakeFiles{}
+	svc, _ := newTestKeyService(t, files)
+
+	if err := svc.Generate(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.ImportFromFile(""); err != nil {
+		t.Fatal(err)
+	}
+
+	lang := i18n.NewCurrent(i18n.EN)
+	svc.env.Lang = lang
+
+	lang.Set(i18n.RU)
+
+	if _, err := svc.ImportFromFile(""); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.ExportPublicToFile(); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"Import SSH private key", "Импорт закрытого ключа SSH", "Экспорт открытого ключа SSH"}
+	if strings.Join(files.titles, "|") != strings.Join(want, "|") {
+		t.Errorf("titles = %q, want %q", files.titles, want)
+	}
 }

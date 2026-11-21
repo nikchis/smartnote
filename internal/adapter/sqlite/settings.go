@@ -130,3 +130,23 @@ func (s *Store) SaveKey(ctx context.Context, k domain.KeyPair) error {
 
 	return nil
 }
+
+// putSettings stores the sealed settings with q, inside a transaction of
+// SaveConnection.
+func putSettings(ctx context.Context, q querier, dek []byte, settings domain.ConnectionSettings) error {
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return err
+	}
+	defer sealbox.Wipe(data)
+
+	sealed, err := sealbox.Seal(dek, data, aadSettings())
+	if err != nil {
+		return err
+	}
+
+	_, err = q.ExecContext(ctx, `INSERT INTO connection (connection_id, settings) VALUES (1, ?)
+		ON CONFLICT (connection_id) DO UPDATE SET settings = excluded.settings`, sealed)
+
+	return err
+}

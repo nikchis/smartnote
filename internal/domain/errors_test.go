@@ -52,6 +52,7 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 		ErrNotConnected, ErrRemoteChanged, ErrLocalChanged, ErrBusy, ErrStorageExists, ErrStorageMissing,
 		ErrKeyPassphraseRequired, ErrKeyMissing, ErrNoPendingOperation,
 		ErrReauthRequired, ErrRemoteDamaged, ErrRemoteTooLarge, ErrRemoteOutcomeUnknown, ErrLoopbackUnavailable,
+		ErrBrowserUnavailable,
 	}
 	for i, a := range all {
 		for j, b := range all {
@@ -59,5 +60,25 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 				t.Errorf("%v matches %v", a, b)
 			}
 		}
+	}
+}
+
+func TestReauthRequiredIsSentinel(t *testing.T) {
+	err := fmt.Errorf("sync: %w", ReauthRequired(KindYandexDisk))
+	if !errors.Is(err, ErrReauthRequired) {
+		t.Error("errors.Is(err, ErrReauthRequired) = false")
+	}
+
+	if errors.Is(err, ErrBusy) {
+		t.Error("errors.Is(err, ErrBusy) = true")
+	}
+
+	var re *ReauthRequiredError
+	if !errors.As(err, &re) || re.Kind != KindYandexDisk {
+		t.Fatalf("errors.As = %+v, want Kind yandex_disk", re)
+	}
+
+	if re.Error() == "" {
+		t.Error("empty Error()")
 	}
 }

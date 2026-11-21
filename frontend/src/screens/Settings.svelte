@@ -1,18 +1,25 @@
+<script lang="ts" module>
+  /** CLIENT_FIELDS are the own client fields of Advanced as Go names them in its validation errors. */
+  const CLIENT_FIELDS = ["yandex_client_id", "google_client_id", "google_client_secret"];
+</script>
+
 <script lang="ts">
   // Settings edits the connection, the client SSH key and the trusted server
   // key (v1 UDlgConnection). The form holds the server key's fingerprint only;
   // a key trusted during Test, like a reset, is saved only with OK (spec §6.1).
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import exportIcon from "../assets/icons/export.png";
+  import eyeIcon from "../assets/icons/eye.png";
   import gearIcon from "../assets/icons/gear.png";
   import importIcon from "../assets/icons/import.png";
   import StrengthMeter from "../components/StrengthMeter.svelte";
-  import YandexAccount from "../components/YandexAccount.svelte";
-  import { ConnectionService, KeyService } from "../lib/api";
+  import CloudAccount from "../components/CloudAccount.svelte";
+  import { ConnectionService, KeyService, type AccountDTO } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
-  import { parseError, type UIError } from "../lib/errors";
-  import { openExternal, YANDEX_DOCS } from "../lib/external";
-  import { emptySettings, fromForm, toForm, type SettingsForm, type SignInPhase } from "../lib/settings";
+  import { errorMsg, messageOf, parseError, type UIError } from "../lib/errors";
+  import { GOOGLE_DOCS, openExternal, YANDEX_DOCS } from "../lib/external";
+  import { i18n, msg, type Key } from "../lib/i18n.svelte";
+  import { emptySettings, fromForm, isCloud, Latest, toForm, TYPING_PAUSE_MS, type SettingsForm, type SignInPhase } from "../lib/settings";
   import { modal } from "../lib/modal";
   import { settingsButtons } from "../lib/rules";
   import { LIMITS, secretLen } from "../lib/text";
@@ -25,28 +32,125 @@
   let loaded = $state(false);
   let hasKey: boolean | undefined = $state();
   let phase: SignInPhase = $state("idle");
-  const allowed = $derived(settingsButtons(loaded, hasKey, form.kind, phase !== "idle"));
-  let busy = $state("");
+  /** signOuts counts the Sign outs Go has not marked yet; it outlives the account block, which a change of the kind may remove. */
+  let signOuts = $state(0);
+  const allowed = $derived(settingsButtons(loaded, hasKey, form.kind, phase !== "idle" || signOuts > 0));
+  /** busy names the running action, shown beside OK; "" when none runs. */
+  let busy: Key | "" = $state("");
   let invalid = $state("");
+  /** phraseShown reveals the sync phrase; every opening of the dialog starts hidden. */
+  let phraseShown = $state(false);
   let passphrase: { value: string; retry: boolean } | undefined = $state();
+  /** account is the sign-in of the draft's cloud as Go reports it; undefined until it answers. */
+  let account: AccountDTO | undefined = $state();
+  /** accountTurn numbers the changes of account: the reads here, the sign-ins and Sign outs of the block. */
+  const accountTurn = new Latest();
+  /**
+   * advancedOpen is the user's choice to show Advanced, one for both clouds:
+   * it outlives the errors and the changes of the kind, which recreate the
+   * block, until the dialog closes. A validation error of an own client field
+   * opens it, since the field to fix is there.
+   */
+  let advancedOpen = $state(false);
+  $effect(() => {
+    if (CLIENT_FIELDS.includes(invalid)) advancedOpen = true;
+  });
+  /** typing is the read of the account due when typing in an own client field pauses. */
+  let typing: ReturnType<typeof setTimeout> | undefined;
+  // A read that starts after a sign-in or a Sign out would outdate its answer.
+  // A sign-in moves phase off "idle"; a Sign out calls signOutStarted.
+  $effect(() => {
+    if (phase !== "idle") cancelTyping();
+  });
 
   onMount(async () => {
     try {
       form = toForm(await ConnectionService.Load());
       loaded = true;
+      void readAccount();
       hasKey = await KeyService.HasKey();
     } catch (e) {
-      await dialogs.error(parseError(e).message);
+      await dialogs.error(errorMsg(e));
     }
   });
+
+  /**
+   * readAccount asks Go for the sign-in of the kind and the client of the
+   * draft (spec §8), when the dialog opens, the kind changes, an own client
+   * field is left changed or typing in it pauses. Go counts the pending
+   * sign-ins and the Sign outs of this dialog; the saved settings say nothing
+   * about them. An answer for an older draft is dropped. Another kind shows
+   * its block without buttons until the answer comes; keep leaves the block
+   * of the same kind as it is, since leaving the field fires change on the
+   * mousedown of the button the click is for. A sign-in or Sign out started meanwhile
+   * outdates the answer, and SignIn sends the draft as it is then.
+   */
+  async function readAccount(keep = false) {
+    const current = accountTurn.begin();
+    if (!keep) account = undefined;
+    if (!isCloud(form.kind)) return;
+    try {
+      const answer = await ConnectionService.Account(fromForm(form));
+      if (current()) account = answer;
+    } catch (e) {
+      if (!current()) return;
+      account = { account: "", signedIn: false };
+      await dialogs.error(errorMsg(e));
+    }
+  }
+
+  /**
+   * clientTyped reads the account once typing in an own client field pauses;
+   * change fires only when the field is left. The draft changes at once, so
+   * an answer still due, of a read or a sign-in, is for an older one.
+   */
+  function clientTyped() {
+    accountTurn.begin();
+    clearTimeout(typing);
+    typing = setTimeout(() => {
+      typing = undefined;
+      void readAccount(true);
+    }, TYPING_PAUSE_MS);
+  }
+
+  /** clientLeft reads the account at once, so that no read starts after a sign-in the click that left the field begins. */
+  function clientLeft() {
+    cancelTyping();
+    void readAccount(true);
+  }
+
+  /** clientBlurred reads the account still due: a field typed back to its value at focus fires no change. */
+  function clientBlurred() {
+    if (typing !== undefined) clientLeft();
+  }
+
+  function cancelTyping() {
+    clearTimeout(typing);
+    typing = undefined;
+  }
+
+  /** signOutStarted holds OK and Test until Go has marked the Sign out, or failed to. */
+  function signOutStarted(done: Promise<unknown>) {
+    cancelTyping();
+    signOuts++;
+    void done.catch(() => {}).finally(() => signOuts--);
+  }
+
+  /** kindChanged reads the account of the new kind; a read due for the old one is dropped. */
+  function kindChanged() {
+    cancelTyping();
+    void readAccount();
+  }
+
+  onDestroy(() => clearTimeout(typing));
 
   async function fail(e: unknown) {
     const err: UIError = parseError(e);
     invalid = err.code === "validation" ? (err.field ?? "") : "";
-    if (err.code !== "canceled" && err.code !== "busy") await dialogs.error(err.message);
+    if (err.code !== "canceled" && err.code !== "busy") await dialogs.error(messageOf(err));
   }
 
-  async function run(label: string, f: () => Promise<void>) {
+  async function run(label: Key, f: () => Promise<void>) {
     if (busy) return;
     busy = label;
     try {
@@ -59,7 +163,7 @@
   }
 
   function test() {
-    return run("Connecting…", async () => {
+    return run("overlay.connecting", async () => {
       if (!allowed.test) return;
       invalid = "";
       let empty: boolean;
@@ -71,12 +175,12 @@
         form = toForm(await ConnectionService.TrustOfferedKey(err.fingerprint, fromForm(form)));
         empty = await ConnectionService.Test(fromForm(form));
       }
-      await dialogs.info(empty ? "Connection successfully established. Remote storage is empty." : "Connection successfully established.");
+      await dialogs.info(msg(empty ? "settings.connectedEmpty" : "settings.connected"));
     });
   }
 
   function save() {
-    return run("Saving…", async () => {
+    return run("settings.saving", async () => {
       if (!allowed.save) return;
       invalid = "";
       await ConnectionService.Save(fromForm(form));
@@ -84,35 +188,29 @@
     });
   }
 
-  /** clientIdChanged shows the account as signed out: a token belongs to its client ID (spec §6.1). */
-  function clientIdChanged() {
-    form.yandexSignedIn = false;
-    form.yandexAccount = "";
-  }
-
   function resetTrust() {
     form.trustedFingerprint = "";
   }
 
   function generate() {
-    return run("Generating…", async () => {
+    return run("settings.generating", async () => {
       if (!allowed.generate) return;
-      if (hasKey && !(await dialogs.ask("Are you sure you want to generate new key?\nCurrent key will be erased!"))) return;
+      if (hasKey && !(await dialogs.ask(msg("settings.generateConfirm")))) return;
       await KeyService.Generate();
       hasKey = true;
-      await dialogs.info("New key successfully generated.");
+      await dialogs.info(msg("settings.generated"));
     });
   }
 
   function exportPublic() {
-    return run("Exporting…", async () => {
+    return run("settings.exporting", async () => {
       const saved = await KeyService.ExportPublicToFile();
-      await dialogs.info(saved ? "Public key was copied to the clipboard and saved to the file." : "Public key was copied to the clipboard.");
+      await dialogs.info(msg(saved ? "settings.exportedToFile" : "settings.exported"));
     });
   }
 
   function importKey(pass = "") {
-    return run("Importing…", async () => {
+    return run("settings.importing", async () => {
       if (!allowed.import) return;
       try {
         if (!(await KeyService.ImportFromFile(pass))) return;
@@ -122,7 +220,7 @@
         return;
       }
       hasKey = true;
-      await dialogs.info("Key successfully imported.");
+      await dialogs.info(msg("settings.imported"));
     });
   }
 
@@ -138,7 +236,7 @@
     void KeyService.CancelImport();
   }
 
-  /** close abandons a running Yandex sign-in before the dialog goes away; the account block may already be gone. */
+  /** close abandons a running sign-in before the dialog goes away; the account block may already be gone. */
   async function close() {
     if (phase !== "idle") await ConnectionService.CancelSignIn().catch(() => {});
     onClose();
@@ -149,35 +247,53 @@
 
 <div class="backdrop" use:modal>
   <form class="card settings" onsubmit={(e) => (e.preventDefault(), save())}>
-    <h2>Settings</h2>
+    <h2>{i18n.t("settings.title")}</h2>
 
     <section class="group storage" role="group" aria-labelledby="settings-storage">
-      <span class="legend" id="settings-storage">Storage</span>
+      <span class="legend" id="settings-storage">{i18n.t("settings.storage")}</span>
       <div class="fields">
         <div class="wide row">
-          <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} disabled={phase !== "idle"} />None (local only)</label>
-          <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} disabled={phase !== "idle"} />Yandex Disk</label>
-          <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
+          <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} onchange={kindChanged} disabled={phase !== "idle"} />{i18n.t("settings.none")}</label>
+          <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} onchange={kindChanged} disabled={phase !== "idle"} />Yandex Disk</label>
+          <label class="choice"><input type="radio" name="kind" value="google_drive" bind:group={form.kind} onchange={kindChanged} disabled={phase !== "idle"} />Google Drive</label>
+          <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} onchange={kindChanged} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
         </div>
       </div>
     </section>
 
-    {#if form.kind === "yandex_disk"}
-      <section class="group yandex" role="group" aria-labelledby="settings-yandex">
-        <span class="legend" id="settings-yandex">Yandex account</span>
+    {#if isCloud(form.kind)}
+      {@const google = form.kind === "google_drive"}
+      <section class="group cloud" role="group" aria-labelledby={google ? "settings-google" : "settings-yandex"}>
+        <span class="legend" id={google ? "settings-google" : "settings-yandex"}>{i18n.t(google ? "settings.googleAccount" : "settings.yandexAccount")}</span>
         <div class="fields">
           <div class="wide">
-            <YandexAccount bind:form bind:phase bind:invalid disabled={!!busy} />
+            <CloudAccount kind={form.kind} bind:account latest={accountTurn} {form} bind:phase bind:invalid disabled={!!busy || signOuts > 0} onSignOut={signOutStarted} onOutdated={() => void readAccount(true)} />
           </div>
-          <details class="wide" open={invalid === "yandex_client_id" || undefined}>
-            <summary>Advanced</summary>
-            <label class="wide">
-              Own client ID:
-              <input aria-label="Own client ID" bind:value={form.yandexClientId} oninput={clientIdChanged} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
-            </label>
-            <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>How to register</a>
-            <p class="muted">Data of another client ID is a separate, empty storage.</p>
-          </details>
+          {#if google}
+            <details class="wide" bind:open={advancedOpen}>
+              <summary>{i18n.t("settings.advanced")}</summary>
+              <label class="wide">
+                {i18n.t("settings.ownClientId")}
+                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.googleClientId} oninput={clientTyped} onchange={clientLeft} onblur={clientBlurred} autocomplete="off" aria-invalid={invalid === "google_client_id"} />
+              </label>
+              <label class="wide">
+                {i18n.t("settings.ownClientSecret")}
+                <input type="password" aria-label={i18n.t("settings.ownClientSecretLabel")} bind:value={form.googleClientSecret} oninput={clientTyped} onchange={clientLeft} onblur={clientBlurred} autocomplete="off" aria-invalid={invalid === "google_client_secret"} />
+              </label>
+              <a href={GOOGLE_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(GOOGLE_DOCS))}>{i18n.t("settings.howToRegister")}</a>
+              <p class="muted">{i18n.t("settings.otherGoogleClient")}</p>
+            </details>
+          {:else}
+            <details class="wide" bind:open={advancedOpen}>
+              <summary>{i18n.t("settings.advanced")}</summary>
+              <label class="wide">
+                {i18n.t("settings.ownClientId")}
+                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.yandexClientId} oninput={clientTyped} onchange={clientLeft} onblur={clientBlurred} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
+              </label>
+              <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>{i18n.t("settings.howToRegister")}</a>
+              <p class="muted">{i18n.t("settings.otherClient")}</p>
+            </details>
+          {/if}
         </div>
       </section>
     {/if}
@@ -186,23 +302,23 @@
     {#if form.kind === "ssh_postgres"}
     <div class="pair">
       <section class="group" role="group" aria-labelledby="settings-ssh">
-        <span class="legend" id="settings-ssh">SSH server</span>
+        <span class="legend" id="settings-ssh">{i18n.t("settings.sshServer")}</span>
         <div class="fields">
-          <label class="wide">Host <input bind:value={form.sshHost} aria-invalid={invalid === "ssh_host"} /></label>
-          <label>Port <input bind:value={form.sshPort} inputmode="numeric" placeholder="22" aria-invalid={invalid === "ssh_port"} /></label>
-          <label>User <input bind:value={form.sshUser} aria-invalid={invalid === "ssh_user"} /></label>
-          <label>Password <input type="password" bind:value={form.sshPassword} autocomplete="off" /></label>
+          <label class="wide">{i18n.t("settings.host")} <input bind:value={form.sshHost} aria-invalid={invalid === "ssh_host"} /></label>
+          <label>{i18n.t("settings.port")} <input bind:value={form.sshPort} inputmode="numeric" placeholder="22" aria-invalid={invalid === "ssh_port"} /></label>
+          <label>{i18n.t("settings.user")} <input bind:value={form.sshUser} aria-invalid={invalid === "ssh_user"} /></label>
+          <label>{i18n.t("field.password")} <input type="password" bind:value={form.sshPassword} autocomplete="off" /></label>
         </div>
       </section>
 
       <section class="group" role="group" aria-labelledby="settings-db">
-        <span class="legend" id="settings-db">Database</span>
+        <span class="legend" id="settings-db">{i18n.t("settings.database")}</span>
         <div class="fields">
-          <label>Host <input bind:value={form.dbHost} placeholder="127.0.0.1" aria-invalid={invalid === "db_host"} /></label>
-          <label>Port <input bind:value={form.dbPort} inputmode="numeric" placeholder="5432" aria-invalid={invalid === "db_port"} /></label>
-          <label>Name <input bind:value={form.dbName} aria-invalid={invalid === "db_name"} /></label>
-          <label>User <input bind:value={form.dbUser} aria-invalid={invalid === "db_user"} /></label>
-          <label>Password <input type="password" bind:value={form.dbPassword} autocomplete="off" /></label>
+          <label>{i18n.t("settings.host")} <input bind:value={form.dbHost} placeholder="127.0.0.1" aria-invalid={invalid === "db_host"} /></label>
+          <label>{i18n.t("settings.port")} <input bind:value={form.dbPort} inputmode="numeric" placeholder="5432" aria-invalid={invalid === "db_port"} /></label>
+          <label>{i18n.t("settings.dbName")} <input bind:value={form.dbName} aria-invalid={invalid === "db_name"} /></label>
+          <label>{i18n.t("settings.user")} <input bind:value={form.dbUser} aria-invalid={invalid === "db_user"} /></label>
+          <label>{i18n.t("field.password")} <input type="password" bind:value={form.dbPassword} autocomplete="off" /></label>
         </div>
       </section>
     </div>
@@ -211,11 +327,16 @@
     {#if form.kind !== "none"}
     <section class="group" role="group" aria-labelledby="settings-phrase">
       <!-- The v1 group of the salt had the gear too. -->
-      <span class="legend" id="settings-phrase"><img src={gearIcon} alt="" />Sync phrase</span>
+      <span class="legend" id="settings-phrase"><img src={gearIcon} alt="" />{i18n.t("settings.syncPhrase")}</span>
       <div class="fields">
         <label class="wide">
-          Phrase (at least {LIMITS.phraseMin} characters, the same on every device)
-          <input type="password" bind:value={form.syncPhrase} autocomplete="off" aria-invalid={invalid === "sync_phrase" || phraseShort} />
+          {i18n.t("settings.phrase", { n: LIMITS.phraseMin })}
+          <span class="reveal-row">
+            <input type={phraseShown ? "text" : "password"} bind:value={form.syncPhrase} autocomplete="off" aria-invalid={invalid === "sync_phrase" || phraseShort} />
+            <button class="reveal" type="button" aria-pressed={phraseShown} aria-label={i18n.t(phraseShown ? "settings.hidePhrase" : "settings.showPhrase")} title={i18n.t(phraseShown ? "settings.hidePhrase" : "settings.showPhrase")} onclick={() => (phraseShown = !phraseShown)}>
+              <img class="mono" src={eyeIcon} alt="" />
+            </button>
+          </span>
         </label>
         <div class="wide"><StrengthMeter phrase={form.syncPhrase} /></div>
       </div>
@@ -224,21 +345,21 @@
 
     {#if form.kind === "ssh_postgres"}
     <section class="group" role="group" aria-labelledby="settings-keys">
-      <span class="legend" id="settings-keys">Keys</span>
+      <span class="legend" id="settings-keys">{i18n.t("settings.keys")}</span>
       <div class="fields">
         <div class="wide row">
-          <span class="muted">{hasKey === undefined ? "" : hasKey ? "Client key is set." : "No client key."}</span>
+          <span class="muted">{hasKey === undefined ? "" : i18n.t(hasKey ? "settings.keySet" : "settings.noKey")}</span>
           <span class="spacer"></span>
-          <button type="button" onclick={generate} disabled={!!busy || !allowed.generate}><img src={gearIcon} alt="" />Generate</button>
-          <button type="button" onclick={exportPublic} disabled={!!busy || !allowed.export}><img src={exportIcon} alt="" />Export public</button>
-          <button type="button" onclick={() => importKey()} disabled={!!busy || !allowed.import}><img src={importIcon} alt="" />Import</button>
+          <button type="button" onclick={generate} disabled={!!busy || !allowed.generate}><img src={gearIcon} alt="" />{i18n.t("settings.generate")}</button>
+          <button type="button" onclick={exportPublic} disabled={!!busy || !allowed.export}><img src={exportIcon} alt="" />{i18n.t("settings.exportPublic")}</button>
+          <button type="button" onclick={() => importKey()} disabled={!!busy || !allowed.import}><img src={importIcon} alt="" />{i18n.t("settings.import")}</button>
         </div>
         <div class="wide row">
           <span class="muted" aria-invalid={invalid === "trusted_host_key"}>
-            Server key: {form.trustedFingerprint || "not trusted yet"}
+            {form.trustedFingerprint ? i18n.t("settings.serverKey", { fingerprint: form.trustedFingerprint }) : i18n.t("settings.notTrusted")}
           </span>
           <span class="spacer"></span>
-          <button type="button" onclick={resetTrust} disabled={!!busy || !form.trustedFingerprint}>Reset</button>
+          <button type="button" onclick={resetTrust} disabled={!!busy || !form.trustedFingerprint}>{i18n.t("settings.reset")}</button>
         </div>
       </div>
     </section>
@@ -247,11 +368,11 @@
     <!-- OK on the left, Test connection in the middle, Cancel on the right, as in v1. -->
     <div class="actions">
       <div class="row">
-        <button type="submit" disabled={!!busy || !allowed.save}>OK</button>
-        <span class="muted">{busy}</span>
+        <button type="submit" disabled={!!busy || !allowed.save}>{i18n.t("common.ok")}</button>
+        <span class="muted">{busy && i18n.t(busy)}</span>
       </div>
-      <button type="button" onclick={test} disabled={!!busy || !allowed.test}>Test connection</button>
-      <button class="cancel" type="button" onclick={close} disabled={!!busy}>Cancel</button>
+      <button type="button" onclick={test} disabled={!!busy || !allowed.test}>{i18n.t("settings.test")}</button>
+      <button class="cancel" type="button" onclick={close} disabled={!!busy}>{i18n.t("common.cancel")}</button>
     </div>
   </form>
 </div>
@@ -259,15 +380,15 @@
 {#if passphrase}
   <div class="backdrop top" use:modal>
     <form class="card" onsubmit={submitPassphrase}>
-      <h2>Key passphrase</h2>
+      <h2>{i18n.t("settings.passphraseTitle")}</h2>
       <label>
-        {passphrase.retry ? "Wrong passphrase. Enter the passphrase of the key" : "The key is protected. Enter its passphrase"}
+        {i18n.t(passphrase.retry ? "settings.passphraseRetry" : "settings.passphrase")}
         <!-- svelte-ignore a11y_autofocus -->
         <input type="password" bind:value={passphrase.value} autocomplete="off" autofocus />
       </label>
       <div class="buttons">
-        <button type="submit" disabled={passphrase.value === ""}>OK</button>
-        <button type="button" onclick={cancelPassphrase}>Cancel</button>
+        <button type="submit" disabled={passphrase.value === ""}>{i18n.t("common.ok")}</button>
+        <button type="button" onclick={cancelPassphrase}>{i18n.t("common.cancel")}</button>
       </div>
     </form>
   </div>
@@ -324,6 +445,16 @@
   }
   .wide {
     grid-column: 1 / -1;
+  }
+  .reveal-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  /* The eye glyph is black; the dark skin shows it light. */
+  img.mono {
+    filter: invert(1);
   }
   .row {
     display: flex;

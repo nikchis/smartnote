@@ -7,7 +7,8 @@ For users who want to share notes between devices or keep a copy off the compute
 
 Synchronization is optional: with the storage **None (local only)** in **Settings** Smartnote works
 locally only. Without a server of your own the notes can be backed up to
-[Yandex Disk](yandex-disk.md) instead. The server needs OpenSSH and PostgreSQL; Smartnote connects
+[Yandex Disk](yandex-disk.md) or [Google Drive](google-drive.md) instead. The server needs OpenSSH
+and PostgreSQL; Smartnote connects
 over SSH and reaches PostgreSQL through the SSH connection, so the database never has to listen on
 a public address.
 
@@ -38,9 +39,10 @@ a public address.
 
    A user who does not own an existing schema needs `GRANT USAGE, CREATE ON SCHEMA smartnote TO smartnote`.
 
-3. Open **Settings** and choose **SSH + PostgreSQL** under **Storage**: only then the fields of the
-   server and the **Keys** group appear. Settings that 2.1.0 saved with a server open with this
-   choice already.
+3. Open **Settings** and choose **SSH + PostgreSQL** under **Storage** (the other choices are
+   **None (local only)**, **Yandex Disk** and **Google Drive**): only then the fields of the server
+   and the **Keys** group appear. Settings that 2.1.0 saved with a server open with this choice
+   already.
 
 4. SSH access: in **Settings → Keys** generate a key (Ed25519) or import your own, press
    **Export public**, and add the line to `~/.ssh/authorized_keys` of the SSH user on the server.

@@ -28,6 +28,8 @@ var (
 	ErrRemoteTooLarge        = errors.New("remote data is too large")
 	ErrRemoteOutcomeUnknown  = errors.New("outcome of the remote operation is unknown")
 	ErrLoopbackUnavailable   = errors.New("local sign-in address is unavailable")
+	ErrManualUnsupported     = errors.New("sign-in with a code is not available for this storage")
+	ErrBrowserUnavailable    = errors.New("the web browser could not be opened")
 )
 
 // ValidationError reports an invalid field. It matches ErrValidation.
@@ -63,3 +65,43 @@ type HostKeyMismatchError struct {
 func (e *HostKeyMismatchError) Error() string {
 	return fmt.Sprintf("server host key mismatch: expected %s, got %s", e.Expected, e.Got)
 }
+
+// ReauthRequiredError asks for a new sign-in to the cloud of Kind. It matches
+// ErrReauthRequired; the source that knows the provider creates it.
+type ReauthRequiredError struct {
+	Kind StorageKind
+}
+
+func (e *ReauthRequiredError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Kind, ErrReauthRequired.Error())
+}
+
+// Is reports whether target is ErrReauthRequired.
+func (e *ReauthRequiredError) Is(target error) bool { return target == ErrReauthRequired }
+
+// ReauthRequired returns the error that asks for a new sign-in to k.
+func ReauthRequired(k StorageKind) error { return &ReauthRequiredError{Kind: k} }
+
+// LoopbackUnavailableError is a local sign-in receiver that could not start
+// for the cloud of Kind. ManualCode tells whether the cloud has a sign-in
+// with a pasted code, so the text can advise it. It matches
+// ErrLoopbackUnavailable and unwraps to the cause, if any.
+type LoopbackUnavailableError struct {
+	Kind       StorageKind
+	ManualCode bool
+	Err        error
+}
+
+func (e *LoopbackUnavailableError) Error() string {
+	if e.Err == nil {
+		return ErrLoopbackUnavailable.Error()
+	}
+
+	return ErrLoopbackUnavailable.Error() + ": " + e.Err.Error()
+}
+
+// Is reports whether target is ErrLoopbackUnavailable.
+func (e *LoopbackUnavailableError) Is(target error) bool { return target == ErrLoopbackUnavailable }
+
+// Unwrap returns the cause.
+func (e *LoopbackUnavailableError) Unwrap() error { return e.Err }

@@ -10,6 +10,10 @@ vars:
   # by `wails3 build GOOS=...` (or the GOOS env var) for cross-compilation. The
   # tasks below dispatch to the matching platform Taskfile via this variable.
   GOOS: '{{.GOOS | default OS}}'
+  # The -X flags of the built-in Google client (internal/adapter/gdrive), only for the variables
+  # SMARTNOTE_GOOGLE_CLIENT_ID and SMARTNOTE_GOOGLE_CLIENT_SECRET that are set (docs/building.md).
+  # The shell of the go build command expands them, so task prints the names, never the values.
+  GOOGLE_LDFLAGS: '${SMARTNOTE_GOOGLE_CLIENT_ID:+ -X github.com/nikchis/smartnote/internal/adapter/gdrive.BuiltinClientID=$SMARTNOTE_GOOGLE_CLIENT_ID}${SMARTNOTE_GOOGLE_CLIENT_SECRET:+ -X github.com/nikchis/smartnote/internal/adapter/gdrive.BuiltinClientSecret=$SMARTNOTE_GOOGLE_CLIENT_SECRET}'
 
 includes:
   common: ./build/Taskfile.yml
@@ -110,8 +114,8 @@ tasks:
 
   ort:fetch:
     summary: |
-      Downloads the official ONNX Runtime archive of the current OS and architecture listed in ort.lock.json,
-      checks its SHA-256, extracts the runtime library and its licence notices into build/ort and checks
+      Downloads the official ONNX Runtime archive listed in ort.lock.json for the current OS and architecture
+      (the NuGet package Microsoft.ML.OnnxRuntime), checks its SHA-256, extracts the runtime library and its licence notices into build/ort and checks
       the library's SHA-256. The target is GOOS and ARCH (the host's by default).
     run: once
     vars:

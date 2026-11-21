@@ -4,14 +4,49 @@
 import type { SettingsDTO } from "./api";
 
 export const emptySettings: SettingsDTO = {
-  kind: "none", yandexClientId: "", yandexAccount: "", yandexSignedIn: false,
+  kind: "none", yandexClientId: "",
+  googleClientId: "", googleClientSecret: "",
   sshHost: "", sshPort: 0, sshUser: "", sshPassword: "",
   dbHost: "", dbPort: 0, dbName: "", dbUser: "", dbPassword: "",
   syncPhrase: "", trustedFingerprint: "",
 };
 
 /** StorageKind is the value of SettingsDTO.kind: where the notes are synchronized. */
-export type StorageKind = "none" | "yandex_disk" | "ssh_postgres";
+export type StorageKind = "none" | "yandex_disk" | "google_drive" | "ssh_postgres";
+
+/** CloudKind is a storage the user signs in to. */
+export type CloudKind = "yandex_disk" | "google_drive";
+
+export function isCloud(kind: string): kind is CloudKind {
+  return kind === "yandex_disk" || kind === "google_drive";
+}
+
+/**
+ * clientOf names the client a sign-in of the form is for: the kind and its
+ * own client ID, empty for the built-in one. Go checks a token against the
+ * client ID alone.
+ */
+export function clientOf(form: Pick<SettingsDTO, "kind" | "yandexClientId" | "googleClientId">): string {
+  const own = form.kind === "yandex_disk" ? form.yandexClientId : form.kind === "google_drive" ? form.googleClientId : "";
+  return `${form.kind}\n${own}`;
+}
+
+/**
+ * Latest numbers the requests that change one shown value, such as the
+ * account of the settings draft: begin returns a check that stays true only
+ * until the next request begins, so a late answer to an older one is dropped.
+ */
+export class Latest {
+  private last = 0;
+
+  begin(): () => boolean {
+    const mine = ++this.last;
+    return () => mine === this.last;
+  }
+}
+
+/** TYPING_PAUSE_MS is how long typing in a field stops before the form acts on its value. */
+export const TYPING_PAUSE_MS = 400;
 
 /** SignInPhase: idle, no sign-in; browser, waiting for the browser; manual, waiting for the code. */
 export type SignInPhase = "idle" | "browser" | "manual";
@@ -19,7 +54,7 @@ export type SignInPhase = "idle" | "browser" | "manual";
 export type SettingsForm = Omit<SettingsDTO, "sshPort" | "dbPort"> & { sshPort: string; dbPort: string };
 
 /**
- * portValue converts a port field: empty is 0 (unset), a port 1–65535 is
+ * portValue converts a port field: empty is 0 (unset), a port 1-65535 is
  * itself, anything else is -1, which Go rejects as invalid. Other numbers
  * would not reach the validation intact: 0 means unset, and a long one fails
  * JSON decoding in Go or turns into null, that is 0.

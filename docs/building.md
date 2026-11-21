@@ -9,7 +9,7 @@ developers.
 
 | Tool | Version |
 |---|---|
-| Go | 1.27.3 (`toolchain` in `go.mod`) |
+| Go | 1.27.4 (`toolchain` in `go.mod`) |
 | Node.js / npm | LTS (developed with 24.21.0 / 12.0.2) |
 | Rust | 1.99.0 with rustfmt and clippy (`search/rust-toolchain.toml`) |
 | Wails CLI | v3.1.0: `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0` |
@@ -56,3 +56,31 @@ packages run through Task, which `make build`, `make package` and `make smoke` c
 
 The manual checks of the packages are in [Manual acceptance test](manual-test.md) and
 [Smoke test on Windows and macOS](smoke-windows-macos.md).
+
+## Built-in Google client
+
+The client ID and the client secret of the Desktop OAuth client with which
+[Google Drive](google-drive.md) signs in with one click are not in the repository. The build puts
+them into the binary from two environment variables:
+
+```sh
+export SMARTNOTE_GOOGLE_CLIENT_ID=...       # <digits>-<...>.apps.googleusercontent.com
+export SMARTNOTE_GOOGLE_CLIENT_SECRET=...
+make build                                  # or task build, task package:linux and so on
+```
+
+The values come from the owner of the project. Every build and package task (`task build`,
+`task dev`, `task package:*`, including the cross builds in Docker once `wails3 task setup:docker` has rebuilt
+the image) passes them to the linker as
+`-ldflags "-X github.com/nikchis/smartnote/internal/adapter/gdrive.BuiltinClientID=...
+-X github.com/nikchis/smartnote/internal/adapter/gdrive.BuiltinClientSecret=..."`; the command
+line that Task prints shows the names of the variables, not the values. The values must not
+contain spaces. Do not write them into the files of the repository.
+
+Without both variables the build still succeeds, but has no built-in Google client: Google Drive
+then works only with your own client in **Settings → Advanced** ([Your own client](google-drive.md#your-own-client)),
+and **Sign in with Google** without it says so. Yandex Disk is not affected. CI takes the values
+from the repository secrets `SMARTNOTE_GOOGLE_CLIENT_ID` and `SMARTNOTE_GOOGLE_CLIENT_SECRET`
+(**Settings → Secrets and variables → Actions** on GitHub) for the `package` job. To check the
+values a build received without printing them, run
+`go test ./internal/adapter/gdrive -run TestBuiltinClientOfBuild -ldflags "<the same -X flags>"`.

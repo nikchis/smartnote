@@ -9,7 +9,7 @@
 
 | Инструмент | Версия |
 |---|---|
-| Go | 1.27.3 (`toolchain` в `go.mod`) |
+| Go | 1.27.4 (`toolchain` в `go.mod`) |
 | Node.js / npm | LTS (разработка велась на 24.21.0 / 12.0.2) |
 | Rust | 1.99.0 с rustfmt и clippy (`search/rust-toolchain.toml`) |
 | Wails CLI | v3.1.0: `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0` |
@@ -57,3 +57,31 @@ Wails — через Task, который вызывают `make build`, `make p
 
 Ручные проверки пакетов описаны в документах [Ручная приёмка](manual-test.ru.md) и
 [Дымовой тест на Windows и macOS](smoke-windows-macos.ru.md).
+
+## Встроенный клиент Google
+
+Client ID и client secret Desktop-клиента OAuth, через который [Google Drive](google-drive.ru.md)
+входит одной кнопкой, в репозитории не хранятся. Сборка встраивает их в программу из двух
+переменных окружения:
+
+```sh
+export SMARTNOTE_GOOGLE_CLIENT_ID=...       # <цифры>-<...>.apps.googleusercontent.com
+export SMARTNOTE_GOOGLE_CLIENT_SECRET=...
+make build                                  # или task build, task package:linux и т. д.
+```
+
+Значения выдаёт владелец проекта. Все задачи сборки и упаковки (`task build`, `task dev`,
+`task package:*`, в том числе кросс-сборки в Docker после пересборки образа командой
+`wails3 task setup:docker`) передают их компоновщику как
+`-ldflags "-X github.com/nikchis/smartnote/internal/adapter/gdrive.BuiltinClientID=...
+-X github.com/nikchis/smartnote/internal/adapter/gdrive.BuiltinClientSecret=..."`; в командной
+строке, которую печатает Task, видны имена переменных, а не значения. Пробелов в значениях быть не
+должно. Не записывайте значения в файлы репозитория.
+
+Без обеих переменных сборка проходит, но встроенного клиента Google в ней нет: Google Drive тогда
+работает только со своим клиентом в **Настройки → Дополнительно** ([Свой клиент](google-drive.ru.md#свой-клиент)),
+и **Войти через Google** без него сообщает об этом. Яндекс Диска это не касается. CI берёт значения
+из секретов репозитория `SMARTNOTE_GOOGLE_CLIENT_ID` и `SMARTNOTE_GOOGLE_CLIENT_SECRET`
+(**Settings → Secrets and variables → Actions** на GitHub) для задания `package`. Чтобы проверить
+значения, полученные сборкой, не печатая их, запустите
+`go test ./internal/adapter/gdrive -run TestBuiltinClientOfBuild -ldflags "<те же флаги -X>"`.

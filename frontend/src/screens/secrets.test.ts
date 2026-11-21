@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { emptySettings, toForm } from "../lib/settings";
 
 // Secret lengths are checked after NFC (spec §5.4); maxlength would cut the
 // typed text before that, so a valid password in NFD could not be entered.
@@ -15,5 +16,17 @@ describe("password inputs", () => {
 
   it.each(inputs)("$file has no maxlength", ({ tag }) => {
     expect(tag).not.toMatch(/maxlength/);
+  });
+});
+
+// The form holds the settings only; tokens and the sign-in state stay in Go,
+// which reports the account of the draft through Account (spec §8, §1.2).
+describe("settings form data", () => {
+  it.each([
+    { name: "the settings", keys: Object.keys(emptySettings) },
+    { name: "the form", keys: Object.keys(toForm(emptySettings)) },
+  ])("$name carry no token and no sign-in state", ({ keys }) => {
+    expect(keys.length).toBeGreaterThan(0);
+    for (const k of keys) expect(k).not.toMatch(/token|refresh|access|account|signedin/i);
   });
 });

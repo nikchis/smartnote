@@ -2,6 +2,7 @@
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { currentDialog, dialogs, dismiss } from "../lib/dialogs.svelte";
+import { msg } from "../lib/i18n.svelte";
 import MessageDialog from "./MessageDialog.svelte";
 
 let target: HTMLElement;
@@ -24,11 +25,11 @@ const buttons = () => [...target.querySelectorAll("button")].map((b) => b.textCo
 const focused = () => (document.activeElement as HTMLElement | null)?.textContent;
 
 const show = {
-  info: () => dialogs.info("Data successfully saved."),
-  warning: () => dialogs.warning("The copy is older."),
-  error: () => dialogs.error("Failed."),
-  ask: () => dialogs.ask("Delete?"),
-  choose: () => dialogs.choose("Save?"),
+  info: () => dialogs.info(msg("sync.saved")),
+  warning: () => dialogs.warning(msg("sync.olderWarning")),
+  error: () => dialogs.error({ raw: "Failed." }),
+  ask: () => dialogs.ask(msg("editor.removeConfirm")),
+  choose: () => dialogs.choose(msg("sync.closeQuestion")),
 } as const;
 
 describe("MessageDialog", () => {
@@ -48,7 +49,7 @@ describe("MessageDialog", () => {
   });
 
   it("names a dialog without a title by its message", () => {
-    void dialogs.info("Data successfully saved.");
+    void dialogs.info(msg("sync.saved"));
     flushSync();
 
     const id = target.querySelector('[role="alertdialog"]')?.getAttribute("aria-labelledby");
@@ -56,7 +57,7 @@ describe("MessageDialog", () => {
   });
 
   it("focuses Yes of a question", () => {
-    void dialogs.ask("Are you sure you want to remove this note?");
+    void dialogs.ask(msg("editor.removeConfirm"));
     flushSync();
 
     expect(buttons()).toEqual(["Yes", "No"]);
@@ -64,7 +65,7 @@ describe("MessageDialog", () => {
   });
 
   it("focuses Cancel of the Discard question, so a repeated Enter keeps the draft", () => {
-    void dialogs.ask("Discard unsaved changes in the editor?", { yes: "Discard", no: "Cancel", primary: "no" });
+    void dialogs.ask(msg("editor.discard"), { yes: "editor.discardYes", no: "common.cancel", primary: "no" });
     flushSync();
 
     expect(buttons()).toEqual(["Discard", "Cancel"]);

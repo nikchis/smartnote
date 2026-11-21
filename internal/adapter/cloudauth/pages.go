@@ -1,4 +1,4 @@
-package yadisk
+package cloudauth
 
 import (
 	"crypto/sha256"
@@ -6,6 +6,8 @@ import (
 	"html"
 	"net/http"
 	"strings"
+
+	"github.com/nikchis/smartnote/internal/i18n"
 )
 
 // The pages of the loopback receiver. Each response is one card of the
@@ -67,61 +69,50 @@ const (
 		`<path d="M24 13 v14" stroke="#f87171" stroke-width="3.5" stroke-linecap="round"/><circle cx="24" cy="34" r="2.3" fill="#f87171"/></svg>`
 )
 
-// page is one card: its status, mark, title and text.
+// page is one card: its status, mark, and the keys of its title and text.
 type page struct {
 	status int
 	mark   string
-	title  string
-	text   string
+	title  i18n.Key
+	text   i18n.Key
 }
 
 var (
-	pageSignedIn = page{
-		status: http.StatusOK, mark: markOK,
-		title: "Signed in to Yandex Disk",
-		text:  "Return to Smartnote and press OK in Settings to save the sign-in.",
-	}
-	pageCancelled = page{
-		status: http.StatusOK, mark: markMuted,
-		title: "Sign-in cancelled",
-		text:  "Smartnote did not get access to Yandex Disk. You can sign in again from Settings.",
-	}
-	pageFailed = page{
-		status: http.StatusOK, mark: markError,
-		title: "Sign-in failed",
-		text:  "Yandex did not complete the sign-in. Return to Smartnote and try again.",
-	}
-	pageExpired = page{
-		status: http.StatusBadRequest, mark: markMuted,
-		title: "Sign-in link expired",
-		text:  "This sign-in link has expired or was already used. Start the sign-in again from Smartnote Settings.",
-	}
-	pageNotFound = page{
-		status: http.StatusNotFound, mark: markMuted,
-		title: "Page not found",
-		text:  "This address is not part of Smartnote.",
-	}
+	pageSignedIn  = page{status: http.StatusOK, mark: markOK, title: i18n.AuthSignedInTitle, text: i18n.AuthSignedInText}
+	pageCancelled = page{status: http.StatusOK, mark: markMuted, title: i18n.AuthCancelledTitle, text: i18n.AuthCancelledText}
+	pageFailed    = page{status: http.StatusOK, mark: markError, title: i18n.AuthFailedTitle, text: i18n.AuthFailedText}
+	pageExpired   = page{status: http.StatusBadRequest, mark: markMuted, title: i18n.AuthExpiredTitle, text: i18n.AuthExpiredText}
+	pageNotFound  = page{status: http.StatusNotFound, mark: markMuted, title: i18n.AuthNotFoundTitle, text: i18n.AuthNotFoundText}
 )
 
-// body is the document of p; every part of it is a constant of this file.
-func (p page) body() string {
+// body is the document of p in the language l for the provider pr; every
+// part of it is a constant of this package or a catalog text.
+func (p page) body(l i18n.Lang, pr Provider) string {
+	issuer := pr.Issuer
+	if issuer == "" {
+		issuer = pr.Name
+	}
+
+	text := func(k i18n.Key) string { return html.EscapeString(i18n.T(l, k, "provider", pr.Name, "issuer", issuer)) }
+
 	var b strings.Builder
 
-	b.WriteString("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">" +
+	b.WriteString("<!doctype html>\n<html lang=\"" + html.EscapeString(string(l)) + "\"><head><meta charset=\"utf-8\">" +
 		"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Smartnote</title>" +
 		"<style>" + pageCSS + "</style></head><body><main class=\"card\">")
 	b.WriteString(logoSVG)
 	b.WriteString("<p class=\"brand\">Smartnote</p>")
 	b.WriteString(p.mark)
-	b.WriteString("<h1>" + html.EscapeString(p.title) + "</h1><p>" + html.EscapeString(p.text) + "</p>")
-	b.WriteString("<p class=\"hint\">You can close this tab.</p></main></body></html>\n")
+	b.WriteString("<h1>" + text(p.title) + "</h1><p>" + text(p.text) + "</p>")
+	b.WriteString("<p class=\"hint\">" + text(i18n.AuthCloseHint) + "</p></main></body></html>\n")
 
 	return b.String()
 }
 
-// write answers with p and the headers every response of the receiver has.
-// close ends the connection after the answer.
-func (p page) write(w http.ResponseWriter, closeAfter bool) {
+// write answers with p, in the language of a at this moment, and the
+// headers every response of the receiver has. closeAfter ends the
+// connection after the answer.
+func (p page) write(w http.ResponseWriter, a *Authorizer, closeAfter bool) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
@@ -134,5 +125,5 @@ func (p page) write(w http.ResponseWriter, closeAfter bool) {
 	}
 
 	w.WriteHeader(p.status)
-	_, _ = w.Write([]byte(p.body())) // the browser may be gone
+	_, _ = w.Write([]byte(p.body(a.lang(), a.p))) // the browser may be gone
 }

@@ -11,13 +11,13 @@ import (
 // Router is the usecase.RemoteConnector that sends each Open to the
 // connector of the storage kind in the target's settings.
 type Router struct {
-	ssh, yandex usecase.RemoteConnector
+	ssh, yandex, google usecase.RemoteConnector
 }
 
-// NewRouter returns a Router over the SSH + PostgreSQL and the Yandex Disk
-// connectors.
-func NewRouter(ssh, yandex usecase.RemoteConnector) *Router {
-	return &Router{ssh: ssh, yandex: yandex}
+// NewRouter returns a Router over the SSH + PostgreSQL, the Yandex Disk and
+// the Google Drive connectors.
+func NewRouter(ssh, yandex, google usecase.RemoteConnector) *Router {
+	return &Router{ssh: ssh, yandex: yandex, google: google}
 }
 
 // Open opens a session with the connector of t.Settings.Kind(). The kind
@@ -29,6 +29,8 @@ func (r *Router) Open(ctx context.Context, t usecase.RemoteTarget, mode usecase.
 		return r.ssh.Open(ctx, t, mode)
 	case domain.KindYandexDisk:
 		return r.yandex.Open(ctx, t, mode)
+	case domain.KindGoogleDrive:
+		return r.google.Open(ctx, t, mode)
 	case domain.KindNone:
 		return nil, domain.ErrNotConnected
 	default:

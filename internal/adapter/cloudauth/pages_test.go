@@ -1,19 +1,22 @@
-package yadisk
+package cloudauth
 
 import (
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/nikchis/smartnote/internal/i18n"
 )
 
 const closeHint = "You can close this tab."
 
 func TestPageCSPHashesTheInlineStyle(t *testing.T) {
-	body := pageSignedIn.body()
+	body := pageSignedIn.body(i18n.EN, testProvider())
 
 	m := regexp.MustCompile(`(?s)<style>(.*?)</style>`).FindStringSubmatch(body)
 	if m == nil || strings.Count(body, "<style") != 1 {
@@ -119,6 +122,7 @@ func TestPagesOfTheReceiver(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newAuthHarness(t)
 			l := h.loopback()
+			waitAsync(t.Context(), l) // the browser waits for the exchange that Wait runs
 
 			status, header, body := tc.act(t, l)
 
@@ -143,7 +147,7 @@ func serveCallback(t *testing.T, l *loginURL, q url.Values) (status int, header 
 
 	rec := &recorder{header: http.Header{}, status: http.StatusOK}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, callbackPath+"?"+q.Encode(), http.NoBody)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/callback"+"?"+q.Encode(), http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,9 +215,64 @@ func wantPage(t *testing.T, header http.Header, body, title, text, mark string) 
 func wantNoRequestData(t *testing.T, body string, l *loginURL) {
 	t.Helper()
 
-	for _, secret := range []string{fakeAuthCode, fakeDescription, l.query.Get("state"), "foreign", "second", "server_error", "access_denied", "favicon", callbackPath} {
+	for _, secret := range []string{fakeAuthCode, fakeDescription, l.query.Get("state"), "foreign", "second", "server_error", "access_denied", "favicon", "/callback"} {
 		if strings.Contains(body, secret) {
 			t.Errorf("page contains request data %q", secret)
 		}
 	}
+}
+
+func TestPagesSourceNoDashes(t *testing.T) {
+	b, err := os.ReadFile("pages.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, line := range strings.Split(string(b), "\n") {
+		if strings.ContainsAny(line, "\u2013\u2014") {
+			t.Errorf("pages.go:%d has an en or em dash: %s", i+1, line)
+		}
+	}
+}
+
+// The page is in the language of the moment it is shown, not of the moment
+// the sign-in began.
+func TestLoopbackPagesFollowLanguage(t *testing.T) {
+	h := newAuthHarness(t)
+	lang := i18n.NewCurrent(i18n.EN)
+
+	opts := h.options()
+	opts.Lang = lang.Get
+	l := h.begin(h.authorizer(opts), false)
+	ch := waitAsync(t.Context(), l)
+
+	lang.Set(i18n.RU)
+
+	status, header, body := l.callback(t, "", l.withState("code", fakeAuthCode))
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+
+	if !strings.Contains(body, `<html lang="ru">`) {
+		t.Errorf("page is not marked as Russian")
+	}
+
+	title := i18n.T(i18n.RU, i18n.AuthSignedInTitle, "provider", testProvider().Name)
+	text := i18n.T(i18n.RU, i18n.AuthSignedInText)
+
+	if title == i18n.T(i18n.EN, i18n.AuthSignedInTitle, "provider", testProvider().Name) {
+		t.Fatalf("no Russian title: %q", title)
+	}
+
+	for _, want := range []string{"<h1>" + title + "</h1>", "<p>" + text + "</p>", i18n.T(i18n.RU, i18n.AuthCloseHint)} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+
+	if header.Get("Content-Security-Policy") != pageCSP {
+		t.Errorf("CSP = %q", header.Get("Content-Security-Policy"))
+	}
+
+	got(t, ch)
 }

@@ -213,23 +213,36 @@ func TestConnectCreatedButChangedSkipsBackup(t *testing.T) {
 	}
 }
 
-func TestConnectYandexWithoutTokenOffline(t *testing.T) {
+// TestConnectWithoutTokenStaysOffline: Connect without a token of the chosen
+// cloud, as after Sign out and OK, stays offline without an error and does
+// not open the storage (TestConnectYandexWithoutTokenOffline of 2.2.2).
+func TestConnectWithoutTokenStaysOffline(t *testing.T) {
 	yandex := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "own"}
+	google := domain.ConnectionSettings{StorageKind: domain.KindGoogleDrive}
+	builtin := map[domain.StorageKind]CloudClient{domain.KindGoogleDrive: {ID: "g-builtin", Secret: "s"}}
 
 	tests := []struct {
-		name  string
-		store *fakeTokenStore
+		name     string
+		settings domain.ConnectionSettings
+		store    *fakeTokenStore
 	}{
-		{name: "no token", store: &fakeTokenStore{}},
-		{name: "token of another client ID", store: &fakeTokenStore{tok: CloudToken{ClientID: "other", Access: "x"}, has: true}},
+		{name: "yandex no token", settings: yandex, store: tokensOf()},
+		{name: "yandex token of another client ID", settings: yandex,
+			store: tokensOf(CloudToken{Provider: domain.KindYandexDisk, ClientID: "other", Access: "x"})},
+		{name: "google no token", settings: google, store: tokensOf()},
+		{name: "google token of another client ID", settings: google,
+			store: tokensOf(CloudToken{Provider: domain.KindGoogleDrive, ClientID: "own-g", Access: "x"})},
+		{name: "google with only a yandex token", settings: google,
+			store: tokensOf(CloudToken{Provider: domain.KindYandexDisk, ClientID: "g-builtin", Access: "x"})},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &fakeServer{serverID: serverA}
 			f := newSyncFixture(t, LocalSnapshot{}, srv)
-			f.sync.d.Settings = &fakeSettings{s: yandex}
+			f.sync.d.Settings = &fakeSettings{s: tc.settings}
 			f.sync.d.Tokens = tc.store
+			f.sync.d.Builtin = builtin
 
 			out, err := f.sync.Connect(context.Background())
 			if err != nil {
@@ -1472,14 +1485,19 @@ func TestCommitRestoreTellsIndex(t *testing.T) {
 
 func TestSyncOpenPassesStoredSource(t *testing.T) {
 	yandex := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "own"}
-	store := &fakeTokenStore{tok: CloudToken{ClientID: "own", Access: "x"}, has: true}
+	google := domain.ConnectionSettings{StorageKind: domain.KindGoogleDrive}
+	store := tokensOf(
+		CloudToken{Provider: domain.KindYandexDisk, ClientID: "own", Access: "x"},
+		CloudToken{Provider: domain.KindGoogleDrive, ClientID: "g-builtin", Access: "g"},
+	)
 
 	tests := []struct {
 		name      string
 		settings  domain.ConnectionSettings
-		wantToken bool
+		wantToken string
 	}{
-		{name: "yandex_disk", settings: yandex, wantToken: true},
+		{name: "yandex_disk", settings: yandex, wantToken: "x"},
+		{name: "google_drive", settings: google, wantToken: "g"},
 		{name: "ssh_postgres", settings: completeSettings()},
 	}
 
@@ -1489,6 +1507,7 @@ func TestSyncOpenPassesStoredSource(t *testing.T) {
 			f := newSyncFixture(t, LocalSnapshot{}, srv)
 			f.sync.d.Settings = &fakeSettings{s: tc.settings}
 			f.sync.d.Tokens = store
+			f.sync.d.Builtin = map[domain.StorageKind]CloudClient{domain.KindGoogleDrive: {ID: "g-builtin"}}
 
 			_, _ = f.sync.PrepareBackup(context.Background())
 
@@ -1501,7 +1520,7 @@ func TestSyncOpenPassesStoredSource(t *testing.T) {
 				t.Fatalf("settings = %+v", got.Settings)
 			}
 
-			if !tc.wantToken {
+			if tc.wantToken == "" {
 				if got.Token != nil {
 					t.Fatal("Token must be nil for ssh_postgres")
 				}
@@ -1509,8 +1528,12 @@ func TestSyncOpenPassesStoredSource(t *testing.T) {
 				return
 			}
 
+			if got.Token == nil {
+				t.Fatal("no token source for a cloud")
+			}
+
 			tok, err := got.Token.Token(context.Background())
-			if err != nil || tok.Access != "x" {
+			if err != nil || tok.Access != tc.wantToken {
 				t.Fatalf("Token = %+v, %v", tok, err)
 			}
 		})
@@ -1534,4 +1557,67 @@ func TestDisconnectsNewErrors(t *testing.T) {
 			t.Errorf("disconnects(%v) = %v, want %v", tc.err, got, tc.want)
 		}
 	}
+}
+
+// TestSyncGoogleWithoutBuiltinClient: without the built-in Google client and
+// without an own one Connect stays offline, while Backup and Restore refuse
+// with the ValidationError of Sign in instead of asking to sign in again.
+func TestSyncGoogleWithoutBuiltinClient(t *testing.T) {
+	google := domain.ConnectionSettings{StorageKind: domain.KindGoogleDrive}
+
+	newFixture := func(t *testing.T) (*syncFixture, *fakeServer) {
+		t.Helper()
+
+		srv := &fakeServer{serverID: serverA}
+		f := newSyncFixture(t, LocalSnapshot{}, srv)
+		f.sync.d.Settings = &fakeSettings{s: google}
+		f.sync.d.Tokens = tokensOf()
+		f.sync.d.Builtin = map[domain.StorageKind]CloudClient{domain.KindYandexDisk: {ID: "y-builtin"}}
+
+		return f, srv
+	}
+
+	assertNoBuiltin := func(t *testing.T, err error) {
+		t.Helper()
+
+		ve, ok := errors.AsType[*domain.ValidationError](err)
+		if !ok || ve.Field != "google_client_id" || ve.Reason != noBuiltinGoogleReason {
+			t.Errorf("err = %v, want a ValidationError for google_client_id: %s", err, noBuiltinGoogleReason)
+		}
+	}
+
+	t.Run("connect", func(t *testing.T) {
+		f, srv := newFixture(t)
+
+		out, err := f.sync.Connect(context.Background())
+		if err != nil || out.Status != StatusOffline {
+			t.Errorf("Connect = %+v, %v; want offline", out, err)
+		}
+
+		if len(srv.targets) != 0 {
+			t.Errorf("Open called %d times without a client", len(srv.targets))
+		}
+	})
+
+	t.Run("backup", func(t *testing.T) {
+		f, srv := newFixture(t)
+
+		_, err := f.sync.PrepareBackup(context.Background())
+		assertNoBuiltin(t, err)
+
+		if len(srv.targets) != 0 {
+			t.Errorf("Open called %d times without a client", len(srv.targets))
+		}
+	})
+
+	t.Run("restore", func(t *testing.T) {
+		f, srv := newFixture(t)
+
+		_, err := f.sync.PrepareRestore(context.Background())
+		assertNoBuiltin(t, err)
+
+		if len(srv.targets) != 0 {
+			t.Errorf("Open called %d times without a client", len(srv.targets))
+		}
+	})
 }

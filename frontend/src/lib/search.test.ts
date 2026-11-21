@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SearchHitDTO, SearchStatusDTO } from "./api";
+import { i18n } from "./i18n.svelte";
 import { highlight, isFindShortcut, SearchBox, type SearchApi } from "./search.svelte";
+
+// The language switches in place of Go.
+i18n.use({ Language: async () => "en", SetLanguage: async () => {} });
 
 function hit(noteId: string, line: number, text = "word"): SearchHitDTO {
   return { noteId, line, start: 0, end: text.length, text, snippet: text, marks: [[0, text.length]], sources: ["words"] };
@@ -353,6 +357,20 @@ describe("SearchBox", () => {
       await vi.advanceTimersByTimeAsync(150);
       expect(box.statusLine()).toBe("Search unavailable");
     });
+  });
+});
+
+describe("SearchBox status line in Russian", () => {
+  afterEach(async () => {
+    await i18n.set("en");
+  });
+
+  it("follows the language of the interface", async () => {
+    box.follow({ ...ready, queued: 380 });
+    await i18n.set("ru");
+    expect(box.statusLine()).toBe("Индексация: 120 из 500");
+    box.follow({ ...ready, semantic: "unavailable" });
+    expect(box.statusLine()).toBe("Семантический поиск недоступен");
   });
 });
 

@@ -47,6 +47,41 @@ encrypted in the same way.
   pinned host key of SSH.
 - The client ID of the application is public, and the package holds no application secret.
 
+## Google Drive
+
+How [Google Drive](google-drive.md) as the remote storage differs from Yandex Disk; the notes are
+encrypted in the same way, in the same container.
+
+- Smartnote asks only for the `https://www.googleapis.com/auth/drive.appdata` scope: its own hidden
+  application data folder, no other file and no account data, not even the account name or email.
+- Google sees your account, the IP address, the moments of writing, and one file with its size to
+  within 64 KiB (for a while two, see [Limitations](limitations.md)). Google, or anyone with access
+  to your account, can delete the file, bring back an earlier revision of it and try to guess the
+  sync phrase offline, as described for Yandex Disk above. It cannot read or forge a note.
+- Sign-in: the same protection as for Yandex Disk (PKCE, `state` checked first, a receiver on
+  `127.0.0.1` only). The port is chosen anew for each sign-in, and there is no sign-in with a code to
+  copy.
+- The access and refresh tokens are stored in `local.db` encrypted with the same key as the notes.
+  They are sent only over HTTPS to `www.googleapis.com` and `oauth2.googleapis.com`; Smartnote does
+  not follow redirects. Tokens, codes, `state`, verifiers and the client secret are never written to
+  the log.
+- An unfinished upload is settled through the address of its upload session, which Google
+  accepts without the token: Smartnote asks for the status of the session and cancels it if the
+  upload is not complete; it never resumes it. Smartnote keeps that address encrypted in `local.db` until the
+  result of the upload is known and never writes it to the log.
+- The release packages hold the client ID and the client secret of the author's Desktop OAuth
+  client. The release build takes them from the secrets of CI, not from the source repository
+  ([Building from source](building.md#built-in-google-client)); in the package they are still
+  public. Google requires the secret both for exchanging the sign-in code and for renewing the access, even with
+  PKCE, and does not treat the secret of an installed application as confidential. Anyone can take
+  it from the package and present another program as Smartnote with this client; that gives no
+  access to anyone's data, because only you sign in to your account and allow the access. If Google
+  revokes the client, the sign-in works only with your own client (see
+  [Your own client](google-drive.md#your-own-client)). Your own client secret is stored in the
+  encrypted settings in `local.db` and is never written to the log.
+- The connection uses TLS with the root certificates of the system and no key pinning, as with
+  Yandex Disk.
+
 ## Search data
 
 - The search index exists only in the memory of the search worker `smartnote-search`; there is no

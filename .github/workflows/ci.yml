@@ -189,8 +189,14 @@ jobs:
         with:
           path: build/ort
           key: search-ort-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ort.lock.json') }}
+      # The built-in Google client (docs/building.md) comes from the repository secrets and only
+      # into the build step; GitHub masks them in the log. A run without them, as a pull request
+      # from a fork, builds the packages without the built-in Google client.
       - run: task package:${{ matrix.target }}
         shell: bash
+        env:
+          SMARTNOTE_GOOGLE_CLIENT_ID: ${{ secrets.SMARTNOTE_GOOGLE_CLIENT_ID }}
+          SMARTNOTE_GOOGLE_CLIENT_SECRET: ${{ secrets.SMARTNOTE_GOOGLE_CLIENT_SECRET }}
       # The packaged search worker must load its ONNX Runtime and model: on macOS from the signed
       # bundle (the library keeps its pinned SHA-256), on Windows from the folder the MSI installs.
       # The Linux packages are checked by task package:linux (.deb) and smoke-appimage.

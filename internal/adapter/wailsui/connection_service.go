@@ -35,9 +35,18 @@ func NewConnectionService(env Env, c *usecase.Connection, progress *ProgressFeed
 	return &ConnectionService{env: env, conn: c, progress: progress}
 }
 
+// AccountDTO is the sign-in of a cloud as the settings form shows it: the
+// account of the token, if the provider reports one, and whether there is a
+// token. The token itself never crosses.
+type AccountDTO struct {
+	Account  string `json:"account"`
+	SignedIn bool   `json:"signedIn"`
+}
+
 // Load returns the saved settings for the settings dialog; a key trusted in
-// a dialog closed without OK is forgotten. A Yandex token that cannot be
-// read shows as Not signed in.
+// a dialog closed without OK, the pending sign-ins and the Sign outs are
+// forgotten. The sign-in is not part of the settings: the form asks Account
+// for the kind and client of its draft.
 func (s *ConnectionService) Load() (SettingsDTO, error) {
 	s.setPending(trustedKey{})
 
@@ -48,26 +57,36 @@ func (s *ConnectionService) Load() (SettingsDTO, error) {
 		return SettingsDTO{}, s.env.fail("load settings", err)
 	}
 
-	dto := toSettingsDTO(settings)
-
-	dto.YandexAccount, dto.YandexSignedIn, err = s.conn.Account(s.env.Ctx, settings)
-	if err != nil {
-		// An unreadable token must not keep Settings closed: the account
-		// shows as Not signed in. The error text may carry details of the
-		// token store, so only its code is logged.
-		s.env.Log.Error("load yandex account", "code", classify(err).Code)
-
-		dto.YandexAccount, dto.YandexSignedIn = "", false
-	}
-
-	return dto, nil
+	return toSettingsDTO(settings), nil
 }
 
-// SignIn signs in to Yandex Disk through the browser and the loopback
-// receiver and returns the account. It waits for the browser up to the
-// sign-in's own limit, so it runs on the application context rather than
-// under the operation timeout; CancelSignIn ends it. The token stays pending
-// until Save.
+// Account returns the sign-in for the kind and the effective client of the
+// draft settings of the form: the pending token of this session of the
+// form, else the saved one, unless the form signed out. Unlike Load it
+// keeps the pending sign-ins and the Sign outs. A kind that is not a cloud
+// is not signed in.
+func (s *ConnectionService) Account(settings SettingsDTO) (AccountDTO, error) {
+	return s.account(settings.settings()), nil
+}
+
+// account is the sign-in for the draft d. A token that cannot be read must
+// not keep Settings closed: it shows as Not signed in. The error text may
+// carry details of the token store, so only its code is logged.
+func (s *ConnectionService) account(d domain.ConnectionSettings) AccountDTO {
+	account, signedIn, err := s.conn.Account(s.env.Ctx, d)
+	if err != nil {
+		s.env.Log.Error("load cloud account", "code", classify(err).Code)
+		return AccountDTO{}
+	}
+
+	return AccountDTO{Account: account, SignedIn: signedIn}
+}
+
+// SignIn signs in to the cloud of settings.kind through the browser and the
+// loopback receiver, with the effective client of settings, and returns the
+// account. It waits for the browser up to the sign-in's own limit, so it
+// runs on the application context rather than under the operation timeout;
+// CancelSignIn ends it. The token stays pending until Save.
 func (s *ConnectionService) SignIn(settings SettingsDTO) (string, error) {
 	account, err := s.conn.SignIn(s.env.Ctx, settings.settings())
 	if err != nil {
@@ -77,7 +96,8 @@ func (s *ConnectionService) SignIn(settings SettingsDTO) (string, error) {
 	return account, nil
 }
 
-// SignInManual opens the browser for a sign-in by code; SubmitCode finishes it.
+// SignInManual opens the browser for a sign-in by code to the cloud of
+// settings.kind; SubmitCode finishes it. Google Drive has none.
 func (s *ConnectionService) SignInManual(settings SettingsDTO) error {
 	return s.env.fail("sign in manually", s.conn.SignInManual(s.env.Ctx, settings.settings()))
 }
@@ -99,8 +119,9 @@ func (s *ConnectionService) SubmitCode(code string) (string, error) {
 // CancelSignIn ends the sign-in in progress, if any.
 func (s *ConnectionService) CancelSignIn() { s.conn.CancelSignIn() }
 
-// SignOut forgets the Yandex Disk token; Save makes it final.
-func (s *ConnectionService) SignOut() { s.conn.SignOut() }
+// SignOut forgets the token of the cloud kind; Save makes it final. A kind
+// that is not a cloud changes nothing.
+func (s *ConnectionService) SignOut(kind string) { s.conn.SignOut(domain.StorageKind(kind)) }
 
 // Test connects with settings without saving them; empty reports that the
 // server has no Smartnote storage yet.

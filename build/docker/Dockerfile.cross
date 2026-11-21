@@ -205,6 +205,15 @@ if [ "$GOOS" = "windows" ]; then
     LDFLAGS="-s -w -H windowsgui"
 fi
 
+# The built-in Google client of Smartnote, from the variables docker run passes by name.
+GDRIVE=github.com/nikchis/smartnote/internal/adapter/gdrive
+if [ -n "$SMARTNOTE_GOOGLE_CLIENT_ID" ]; then
+    LDFLAGS="$LDFLAGS -X $GDRIVE.BuiltinClientID=$SMARTNOTE_GOOGLE_CLIENT_ID"
+fi
+if [ -n "$SMARTNOTE_GOOGLE_CLIENT_SECRET" ]; then
+    LDFLAGS="$LDFLAGS -X $GDRIVE.BuiltinClientSecret=$SMARTNOTE_GOOGLE_CLIENT_SECRET"
+fi
+
 TAGS="production"
 if [ -n "$EXTRA_TAGS" ]; then
     TAGS="${TAGS},${EXTRA_TAGS}"

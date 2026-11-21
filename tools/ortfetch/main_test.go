@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -529,5 +530,196 @@ func TestReadLockRejectsInvalidNotices(t *testing.T) {
 				t.Fatalf("readLock() error = %v, want one about the notice", err)
 			}
 		})
+	}
+}
+
+// The layout of a NuGet package (a zip): the libraries of all targets under runtimes/, named
+// without the version, and the notice files at the root.
+const (
+	testNupkgLib     = "runtimes/linux-x64/native/libonnxruntime.so"
+	testNupkgLibName = "libonnxruntime.so.1.0.0"
+)
+
+func nupkgEntries() []archiveEntry {
+	return []archiveEntry{
+		{name: "[Content_Types].xml", content: "types"},
+		{name: "runtimes/win-x64/native/onnxruntime.dll", content: "windows library"},
+		{name: testNupkgLib, content: testLibContent},
+		{name: "LICENSE", content: testLicense},
+		{name: "ThirdPartyNotices.txt", content: testNotices},
+	}
+}
+
+func nupkgLock(url string, archive []byte) lockFile {
+	lock := lockFor(url, archive, testNupkgLib, testLibContent)
+	lock.Notices = []string{"LICENSE", "ThirdPartyNotices.txt"}
+	entry := lock.Targets[testTarget]
+	entry.LibName = testNupkgLibName
+	entry.NoticesDir = "."
+	lock.Targets[testTarget] = entry
+
+	return lock
+}
+
+func assertNupkgOutput(t *testing.T, dir string) {
+	t.Helper()
+
+	for name, want := range map[string]string{
+		testNupkgLibName:        testLibContent,
+		"LICENSE":               testLicense,
+		"ThirdPartyNotices.txt": testNotices,
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+
+	assertOnlyFiles(t, dir, "LICENSE", "ThirdPartyNotices.txt", testNupkgLibName)
+}
+
+func TestRunExtractsRenamedLibraryAndRootNoticesFromNupkg(t *testing.T) {
+	archive := makeZip(t, nupkgEntries())
+	server, requests := serveArchive(t, "ort.1.0.0.nupkg", archive)
+	out := t.TempDir()
+
+	if err := run(context.Background(), writeLock(t, nupkgLock(server.URL+"/ort.1.0.0.nupkg", archive)), out, testTarget); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := requests.Load(); got != 1 {
+		t.Errorf("requests = %d, want 1", got)
+	}
+
+	assertNupkgOutput(t, out)
+}
+
+func TestRunKeepsRenamedLibraryWithoutDownload(t *testing.T) {
+	archive := makeZip(t, nupkgEntries())
+	server, requests := serveArchive(t, "ort.1.0.0.nupkg", archive)
+	out := t.TempDir()
+
+	for name, content := range map[string]string{testNupkgLibName: testLibContent, "LICENSE": testLicense, "ThirdPartyNotices.txt": testNotices} {
+		if err := os.WriteFile(filepath.Join(out, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := run(context.Background(), writeLock(t, nupkgLock(server.URL+"/ort.1.0.0.nupkg", archive)), out, testTarget); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := requests.Load(); got != 0 {
+		t.Errorf("requests = %d, want 0", got)
+	}
+
+	assertNupkgOutput(t, out)
+}
+
+func TestRunRejectsNupkgLibraryDigestMismatch(t *testing.T) {
+	archive := makeZip(t, nupkgEntries())
+	server, _ := serveArchive(t, "ort.1.0.0.nupkg", archive)
+	lock := nupkgLock(server.URL+"/ort.1.0.0.nupkg", archive)
+	entry := lock.Targets[testTarget]
+	entry.LibSHA256 = sum([]byte("another library"))
+	lock.Targets[testTarget] = entry
+	out := t.TempDir()
+
+	err := run(context.Background(), writeLock(t, lock), out, testTarget)
+	if err == nil || !strings.Contains(err.Error(), "library SHA-256") {
+		t.Fatalf("run() error = %v, want a library SHA-256 mismatch", err)
+	}
+
+	assertOnlyFiles(t, out)
+}
+
+func TestRunRejectsPathTraversalInNupkg(t *testing.T) {
+	for _, name := range []string{"../evil.so", "/abs/evil.so", "runtimes/../../evil.so", `..\evil.dll`} {
+		t.Run(name, func(t *testing.T) {
+			archive := makeZip(t, append(nupkgEntries(), archiveEntry{name: name, content: "evil"}))
+			server, _ := serveArchive(t, "ort.1.0.0.nupkg", archive)
+			out := t.TempDir()
+
+			err := run(context.Background(), writeLock(t, nupkgLock(server.URL+"/ort.1.0.0.nupkg", archive)), out, testTarget)
+			if err == nil || !strings.Contains(err.Error(), "unsafe path") {
+				t.Fatalf("run() error = %v, want an unsafe path", err)
+			}
+
+			assertOnlyFiles(t, out)
+		})
+	}
+}
+
+func TestRunRejectsNupkgWithoutRootNotice(t *testing.T) {
+	entries := nupkgEntries()
+	entries[len(entries)-1].name = "docs/ThirdPartyNotices.txt"
+	archive := makeZip(t, entries)
+	server, _ := serveArchive(t, "ort.1.0.0.nupkg", archive)
+	out := t.TempDir()
+
+	err := run(context.Background(), writeLock(t, nupkgLock(server.URL+"/ort.1.0.0.nupkg", archive)), out, testTarget)
+	if err == nil || !strings.Contains(err.Error(), "ThirdPartyNotices.txt is not in the archive") {
+		t.Fatalf("run() error = %v, want a missing notice", err)
+	}
+
+	assertOnlyFiles(t, out)
+}
+
+func TestReadLockRejectsInvalidLibNameAndNoticesDir(t *testing.T) {
+	valid := target{
+		URL:        "https://example.invalid/ort.1.0.0.nupkg",
+		SHA256:     strings.Repeat("a", 64),
+		Lib:        testNupkgLib,
+		LibSHA256:  strings.Repeat("b", 64),
+		LibName:    testNupkgLibName,
+		NoticesDir: ".",
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*target)
+		want   string
+	}{
+		{"lib_name with directory", func(e *target) { e.LibName = "lib/libonnxruntime.so" }, "lib_name"},
+		{"lib_name with backslash", func(e *target) { e.LibName = `lib\onnxruntime.dll` }, "lib_name"},
+		{"lib_name parent", func(e *target) { e.LibName = ".." }, "lib_name"},
+		{"lib_name dot", func(e *target) { e.LibName = "." }, "lib_name"},
+		{"lib_name as notice", func(e *target) { e.LibName = "LICENSE" }, "notice"},
+		{"notices_dir with parent", func(e *target) { e.NoticesDir = "../docs" }, "notices_dir"},
+		{"absolute notices_dir", func(e *target) { e.NoticesDir = "/docs" }, "notices_dir"},
+		{"notices_dir with backslash", func(e *target) { e.NoticesDir = `docs\licenses` }, "notices_dir"},
+		{"unclean notices_dir", func(e *target) { e.NoticesDir = "docs/" }, "notices_dir"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := valid
+			tc.mutate(&entry)
+
+			path := writeLock(t, lockFile{Version: "1.0.0", Notices: []string{"LICENSE"}, Targets: map[string]target{testTarget: entry}})
+
+			_, err := readLock(path)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("readLock() error = %v, want one about %s", err, tc.want)
+			}
+		})
+	}
+
+	validLock := writeLock(t, lockFile{Version: "1.0.0", Notices: []string{"LICENSE"}, Targets: map[string]target{testTarget: valid}})
+	if _, err := readLock(validLock); err != nil {
+		t.Fatalf("readLock() of a valid nupkg target: %v", err)
+	}
+
+	// A notice that is the library member itself would replace the library in the output.
+	clash := valid
+	clash.NoticesDir = path.Dir(testNupkgLib)
+
+	lockPath := writeLock(t, lockFile{Version: "1.0.0", Notices: []string{path.Base(testNupkgLib)}, Targets: map[string]target{testTarget: clash}})
+	if _, err := readLock(lockPath); err == nil || !strings.Contains(err.Error(), "notice") {
+		t.Fatalf("readLock() error = %v, want one about the notice", err)
 	}
 }

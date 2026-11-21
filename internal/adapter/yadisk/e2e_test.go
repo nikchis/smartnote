@@ -105,8 +105,9 @@ func (c *e2eConfig) SaveSettings(_ context.Context, s domain.ConnectionSettings)
 	return nil
 }
 
-func (c *e2eConfig) LoadCloudToken(context.Context) (usecase.CloudToken, bool, error) {
-	return c.token, true, nil
+// LoadCloudToken returns the token of the Disk; there is none of other providers.
+func (c *e2eConfig) LoadCloudToken(_ context.Context, p domain.StorageKind) (usecase.CloudToken, bool, error) {
+	return c.token, p == domain.KindYandexDisk, nil
 }
 
 func (c *e2eConfig) SaveCloudToken(_ context.Context, t usecase.CloudToken) error {

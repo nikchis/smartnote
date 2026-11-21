@@ -160,7 +160,7 @@ func TestConnectionSettings_JSONNames(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	want := []string{"kind", "yandex_client_id", "ssh_host", "ssh_port", "ssh_user", "ssh_password", "db_host", "db_port",
+	want := []string{"kind", "yandex_client_id", "google_client_id", "google_client_secret", "ssh_host", "ssh_port", "ssh_user", "ssh_password", "db_host", "db_port",
 		"db_name", "db_user", "db_password", "sync_phrase", "trusted_host_key", "trusted_host_addr"}
 	if len(got) != len(want) {
 		t.Errorf("got %d keys %v, want %d", len(got), got, len(want))
@@ -366,7 +366,7 @@ func TestValidateYandex(t *testing.T) {
 }
 
 func TestValidateUnknownKind(t *testing.T) {
-	assertValidationField(t, ConnectionSettings{StorageKind: "google_drive"}.Validate(), "kind")
+	assertValidationField(t, ConnectionSettings{StorageKind: "dropbox"}.Validate(), "kind")
 }
 
 func TestValidateNone(t *testing.T) {
@@ -386,7 +386,10 @@ func TestWithDefaultsOnlySSHPostgres(t *testing.T) {
 }
 
 func TestStringRedactsNewFields(t *testing.T) {
-	s := ConnectionSettings{StorageKind: KindYandexDisk, YandexClientID: "client-id-marker", SyncPhrase: "sync-phrase-marker"}
+	s := ConnectionSettings{
+		StorageKind: KindGoogleDrive, YandexClientID: "client-id-marker", SyncPhrase: "sync-phrase-marker",
+		GoogleClientID: "google-id-marker", GoogleClientSecret: "google-secret-marker",
+	}
 
 	var logged bytes.Buffer
 	slog.New(slog.NewJSONHandler(&logged, nil)).Info("x", "settings", s)
@@ -396,7 +399,7 @@ func TestStringRedactsNewFields(t *testing.T) {
 		"%#v":  fmt.Sprintf("%#v", s),
 		"slog": logged.String(),
 	} {
-		for _, m := range []string{"client-id-marker", "sync-phrase-marker"} {
+		for _, m := range []string{"client-id-marker", "sync-phrase-marker", "google-id-marker", "google-secret-marker"} {
 			if strings.Contains(out, m) {
 				t.Errorf("%s output %q contains %q", verb, out, m)
 			}
@@ -405,5 +408,82 @@ func TestStringRedactsNewFields(t *testing.T) {
 		if !strings.Contains(out, "redacted") {
 			t.Errorf("%s output %q lacks redacted", verb, out)
 		}
+	}
+}
+
+// googleID is a well-formed Google OAuth client ID.
+const googleID = "123456789012-abcDEF_0123456789.apps.googleusercontent.com"
+
+func TestKindGoogleDrive(t *testing.T) {
+	s := ConnectionSettings{StorageKind: KindGoogleDrive, SyncPhrase: strings.Repeat("p", MinSyncPhraseLen)}
+
+	if s.Kind() != KindGoogleDrive || string(KindGoogleDrive) != "google_drive" {
+		t.Errorf("Kind() = %q, want google_drive", s.Kind())
+	}
+
+	if s.IsEmpty() {
+		t.Error("google_drive: IsEmpty() = true, want false")
+	}
+
+	if !IsCloud(KindGoogleDrive) || !IsCloud(KindYandexDisk) || IsCloud(KindSSHPostgres) || IsCloud(KindNone) {
+		t.Error("IsCloud must hold for yandex_disk and google_drive only")
+	}
+
+	tests := []struct {
+		name      string
+		modify    func(*ConnectionSettings)
+		wantField string
+	}{
+		{name: "built-in client", modify: func(*ConnectionSettings) {}},
+		{name: "own pair", modify: func(s *ConnectionSettings) { s.GoogleClientID, s.GoogleClientSecret = googleID, "GOCSPX-secret" }},
+		{name: "short phrase", modify: func(s *ConnectionSettings) { s.SyncPhrase = "short" }, wantField: "sync_phrase"},
+		{name: "id without secret", modify: func(s *ConnectionSettings) { s.GoogleClientID = googleID }, wantField: "google_client_secret"},
+		{name: "ssh and yandex fields ignored", modify: func(s *ConnectionSettings) { s.SSHPort = -5; s.YandexClientID = "a b" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := s
+			tt.modify(&s)
+			assertValidationField(t, s.Validate(), tt.wantField)
+		})
+	}
+}
+
+func TestValidateGoogleClient(t *testing.T) {
+	tests := []struct {
+		name, id, secret, wantField string
+	}{
+		{name: "both empty", id: "", secret: ""},
+		{name: "both set", id: googleID, secret: "GOCSPX-abc_123"},
+		{name: "secret of 128 printable chars", id: googleID, secret: strings.Repeat("~", 128)},
+		{name: "secret with a space", id: googleID, secret: "a b"},
+		{name: "id of 128 chars", id: "1-" + strings.Repeat("a", 128-len("1-.apps.googleusercontent.com")) + ".apps.googleusercontent.com", secret: "s"},
+		{name: "id only", id: googleID, wantField: "google_client_secret"},
+		{name: "secret only", secret: "s", wantField: "google_client_id"},
+		{name: "id without digits", id: "abc-def.apps.googleusercontent.com", secret: "s", wantField: "google_client_id"},
+		{name: "id of another domain", id: "123-abc.apps.example.com", secret: "s", wantField: "google_client_id"},
+		{name: "id with a dot in the name", id: "123-a.b.apps.googleusercontent.com", secret: "s", wantField: "google_client_id"},
+		{name: "id of 129 chars", id: "1-" + strings.Repeat("a", 129-len("1-.apps.googleusercontent.com")) + ".apps.googleusercontent.com", secret: "s", wantField: "google_client_id"},
+		{name: "secret of 129 chars", id: googleID, secret: strings.Repeat("a", 129), wantField: "google_client_secret"},
+		{name: "secret with a tab", id: googleID, secret: "a\tb", wantField: "google_client_secret"},
+		{name: "secret not ascii", id: googleID, secret: "секрет", wantField: "google_client_secret"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidationField(t, ValidateGoogleClient(tt.id, tt.secret), tt.wantField)
+		})
+	}
+}
+
+func TestSSHEmptyIgnoresGoogleClient(t *testing.T) {
+	s := ConnectionSettings{StorageKind: KindSSHPostgres, GoogleClientID: googleID, GoogleClientSecret: "GOCSPX-secret"}
+
+	if !s.IsEmpty() {
+		t.Error("ssh_postgres with only a Google client: IsEmpty() = false, want true")
+	}
+
+	s.StorageKind = ""
+	if s.Kind() != KindNone {
+		t.Errorf("Kind() without StorageKind = %q, want none", s.Kind())
 	}
 }

@@ -1,26 +1,28 @@
 // The overlay of the synchronization processes (Connect, Backup, Restore, the
 // Backup on close): one for the whole process, not one per call to the server.
 import type { Dialogs } from "./dialogs.svelte";
-import { progressView, type Progress, type ProgressView } from "./progress";
+import { i18n, type Key, type Msg } from "./i18n.svelte";
+import { progressView, type Activity, type Progress, type ProgressView } from "./progress";
 
 /** ProcessKind names a synchronization process; the Backup on close is a "backup". */
 export type ProcessKind = "connect" | "backup" | "restore";
 
-const LABELS: Record<ProcessKind, string> = { connect: "Connecting…", backup: "Synchronizing…", restore: "Synchronizing…" };
+const LABELS: Record<ProcessKind, Key> = { connect: "overlay.connecting", backup: "overlay.backup", restore: "overlay.restore" };
 
 /**
  * TRANSFERS is how many transfers report their progress in a process, by
  * storage; each fills an equal share of the bar. They follow the Go side
- * (usecase/sync.go): a Yandex Disk Backup reads the container in
- * PrepareBackup, reads it again when CommitBackup opens its session and then
- * writes it (blobremote/session.go); a server Backup reads the notes, then
- * writes them (postgres/session.go). CommitRestore transfers nothing. A
- * storage not listed has one transfer; more than planned stay in the last
- * share, as in the first Connect that creates the storage.
+ * (usecase/sync.go): a cloud Backup (Yandex Disk, Google Drive) reads the
+ * container in PrepareBackup, reads it again when CommitBackup opens its
+ * session and then writes it (blobremote/session.go); a server Backup
+ * reads the notes, then writes them (postgres/session.go). CommitRestore
+ * transfers nothing. A storage not listed has one transfer; more than
+ * planned stay in the last share, as in the first Connect that creates the
+ * storage.
  */
-const TRANSFERS: Record<ProcessKind, Record<string, number>> = {
+export const TRANSFERS: Readonly<Record<ProcessKind, Readonly<Record<string, number>>>> = {
   connect: {},
-  backup: { yandex_disk: 3, ssh_postgres: 2 },
+  backup: { yandex_disk: 3, google_drive: 3, ssh_postgres: 2 },
   restore: {},
 };
 
@@ -32,8 +34,8 @@ const TRANSFERS: Record<ProcessKind, Record<string, number>> = {
  * shared by the transfers of the process (TRANSFERS).
  */
 export class SyncOverlay {
-  /** text is shown over the window; "" hides the overlay. */
-  text = $state("");
+  /** label is the key of the text over the window; "" hides the overlay. */
+  private label: Key | "" = $state("");
   /** progress is the last transfer reported during the running process. */
   progress: Progress | undefined = $state();
   /** restoring is true from the Restore download the user started until the next call. */
@@ -54,6 +56,11 @@ export class SyncOverlay {
    */
   private step = $state(-1);
   private ended = true;
+
+  /** text is shown over the window, in the current language; "" hides the overlay. */
+  get text(): string {
+    return this.label && i18n.t(this.label);
+  }
 
   private get kind(): ProcessKind {
     return this.processes[0]?.kind ?? "backup";
@@ -76,7 +83,7 @@ export class SyncOverlay {
       } else if (owner) {
         // The next process owns the overlay now and counts its own transfers.
         this.reset();
-        if (this.text) this.text = LABELS[this.kind];
+        if (this.label) this.label = LABELS[this.kind];
       }
     }
   }
@@ -86,7 +93,7 @@ export class SyncOverlay {
    * Restore download, until the next call, as its progress stays on screen.
    */
   call<T>(call: () => Promise<T>, restore = false): Promise<T> {
-    this.text = LABELS[this.kind];
+    this.label = LABELS[this.kind];
     if (this.processes.length <= 1) this.restoring = restore;
     return call();
   }
@@ -110,7 +117,8 @@ export class SyncOverlay {
   view(): ProgressView | undefined {
     const p = this.progress;
     if (!p) return undefined;
-    return progressView(p, this.restoring, { index: this.step, count: TRANSFERS[this.kind][p.storage] ?? 1 });
+    const activity: Activity = this.restoring ? "restore" : this.kind === "backup" ? "backup" : "sync";
+    return progressView(p, activity, { index: this.step, count: TRANSFERS[this.kind][p.storage] ?? 1 });
   }
 
   /**
@@ -119,8 +127,8 @@ export class SyncOverlay {
    */
   dialogs(d: Dialogs): Dialogs {
     const final =
-      (show: (msg: string) => Promise<void>) =>
-      (msg: string): Promise<void> => {
+      (show: (msg: Msg) => Promise<void>) =>
+      (msg: Msg): Promise<void> => {
         if (this.processes.length <= 1) this.hide();
         return show(msg);
       };
@@ -134,7 +142,7 @@ export class SyncOverlay {
   }
 
   private hide(): void {
-    this.text = "";
+    this.label = "";
     this.reset();
   }
 

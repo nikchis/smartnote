@@ -4,7 +4,7 @@
 
 A notepad for private records on Linux, Windows and macOS. Notes are kept in an encrypted local
 storage; optionally they are backed up to and restored from your own PostgreSQL server reachable
-over SSH or Yandex Disk, which see only ciphertext. Version 2 is a rewrite of the Delphi
+over SSH, Yandex Disk or Google Drive, which see only ciphertext. Version 2 is a rewrite of the Delphi
 application (branch [`v1`](https://github.com/nikchis/smartnote/tree/v1)) in Go, Wails v3 and
 Svelte.
 
@@ -14,7 +14,11 @@ Svelte.
 - Optional backup and restore through your own PostgreSQL over SSH; the server sees only ciphertext.
 - Optional backup and restore through Yandex Disk after signing in with your Yandex account; see
   [Yandex Disk](docs/yandex-disk.md).
+- Optional backup and restore through Google Drive after signing in with your Google account;
+  Smartnote gets access only to its own hidden folder there. See [Google Drive](docs/google-drive.md).
 - Local full-text and semantic search, in Russian and English and in code; nothing leaves the device.
+- The interface in English or Russian, switched with one button; the privacy policy can be read in
+  the application, without the network.
 
 ## Download
 
@@ -33,12 +37,16 @@ packages are not signed. Steps and requirements are in
 
 All documents are in [docs/](docs/README.md), in English and Russian.
 
-- [Installation and upgrade](docs/install.md): per system, and the upgrade from 2.1.0 and 2.0.x.
+- [Installation and upgrade](docs/install.md): per system, and the upgrade from 2.2.x, 2.1.0 and
+  2.0.x.
 - [Server setup](docs/server-setup.md): PostgreSQL and OpenSSH for synchronization.
 - [Yandex Disk](docs/yandex-disk.md): sign-in, your own client ID, revoking access.
+- [Google Drive](docs/google-drive.md): sign-in, your own client, revoking access, deleting the
+  data.
 - [Search](docs/search.md): how to search and what the status line means.
 - [Security](docs/security.md): the threat model and what is not protected.
-- [Limitations](docs/limitations.md): behaviour to know before relying on a server or Yandex Disk.
+- [Limitations](docs/limitations.md): behaviour to know before relying on a server, Yandex Disk or
+  Google Drive.
 - [Building from source](docs/building.md): tools and commands for developers.
 
 ## License

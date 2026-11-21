@@ -1,8 +1,12 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { backupFlow, closeFlow, restoreFlow, type SyncApi } from "../flows/sync";
 import type { Dialogs } from "./dialogs.svelte";
-import { SyncOverlay } from "./overlay.svelte";
+import { i18n, type Msg } from "./i18n.svelte";
+import { SyncOverlay, TRANSFERS } from "./overlay.svelte";
 import type { Progress } from "./progress";
+
+// The language switches in place of Go.
+i18n.use({ Language: async () => "en", SetLanguage: async () => {} });
 
 const zero = { added: 0, updated: 0, deleted: 0 };
 const upload: Progress = { storage: "yandex_disk", direction: "upload", unit: "bytes", done: 5, total: 10 };
@@ -17,23 +21,23 @@ class RecordingDialogs implements Dialogs {
     private readonly overlay: SyncOverlay,
     private readonly answers: boolean[] = [],
   ) {}
-  private note(kind: string, msg: string) {
-    this.log.push(`${kind} ${msg} [overlay: ${this.overlay.text}]`);
+  private note(kind: string, msg: Msg) {
+    this.log.push(`${kind} ${i18n.text(msg)} [overlay: ${this.overlay.text}]`);
   }
-  async info(msg: string) {
+  async info(msg: Msg) {
     this.note("info", msg);
   }
-  async warning(msg: string) {
+  async warning(msg: Msg) {
     this.note("warning", msg);
   }
-  async error(msg: string) {
+  async error(msg: Msg) {
     this.note("error", msg);
   }
-  async ask(msg: string) {
+  async ask(msg: Msg) {
     this.note("ask", msg);
     return this.answers.shift() === true;
   }
-  async choose(msg: string) {
+  async choose(msg: Msg) {
     this.note("choose", msg);
     return "yes" as const;
   }
@@ -209,6 +213,18 @@ describe("SyncOverlay", () => {
     ]);
   });
 
+  // A Google Drive Backup transfers as a Yandex Disk one does (spec §5.8).
+  it("counts three transfers in a Google Drive Backup", async () => {
+    expect(TRANSFERS.backup.google_drive).toBe(3);
+
+    await overlay.process("backup", async () => {
+      await overlay.call(async () => {
+        overlay.follow({ storage: "google_drive", direction: "download", unit: "bytes", done: 500_000, total: 1_000_000 });
+        expect(overlay.view()).toMatchObject({ title: "Synchronizing with Google Drive…", detail: "Step 1 of 3 · 0.5 of 1.0 MB · 16%" });
+      });
+    });
+  });
+
   it("splits the bar of a server Backup into its two transfers", async () => {
     const seen: (string | undefined)[] = [];
 
@@ -373,3 +389,43 @@ describe("SyncOverlay", () => {
   });
 });
 
+describe("SyncOverlay and the language", () => {
+  afterEach(async () => {
+    await i18n.set("en");
+  });
+
+  it("shows its text in the language of the moment", async () => {
+    const overlay = new SyncOverlay();
+    let resume!: () => void;
+    const running = overlay.process("connect", () => overlay.call(() => new Promise<void>((r) => (resume = r))));
+    expect(overlay.text).toBe("Connecting…");
+
+    await i18n.set("ru");
+    expect(overlay.text).toBe("Подключение…");
+
+    resume();
+    await running;
+    expect(overlay.text).toBe("");
+  });
+
+  // Spec §16.4, decision of the customer: in Russian the overlay and the
+  // progress of a Backup and a Restore name them by their nouns; English
+  // keeps "Synchronizing…".
+  it.each([
+    { kind: "backup" as const, restore: false, en: "Synchronizing…", ru: "Создание резервной копии…", title: "Создание резервной копии на Yandex Disk…" },
+    { kind: "restore" as const, restore: true, en: "Synchronizing…", ru: "Восстановление копии…", title: "Восстановление копии с Yandex Disk…" },
+  ])("names the $kind by its noun in Russian", async ({ kind, restore, en, ru, title }) => {
+    const overlay = new SyncOverlay();
+    let resume!: () => void;
+    const running = overlay.process(kind, () => overlay.call(() => new Promise<void>((r) => (resume = r)), restore));
+    overlay.follow(disk("download", 1, 2));
+    expect(overlay.text).toBe(en);
+
+    await i18n.set("ru");
+    expect(overlay.text).toBe(ru);
+    expect(overlay.view()?.title).toBe(title);
+
+    resume();
+    await running;
+  });
+});

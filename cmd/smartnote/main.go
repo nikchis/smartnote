@@ -21,6 +21,8 @@ import (
 
 	"github.com/nikchis/smartnote/frontend"
 	"github.com/nikchis/smartnote/internal/adapter/blobremote"
+	"github.com/nikchis/smartnote/internal/adapter/cloudauth"
+	"github.com/nikchis/smartnote/internal/adapter/gdrive"
 	"github.com/nikchis/smartnote/internal/adapter/remote"
 	"github.com/nikchis/smartnote/internal/adapter/sqlite"
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
@@ -28,6 +30,7 @@ import (
 	"github.com/nikchis/smartnote/internal/adapter/yadisk"
 	"github.com/nikchis/smartnote/internal/applog"
 	"github.com/nikchis/smartnote/internal/domain"
+	"github.com/nikchis/smartnote/internal/i18n"
 	"github.com/nikchis/smartnote/internal/platform"
 	"github.com/nikchis/smartnote/internal/sealbox"
 	"github.com/nikchis/smartnote/internal/usecase"
@@ -125,7 +128,11 @@ func run(logger *slog.Logger) error {
 
 	app.OnShutdown(finish)
 
-	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger, SavedKind: savedKind(store)}, store, lifecycle, searchParts{
+	// The language of the interface: PrefsService sets it, the sign-in pages
+	// and the file dialogs read it. English until the interface reports it.
+	lang := i18n.NewCurrent(i18n.EN)
+
+	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger, SavedKind: savedKind(store), Lang: lang}, dataDir, store, lifecycle, searchParts{
 		engine: engine, status: searchStatus, run: searchRun,
 	})
 	if err != nil {
@@ -230,8 +237,9 @@ func savedKind(store *sqlite.Store) func(context.Context) (domain.StorageKind, e
 	}
 }
 
-// newServices wires the use cases over store into the Wails services.
-func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecycle, sp searchParts) ([]application.Service, error) {
+// newServices wires the use cases over store into the Wails services;
+// dataDir keeps the preferences and env.Lang is the language they set.
+func newServices(env wailsui.Env, dataDir string, store *sqlite.Store, lifecycle *wailsui.Lifecycle, sp searchParts) ([]application.Service, error) {
 	// The local storage keeps milliseconds; a finer clock would make a saved
 	// note differ from the one returned to the interface.
 	clock := func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
@@ -260,37 +268,30 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		return nil, err
 	}
 
-	// Both storages report the progress of their transfers to the interface.
+	// Every storage reports the progress of its transfers to the interface.
 	progress := wailsui.NewProgressFeed(emit)
 
-	sshConnector, err := ssh.NewConnector(store, ssh.WithProgress(progress.Publish))
+	storages, err := newRemote(env, store, progress.Publish)
 	if err != nil {
 		return nil, err
 	}
 
-	connector := remote.NewRouter(sshConnector, blobremote.NewConnector(
-		yadisk.NewStoreFactory(yadisk.DefaultEndpoints, store, yadisk.WithLog(env.Log), yadisk.WithProgress(progress.Publish)),
-		sealbox.DefaultKDF(),
-	))
-
 	syncer, err := usecase.NewSync(usecase.SyncDeps{
-		Local: store, Settings: store, Remote: connector, Changes: changes, IDs: uuid.New, Gate: gate, Offer: offer,
+		Local: store, Settings: store, Remote: storages.connector, Changes: changes, IDs: uuid.New, Gate: gate, Offer: offer,
 		OnState: func(s usecase.State) { emit(wailsui.EventSyncState, wailsui.ToStateDTO(s)) },
 		Warn:    func(err error) { wailsui.LogError(env.Log, "sync", err) },
 		Index:   search,
 		Tokens:  store,
-
-		BuiltinClientID: yadisk.BuiltinClientID,
+		Builtin: storages.builtin,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	connection, err := usecase.NewConnection(usecase.ConnectionDeps{
-		Settings: store, Store: store, Tokens: store, Remote: connector,
-		Auth: yadisk.NewAuthorizer(yadisk.DefaultEndpoints, yadisk.AuthOptions{}),
+		Settings: store, Store: store, Tokens: store, Remote: storages.connector, Auth: storages.auth,
 		Gate: gate, Offer: offer, Changed: syncer.ResetConnection,
-		BuiltinClientID: yadisk.BuiltinClientID, OpenURL: openBrowser,
+		Builtin: storages.builtin, OpenURL: openBrowser,
 	})
 	if err != nil {
 		return nil, err
@@ -310,6 +311,62 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{})),
 		application.NewService(wailsui.NewSearchService(env, search, searchStatus)),
 		application.NewService(wailsui.NewAppService(lifecycle)),
+		application.NewService(wailsui.NewPrefsService(env, dataDir)),
+	}, nil
+}
+
+// remoteParts are the storages of the use cases: the router over the
+// connectors of every kind, the authorizers of the clouds and their built-in
+// OAuth clients.
+type remoteParts struct {
+	connector *remote.Router
+	auth      map[domain.StorageKind]usecase.CloudAuthorizer
+	builtin   map[domain.StorageKind]usecase.CloudClient
+}
+
+// builtinClients are the built-in OAuth clients: the Yandex one always, the
+// Google one with googleID and googleSecret only when the build set both
+// (spec §1, ред. 8).
+func builtinClients(googleID, googleSecret string) map[domain.StorageKind]usecase.CloudClient {
+	builtin := map[domain.StorageKind]usecase.CloudClient{
+		domain.KindYandexDisk: {Provider: domain.KindYandexDisk, ID: yadisk.BuiltinClientID},
+	}
+
+	if googleID != "" && googleSecret != "" {
+		builtin[domain.KindGoogleDrive] = usecase.CloudClient{Provider: domain.KindGoogleDrive, ID: googleID, Secret: googleSecret}
+	}
+
+	return builtin
+}
+
+// newRemote wires the storages over store; their transfers report progress
+// to progress, nil reports nothing. Each cloud has one authorizer: the
+// Google one also refreshes the tokens of the Google Drive stores.
+func newRemote(env wailsui.Env, store *sqlite.Store, progress usecase.ProgressFunc) (remoteParts, error) {
+	sshConnector, err := ssh.NewConnector(store, ssh.WithProgress(progress))
+	if err != nil {
+		return remoteParts{}, err
+	}
+
+	builtin := builtinClients(gdrive.BuiltinClientID, gdrive.BuiltinClientSecret)
+
+	authOpts := cloudauth.Options{Lang: env.Lang.Get}
+	yandexAuth := cloudauth.NewAuthorizer(yadisk.OAuthProvider(), authOpts)
+	googleAuth := cloudauth.NewAuthorizer(gdrive.OAuthProvider(), authOpts)
+	kdf := sealbox.DefaultKDF()
+
+	return remoteParts{
+		connector: remote.NewRouter(
+			sshConnector,
+			blobremote.NewConnector(yadisk.NewStoreFactory(yadisk.DefaultEndpoints, store, yadisk.WithLog(env.Log), yadisk.WithProgress(progress)), kdf),
+			blobremote.NewConnector(gdrive.NewStoreFactory(gdrive.DefaultEndpoints, store, googleAuth, builtin[domain.KindGoogleDrive],
+				gdrive.WithLog(env.Log), gdrive.WithProgress(progress)), kdf),
+		),
+		auth: map[domain.StorageKind]usecase.CloudAuthorizer{
+			domain.KindYandexDisk:  yandexAuth,
+			domain.KindGoogleDrive: googleAuth,
+		},
+		builtin: builtin,
 	}, nil
 }
 
