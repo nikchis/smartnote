@@ -55,6 +55,10 @@
   });
   /** typing is the read of the account due when typing in an own client field pauses. */
   let typing: ReturnType<typeof setTimeout> | undefined;
+  // A read that starts after a sign-in would outdate the sign-in's answer.
+  $effect(() => {
+    if (phase !== "idle") cancelTyping();
+  });
 
   onMount(async () => {
     try {
@@ -103,9 +107,24 @@
 
   /** clientLeft reads the account at once, so that no read starts after a sign-in the click that left the field begins. */
   function clientLeft() {
+    cancelTyping();
+    void readAccount(true);
+  }
+
+  /** clientBlurred reads the account still due: a field typed back to its value at focus fires no change. */
+  function clientBlurred() {
+    if (typing !== undefined) clientLeft();
+  }
+
+  function cancelTyping() {
     clearTimeout(typing);
     typing = undefined;
-    void readAccount(true);
+  }
+
+  /** kindChanged reads the account of the new kind; a read due for the old one is dropped. */
+  function kindChanged() {
+    cancelTyping();
+    void readAccount();
   }
 
   onDestroy(() => clearTimeout(typing));
@@ -219,10 +238,10 @@
       <span class="legend" id="settings-storage">{i18n.t("settings.storage")}</span>
       <div class="fields">
         <div class="wide row">
-          <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} onchange={() => readAccount()} disabled={phase !== "idle"} />{i18n.t("settings.none")}</label>
-          <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} onchange={() => readAccount()} disabled={phase !== "idle"} />Yandex Disk</label>
-          <label class="choice"><input type="radio" name="kind" value="google_drive" bind:group={form.kind} onchange={() => readAccount()} disabled={phase !== "idle"} />Google Drive</label>
-          <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} onchange={() => readAccount()} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
+          <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} onchange={kindChanged} disabled={phase !== "idle"} />{i18n.t("settings.none")}</label>
+          <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} onchange={kindChanged} disabled={phase !== "idle"} />Yandex Disk</label>
+          <label class="choice"><input type="radio" name="kind" value="google_drive" bind:group={form.kind} onchange={kindChanged} disabled={phase !== "idle"} />Google Drive</label>
+          <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} onchange={kindChanged} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
         </div>
       </div>
     </section>
@@ -240,11 +259,11 @@
               <summary>{i18n.t("settings.advanced")}</summary>
               <label class="wide">
                 {i18n.t("settings.ownClientId")}
-                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.googleClientId} oninput={clientTyped} onchange={clientLeft} autocomplete="off" aria-invalid={invalid === "google_client_id"} />
+                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.googleClientId} oninput={clientTyped} onchange={clientLeft} onblur={clientBlurred} autocomplete="off" aria-invalid={invalid === "google_client_id"} />
               </label>
               <label class="wide">
                 {i18n.t("settings.ownClientSecret")}
-                <input type="password" aria-label={i18n.t("settings.ownClientSecretLabel")} bind:value={form.googleClientSecret} oninput={clientTyped} onchange={clientLeft} autocomplete="off" aria-invalid={invalid === "google_client_secret"} />
+                <input type="password" aria-label={i18n.t("settings.ownClientSecretLabel")} bind:value={form.googleClientSecret} oninput={clientTyped} onchange={clientLeft} onblur={clientBlurred} autocomplete="off" aria-invalid={invalid === "google_client_secret"} />
               </label>
               <a href={GOOGLE_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(GOOGLE_DOCS))}>{i18n.t("settings.howToRegister")}</a>
               <p class="muted">{i18n.t("settings.otherGoogleClient")}</p>
@@ -254,7 +273,7 @@
               <summary>{i18n.t("settings.advanced")}</summary>
               <label class="wide">
                 {i18n.t("settings.ownClientId")}
-                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.yandexClientId} oninput={clientTyped} onchange={clientLeft} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
+                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.yandexClientId} oninput={clientTyped} onchange={clientLeft} onblur={clientBlurred} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
               </label>
               <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>{i18n.t("settings.howToRegister")}</a>
               <p class="muted">{i18n.t("settings.otherClient")}</p>

@@ -604,6 +604,56 @@ describe("Settings account of the draft", () => {
     expect(has("Signed in as tester@example.invalid")).toBe(true);
   });
 
+  // A value typed back to the one at focus fires no change when the field is left.
+  it("reads when a field typed back to its value is left, before the sign-in", async () => {
+    await open({ kind: "google_drive" });
+    const reads = go.account.mock.calls.length;
+    const login = pending<string>();
+    go.signIn.mockReturnValue(login.promise);
+    const input = field("Own client secret");
+    input.focus();
+    await type(input, "GOCSPX-o");
+    await type(input, "");
+    input.blur();
+    await settle();
+    expect(go.account).toHaveBeenCalledTimes(reads + 1);
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ googleClientSecret: "" }));
+
+    await press("Sign in with Google");
+    await pause();
+    expect(go.account).toHaveBeenCalledTimes(reads + 1);
+    login.resolve("tester@example.invalid");
+    await settle();
+    expect(has("Signed in as tester@example.invalid")).toBe(true);
+  });
+
+  // Where a click does not move the focus to the button, the field is not left.
+  it("drops the read of the pause once a sign-in starts", async () => {
+    await open({ kind: "google_drive" });
+    const reads = go.account.mock.calls.length;
+    const login = pending<string>();
+    go.signIn.mockReturnValue(login.promise);
+    await type(field("Own client secret"), "GOCSPX-o");
+    await type(field("Own client secret"), "");
+
+    await press("Sign in with Google");
+    await pause();
+    expect(go.account).toHaveBeenCalledTimes(reads);
+    login.resolve("tester@example.invalid");
+    await settle();
+    expect(has("Signed in as tester@example.invalid")).toBe(true);
+  });
+
+  it("drops the read of the pause when the kind changes", async () => {
+    await open({ kind: "google_drive" });
+    const reads = go.account.mock.calls.length;
+    await type(field("Own client ID"), "1-abc.apps.googleusercontent.com");
+    await choose("Yandex Disk");
+    await pause();
+    expect(go.account).toHaveBeenCalledTimes(reads + 1);
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "yandex_disk" }));
+  });
+
   // Leaving the field fires change on the mousedown of the button under the
   // pointer: the button must still be there for the click that follows.
   it("signs in with the first click after an own client field changes", async () => {
