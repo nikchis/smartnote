@@ -51,6 +51,12 @@ search by meaning in [Search](search.md#semantic-search).
 - Google Drive: if two devices create the storage at the same moment, the second copy of the file
   stays until one of the next successful Backups removes it (at most 10 copies per Backup; a failed
   removal is tried again later).
+- Google Drive: Drive cannot create a file only when there is none. If two devices connect to an
+  empty Drive at the same moment, the storage created by one of them may be replaced by the other's.
+  The local notes stay on both devices, and the next Connect of that device finds the other storage
+  and compares the notes with it. If both devices create the file at once, both connections may
+  also end with "Remote data changed during the operation. Please try again."; the next Connect
+  creates the storage.
 - Google Drive: Drive may keep earlier revisions of the file (up to 30 days or 100 revisions). They
   hold only ciphertext and do not count toward the quota; Smartnote does not delete them.
 - Google Drive: until the result of an unfinished upload is known, Smartnote starts no new write to
