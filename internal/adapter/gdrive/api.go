@@ -1,6 +1,7 @@
 package gdrive
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,8 @@ const (
 	maxAnswer   = 1 << 20 // the largest JSON answer read
 	schemeHTTPS = "https"
 
+	qFields = "fields" // the field mask of a request
+
 	// The hosts that get the access token (spec §5): the API and its uploads,
 	// and the token endpoint.
 	apiHost   = "www.googleapis.com"
@@ -28,8 +31,14 @@ const (
 
 // Steps of the Store, CloudError.Step: the request that failed.
 const (
-	stepList     = "list"     // files.list of the object name
-	stepDownload = "download" // files.get with alt=media
+	stepList         = "list"          // files.list of the object name
+	stepDownload     = "download"      // files.get with alt=media
+	stepVersion      = "version"       // files.get of the version fields before a replacement
+	stepDelete       = "delete"        // files.delete of a duplicate
+	stepUploadOpen   = "upload_open"   // opening of a resumable session
+	stepUpload       = "upload"        // the final PUT of the body
+	stepUploadStatus = "upload_status" // status of a session
+	stepUploadCancel = "upload_cancel" // DELETE of a session
 )
 
 // Reasons of Drive error answers that have a cause of §9.
@@ -70,6 +79,12 @@ var (
 // host of Google that gets the access token.
 func googleHost(hostname string) bool {
 	return hostname == apiHost || hostname == oauthHost
+}
+
+// sessionHost reports whether hostname is the host of upload sessions
+// (spec §5.4): a session URI elsewhere is never contacted.
+func sessionHost(hostname string) bool {
+	return hostname == apiHost
 }
 
 // bearerAllowed reports whether a request to u may carry the access token:
@@ -141,29 +156,43 @@ func otherError(status int, step string, cause error) cloudhttp.CloudError {
 // only to the hosts allow accepts. It does not follow redirects, so the
 // token never leaves those hosts.
 type apiClient struct {
-	http  *http.Client
-	api   string // Endpoints.API without the trailing slash
-	allow func(hostname string) bool
+	http    *http.Client
+	api     string // Endpoints.API without the trailing slash
+	upload  string // Endpoints.Upload without the trailing slash
+	allow   func(hostname string) bool
+	session func(hostname string) bool // hosts of session URIs
 }
 
 // newAPIClient returns a client over base, or the default client, for the
-// API at api. A nil allow takes googleHost.
+// API at api. A nil allow takes googleHost, and then the session URIs are
+// only those of sessionHost; a test allow accepts them as well.
 func newAPIClient(base *http.Client, api string, allow func(string) bool) apiClient {
+	session := allow
 	if allow == nil {
-		allow = googleHost
+		allow, session = googleHost, sessionHost
 	}
 
 	return apiClient{
-		http:  cloudhttp.WithRedirects(base, func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }),
-		api:   strings.TrimSuffix(api, "/"),
-		allow: allow,
+		http:    cloudhttp.WithRedirects(base, func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }),
+		api:     strings.TrimSuffix(api, "/"),
+		allow:   allow,
+		session: session,
 	}
 }
 
 // url returns the API URL of path, whose parts must already be escaped,
 // with query q.
 func (c apiClient) url(path string, q url.Values) (*url.URL, error) {
-	u, err := url.Parse(c.api + path)
+	return joinURL(c.api, path, q)
+}
+
+// uploadURL returns the upload URL of path with query q.
+func (c apiClient) uploadURL(path string, q url.Values) (*url.URL, error) {
+	return joinURL(c.upload, path, q)
+}
+
+func joinURL(base, path string, q url.Values) (*url.URL, error) {
+	u, err := url.Parse(base + path)
 	if err != nil {
 		return nil, errForeignHost // the parse error quotes the URL
 	}
@@ -173,43 +202,112 @@ func (c apiClient) url(path string, q url.Values) (*url.URL, error) {
 	return u, nil
 }
 
-// send sends a GET of step to u with the access token. It returns the
-// answer of a 2xx status, whose body the caller closes; any other status is
-// a CloudError.
-func (c apiClient) send(ctx context.Context, step string, u *url.URL, access string) (*http.Response, error) {
-	if !bearerAllowed(u, c.allow) {
+// sessionURL parses a session URI and checks that it is an https URI of
+// the session host; neither the URI nor the parse error gets into the
+// error.
+func (c apiClient) sessionURL(uri string) (*url.URL, error) {
+	u, err := url.Parse(uri)
+	if err != nil || !bearerAllowed(u, c.session) {
+		return nil, errForeignHost
+	}
+
+	return u, nil
+}
+
+// request returns a request of step with body to u, signed with access. An
+// empty access is a request to a session URI, which needs no token
+// (П6 е) and is allowed only on the session host.
+func (c apiClient) request(ctx context.Context, step, method string, u *url.URL, access string, body []byte) (*http.Request, error) {
+	allow := c.allow
+	if access == "" {
+		allow = c.session
+	}
+
+	if !bearerAllowed(u, allow) {
 		return nil, otherError(0, step, errForeignHost)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
+	var r io.Reader = http.NoBody
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), r)
 	if err != nil {
 		return nil, otherError(0, step, errForeignHost)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+access)
+	if access != "" {
+		req.Header.Set("Authorization", "Bearer "+access)
+	}
 
-	resp, err := c.http.Do(req)
+	return req, nil
+}
+
+// exchange sends req of step and returns its answer of any status, whose
+// body the caller closes.
+func (c apiClient) exchange(ctx context.Context, step string, req *http.Request) (*http.Response, error) {
+	resp, err := c.http.Do(req) //nolint:gosec // G704: request admits only the API and session hosts over https
 	if err != nil {
 		return nil, cloudhttp.RequestError(ctx, domain.KindGoogleDrive, err, step)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		defer resp.Body.Close()
-
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAnswer)) // the status is the error
-
-		return nil, cloudhttp.WithStep(answerError(resp.StatusCode, body), step)
 	}
 
 	return resp, nil
 }
 
-// getJSON sends a GET of step to u and decodes the JSON answer into out.
-func (c apiClient) getJSON(ctx context.Context, step string, u *url.URL, access string, out any) error {
-	resp, err := c.send(ctx, step, u, access)
+// statusError reads the error answer resp of step and closes it.
+func statusError(resp *http.Response, step string) error {
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAnswer)) // the status is the error
+
+	return cloudhttp.WithStep(answerError(resp.StatusCode, body), step)
+}
+
+func success(status int) bool { return status >= 200 && status <= 299 }
+
+// call sends a request of step with body to u with the access token. It
+// returns the answer of a 2xx status, whose body the caller closes; any
+// other status is a CloudError.
+func (c apiClient) call(ctx context.Context, step, method string, u *url.URL, access string, body []byte) (*http.Response, error) {
+	req, err := c.request(ctx, step, method, u, access, body)
+	if err != nil {
+		return nil, err
+	}
+
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json; charset=UTF-8")
+	}
+
+	resp, err := c.exchange(ctx, step, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if !success(resp.StatusCode) {
+		return nil, statusError(resp, step)
+	}
+
+	return resp, nil
+}
+
+// send sends a GET of step to u with the access token, as call does.
+func (c apiClient) send(ctx context.Context, step string, u *url.URL, access string) (*http.Response, error) {
+	return c.call(ctx, step, http.MethodGet, u, access, nil)
+}
+
+// delete sends a DELETE of step to u with the access token.
+func (c apiClient) delete(ctx context.Context, step string, u *url.URL, access string) error {
+	resp, err := c.call(ctx, step, http.MethodDelete, u, access, nil)
 	if err != nil {
 		return err
 	}
+
+	return resp.Body.Close()
+}
+
+// decodeJSON reads the JSON answer resp of step into out and closes it.
+func decodeJSON(ctx context.Context, resp *http.Response, step string, out any) error {
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer))
@@ -222,6 +320,16 @@ func (c apiClient) getJSON(ctx context.Context, step string, u *url.URL, access 
 	}
 
 	return nil
+}
+
+// getJSON sends a GET of step to u and decodes the JSON answer into out.
+func (c apiClient) getJSON(ctx context.Context, step string, u *url.URL, access string, out any) error {
+	resp, err := c.send(ctx, step, u, access)
+	if err != nil {
+		return err
+	}
+
+	return decodeJSON(ctx, resp, step, out)
 }
 
 // getMedia sends a GET of step to u and returns the body, counting its

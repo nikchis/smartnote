@@ -49,7 +49,7 @@ func (s *Store) list(ctx context.Context, name string) ([]driveFile, error) {
 		"q":        {"name='" + escapeQuery(name) + "' and trashed=false"},
 		"orderBy":  {"createdTime"},
 		"pageSize": {strconv.Itoa(listPageSize)},
-		"fields":   {listFields},
+		qFields:    {listFields},
 	}
 
 	var files []driveFile

@@ -48,7 +48,7 @@ func testOptions(d *fakeDrive) storeOptions {
 func newTestStore(t *testing.T, d *fakeDrive) *Store {
 	t.Helper()
 
-	return newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), testOptions(d))
+	return newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), &memUploads{}, testOptions(d))
 }
 
 // testRefresher is the real refresh of the Google sign-in against the
@@ -284,7 +284,7 @@ func TestListPicksEarliestAcrossPages(t *testing.T) {
 		opts := testOptions(d)
 		opts.log = slog.New(slog.NewTextHandler(&log, nil))
 
-		data, version, found := mustRead(t, newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), opts))
+		data, version, found := mustRead(t, newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), &memUploads{}, opts))
 		if !found || string(data) != "a" || version != ids[4]+":"+md5Of([]byte("a")) {
 			t.Errorf("Read = %q, %q, %v; want the earliest file a", data, version, found)
 		}
@@ -414,7 +414,7 @@ func TestReadReportsDownloadProgress(t *testing.T) {
 		reports = append(reports, p)
 	}
 
-	mustRead(t, newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), opts))
+	mustRead(t, newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), &memUploads{}, opts))
 
 	mu.Lock()
 	defer mu.Unlock()

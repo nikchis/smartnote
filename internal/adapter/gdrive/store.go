@@ -61,10 +61,16 @@ type Store struct {
 	tokens    usecase.CloudTokenSource
 	client    usecase.CloudClient // sent with the refresh
 	refresher Refresher
+	uploads   UploadStore
 
 	// refreshMu serializes the refresh, so requests that share a token do
 	// not refresh it twice.
 	refreshMu sync.Mutex
+
+	// settleMu guards settled: no record of an unfinished upload waits for
+	// its resolution (spec §5.4, 3).
+	settleMu sync.Mutex
+	settled  bool
 
 	log      *slog.Logger
 	progress usecase.ProgressFunc
@@ -73,13 +79,18 @@ type Store struct {
 
 // newStore returns a store over the API of e that signs the requests with
 // the token of tokens and renews it with refresher as the OAuth client
-// client (usecase.EffectiveClient of the target).
-func newStore(e Endpoints, tokens usecase.CloudTokenSource, client usecase.CloudClient, refresher Refresher, opts storeOptions) *Store {
+// client (usecase.EffectiveClient of the target). uploads keeps the record
+// of the unfinished upload of the device and must not be nil.
+func newStore(e Endpoints, tokens usecase.CloudTokenSource, client usecase.CloudClient, refresher Refresher, uploads UploadStore, opts storeOptions) *Store {
+	api := newAPIClient(opts.http, e.API, opts.allowHost)
+	api.upload = strings.TrimSuffix(e.Upload, "/")
+
 	s := &Store{
-		api:       newAPIClient(opts.http, e.API, opts.allowHost),
+		api:       api,
 		tokens:    tokens,
 		client:    client,
 		refresher: refresher,
+		uploads:   uploads,
 		log:       cmp.Or(opts.log, slog.New(slog.DiscardHandler)),
 		progress:  opts.progress,
 		now:       opts.now,
@@ -95,8 +106,13 @@ func newStore(e Endpoints, tokens usecase.CloudTokenSource, client usecase.Cloud
 // Read returns the effective file of name and its version (spec §5.5). The
 // version belongs to the bytes: when their MD5 is not the md5Checksum of the
 // list, or the listed file is gone, the list and the download are repeated
-// once, then it is blobremote.ErrVersionMismatch.
+// once, then it is blobremote.ErrVersionMismatch. An unfinished upload of
+// an earlier Write is resolved first (spec §5.4).
 func (s *Store) Read(ctx context.Context, name string) (data []byte, version string, found bool, err error) {
+	if err := s.settle(ctx); err != nil {
+		return nil, "", false, err
+	}
+
 	for range 2 {
 		var f driveFile
 
@@ -133,7 +149,7 @@ func (s *Store) download(ctx context.Context, name string) (data []byte, f drive
 	}
 
 	err = s.authorized(ctx, func(access string) (err error) {
-		data, err = s.api.getMedia(ctx, stepDownload, u, access, maxObject, s.meter(f.Size))
+		data, err = s.api.getMedia(ctx, stepDownload, u, access, maxObject, s.meter(usecase.DirectionDownload, f.Size))
 		return err
 	})
 
@@ -159,23 +175,18 @@ const tokenMargin = time.Minute
 // a second 401 asks for a new sign-in. call must not be the final upload
 // request, which is never repeated on the same URI.
 func (s *Store) authorized(ctx context.Context, call func(access string) error) error {
-	tok, err := s.tokens.Token(ctx)
+	access, err := s.accessToken(ctx)
 	if err != nil {
-		return fmt.Errorf("cloud token: %w", err)
+		return err
 	}
 
-	if tok.Expiry.Sub(s.now()) < tokenMargin {
-		if tok, err = s.renew(ctx, tok.Access); err != nil {
-			return err
-		}
-	}
-
-	err = call(tok.Access)
+	err = call(access)
 	if !cloudhttp.IsStatus(err, http.StatusUnauthorized) {
 		return err
 	}
 
-	if tok, err = s.renew(ctx, tok.Access); err != nil {
+	tok, err := s.renew(ctx, access)
+	if err != nil {
 		return err
 	}
 
@@ -185,6 +196,23 @@ func (s *Store) authorized(ctx context.Context, call func(access string) error) 
 	}
 
 	return err
+}
+
+// accessToken returns an access token valid for the next request: a token
+// that expires within tokenMargin is refreshed first.
+func (s *Store) accessToken(ctx context.Context) (string, error) {
+	tok, err := s.tokens.Token(ctx)
+	if err != nil {
+		return "", fmt.Errorf("cloud token: %w", err)
+	}
+
+	if tok.Expiry.Sub(s.now()) < tokenMargin {
+		if tok, err = s.renew(ctx, tok.Access); err != nil {
+			return "", err
+		}
+	}
+
+	return tok.Access, nil
 }
 
 // renew returns a new token for the one whose access token is stale and
@@ -203,7 +231,8 @@ func (s *Store) renew(ctx context.Context, stale string) (usecase.CloudToken, er
 		return cur, nil
 	}
 
-	if cur.Refresh == "" {
+	// Without a refresh token or an OAuth client only a new sign-in helps.
+	if cur.Refresh == "" || s.client.ID == "" {
 		return usecase.CloudToken{}, domain.ReauthRequired(domain.KindGoogleDrive)
 	}
 
@@ -228,10 +257,10 @@ func (s *Store) renew(ctx context.Context, stale string) (usecase.CloudToken, er
 	return next, nil
 }
 
-// meter starts the count of the bytes of a download of total bytes; nil
-// when nobody receives the progress. A body longer than the list says
-// counts up to its own length.
-func (s *Store) meter(total int64) *cloudhttp.Meter {
+// meter starts the count of the bytes of a transfer of total bytes in
+// direction; nil when nobody receives the progress. A body longer than the
+// list says counts up to its own length.
+func (s *Store) meter(direction string, total int64) *cloudhttp.Meter {
 	if s.progress == nil {
 		return nil
 	}
@@ -242,7 +271,7 @@ func (s *Store) meter(total int64) *cloudhttp.Meter {
 		total = max(total, done)
 
 		report(usecase.TransferProgress{
-			Storage: domain.KindGoogleDrive, Direction: usecase.DirectionDownload, Unit: usecase.UnitBytes,
+			Storage: domain.KindGoogleDrive, Direction: direction, Unit: usecase.UnitBytes,
 			Done: done, Total: total,
 		})
 	})

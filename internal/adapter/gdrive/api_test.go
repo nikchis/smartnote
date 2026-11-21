@@ -96,7 +96,7 @@ func TestAuthorizationOnlyToGoogleHosts(t *testing.T) {
 		opts := testOptions(d)
 		opts.allowHost = nil
 
-		err := readErr(t, newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), opts))
+		err := readErr(t, newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), &memUploads{}, opts))
 		if !errors.Is(err, errForeignHost) {
 			t.Errorf("Read: err = %v, want errForeignHost", err)
 		}
@@ -111,7 +111,7 @@ func TestAuthorizationOnlyToGoogleHosts(t *testing.T) {
 		e := d.endpoints()
 		e.API = strings.Replace(e.API, "https://", "http://", 1)
 
-		if err := readErr(t, newStore(e, testTokens(), fakeClient, testRefresher(t, d), testOptions(d))); !errors.Is(err, errForeignHost) {
+		if err := readErr(t, newStore(e, testTokens(), fakeClient, testRefresher(t, d), &memUploads{}, testOptions(d))); !errors.Is(err, errForeignHost) {
 			t.Errorf("Read: err = %v, want errForeignHost", err)
 		}
 	})

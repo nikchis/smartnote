@@ -65,7 +65,7 @@ func tokenStore(t *testing.T, d *fakeDrive, src usecase.CloudTokenSource) *Store
 	opts := testOptions(d)
 	opts.now = time.Now
 
-	return newStore(d.endpoints(), src, fakeClient, testRefresher(t, d), opts)
+	return newStore(d.endpoints(), src, fakeClient, testRefresher(t, d), &memUploads{}, opts)
 }
 
 func apiRequests(d *fakeDrive) int {

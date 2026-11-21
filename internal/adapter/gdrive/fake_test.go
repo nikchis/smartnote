@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -42,8 +43,42 @@ const (
 
 // Endpoint names for fakeDrive.fail.
 const (
-	epList  = "list"  // GET /drive/v3/files
-	epMedia = "media" // GET /drive/v3/files/<id>?alt=media
+	epList   = "list"   // GET /drive/v3/files
+	epMedia  = "media"  // GET /drive/v3/files/<id>?alt=media
+	epGet    = "get"    // GET /drive/v3/files/<id> (metadata)
+	epDelete = "delete" // DELETE /drive/v3/files/<id>
+	epOpen   = "open"   // POST or PATCH of /upload/drive/v3/files?uploadType=resumable
+)
+
+// States of an upload session.
+const (
+	sessOpen      = iota // the body is not yet received
+	sessCommitted        // the body is committed; status and DELETE give the file
+	sessCancelled        // DELETE cancelled it; status gives 499
+)
+
+// fakeSession is a resumable upload session (spec §5.4, П6).
+type fakeSession struct {
+	id     string
+	op     string // "create" or "replace"
+	name   string // of a created file
+	fileID string // the replaced file, or the created one after the commit
+	mask   map[string]bool
+	state  int
+}
+
+// putAnswer is what the emulator does with the body PUT of a session: the
+// zero value commits it and answers 200 with the file.
+type putAnswer struct {
+	reject bool // the body is not committed
+	status int  // the answer status instead of 200; 401 has an error body, others an empty one
+	drop   bool // the connection is closed without an answer
+}
+
+// Special answers of statusAnswers and deleteAnswers.
+const (
+	answerServe = 0  // served as the session state says
+	answerDrop  = -1 // the request is applied and the connection closed without an answer
 )
 
 // fakeFailure makes one endpoint answer with an error body of reason; an
@@ -64,11 +99,18 @@ type fakeFile struct {
 }
 
 type fakeRequest struct {
-	server string // api or oauth
-	method string
-	path   string
-	query  url.Values
-	auth   string
+	server       string // api or oauth
+	method       string
+	path         string
+	query        url.Values
+	auth         string
+	ifMatch      string
+	contentRange string
+}
+
+// session reports whether r is a request to the URI of an upload session.
+func (r fakeRequest) session() bool {
+	return r.server == "api" && r.query.Get("upload_id") != ""
 }
 
 // fakeDrive emulates Drive v3 on one https server (www.googleapis.com
@@ -98,6 +140,27 @@ type fakeDrive struct {
 	redirectTo  string // the API redirects every request to this URL
 	fail        map[string]fakeFailure
 	beforeMedia func(d *fakeDrive) // called under the lock before alt=media is served
+
+	// Uploads.
+	sessions    map[string]*fakeSession
+	nextSession int
+	clock       time.Time // createdTime of the next created file; one second later for each
+	// onPut decides the answer to the body PUT of a session; it runs under
+	// the lock. nil commits and answers 200.
+	onPut func(d *fakeDrive, s *fakeSession) putAnswer
+	// beforePut runs without the lock before a body PUT is served, so that
+	// concurrent uploads can meet.
+	beforePut func()
+	// statusAnswers and deleteAnswers are taken one per status request or
+	// DELETE of a session: a status code answers with it and an empty body,
+	// answerServe serves normally and answerDrop applies the request and
+	// drops the answer. Empty serves normally.
+	statusAnswers, deleteAnswers []int
+	// putMD5 and statusMD5 replace the md5Checksum of the file in the
+	// answers of the body PUT and of the status request.
+	putMD5, statusMD5 string
+	// sessionHost replaces the host of the session URIs given in Location.
+	sessionHost string
 }
 
 func newFakeDrive(t *testing.T) *fakeDrive {
@@ -109,6 +172,8 @@ func newFakeDrive(t *testing.T) *fakeDrive {
 		authCode:   fakeAuthCode,
 		refresh:    fakeRefresh,
 		nextAccess: "acc-2",
+		sessions:   map[string]*fakeSession{},
+		clock:      fakeUploadTime,
 	}
 
 	d.api = httptest.NewTLSServer(http.HandlerFunc(d.serveAPI))
@@ -208,10 +273,22 @@ func (d *fakeDrive) count(method, path string, media bool) int {
 func (d *fakeDrive) record(server string, r *http.Request) {
 	d.requests = append(d.requests, fakeRequest{
 		server: server, method: r.Method, path: r.URL.Path, query: r.URL.Query(), auth: r.Header.Get("Authorization"),
+		ifMatch: r.Header.Get("If-Match"), contentRange: r.Header.Get("Content-Range"),
 	})
 }
 
 func (d *fakeDrive) serveAPI(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	before := d.beforePut
+	d.mu.Unlock()
+
+	q := r.URL.Query()
+	session := q.Get("upload_id") != ""
+
+	if session && before != nil && r.Method == http.MethodPut && r.Header.Get("Content-Range") == "" {
+		before()
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -222,22 +299,365 @@ func (d *fakeDrive) serveAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A session URI is the right to its upload: status, cancel and commit
+	// work without Authorization, and a wrong token is ignored (П6 е).
+	if session {
+		d.serveSession(w, r, q.Get("upload_id"))
+		return
+	}
+
 	if d.denyAll || r.Header.Get("Authorization") != "Bearer "+d.access {
 		writeError(w, http.StatusUnauthorized, "authError")
 		return
 	}
 
 	filesPath := fakeAPIPath + "/files"
-	q := r.URL.Query()
+	uploadPath := fakeUploadPath + "/files"
+	id, isFile := strings.CutPrefix(r.URL.Path, filesPath+"/")
+	uploadID, isUploadFile := strings.CutPrefix(r.URL.Path, uploadPath+"/")
 
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == filesPath:
 		d.list(w, q)
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, filesPath+"/") && q.Get("alt") == "media":
-		d.media(w, strings.TrimPrefix(r.URL.Path, filesPath+"/"))
+	case r.Method == http.MethodGet && isFile && q.Get("alt") == "media":
+		d.media(w, id)
+	case r.Method == http.MethodGet && isFile:
+		d.get(w, id, q)
+	case r.Method == http.MethodDelete && isFile:
+		d.deleteFile(w, id)
+	case r.Method == http.MethodPost && r.URL.Path == uploadPath && q.Get("uploadType") == "resumable":
+		d.openSession(w, r, "")
+	case r.Method == http.MethodPatch && isUploadFile && q.Get("uploadType") == "resumable":
+		d.openSession(w, r, uploadID)
 	default:
 		// Drive answers an unknown path with a page that is not JSON.
 		http.Error(w, "Not Found", http.StatusNotFound)
+	}
+}
+
+// fakeUploadTime is the createdTime of the first file an upload creates:
+// later than the files the tests put.
+var fakeUploadTime = time.Date(2026, 11, 21, 13, 0, 0, 0, time.UTC)
+
+// fileOf returns the file with id, trashed or not, or nil; the caller holds
+// the lock.
+func (d *fakeDrive) fileOf(id string) *fakeFile {
+	for _, f := range d.files {
+		if f.id == id {
+			return f
+		}
+	}
+
+	return nil
+}
+
+// get answers files.get of the metadata with the field mask of q.
+func (d *fakeDrive) get(w http.ResponseWriter, id string, q url.Values) {
+	if d.failed(w, epGet) {
+		return
+	}
+
+	f := d.fileOf(id)
+	if f == nil {
+		writeError(w, http.StatusNotFound, "notFound")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resource(f, fieldMask(q.Get("fields"))))
+}
+
+// deleteFile answers files.delete: the file is gone for good, 204 (П4).
+func (d *fakeDrive) deleteFile(w http.ResponseWriter, id string) {
+	if d.failed(w, epDelete) {
+		return
+	}
+
+	if d.fileOf(id) == nil {
+		writeError(w, http.StatusNotFound, "notFound")
+		return
+	}
+
+	d.remove(id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// fieldMask parses a flat field mask such as "id,md5Checksum".
+func fieldMask(fields string) map[string]bool {
+	if fields == "" {
+		return set("kind", "id", "name", "mimeType")
+	}
+
+	return set(strings.Split(fields, ",")...)
+}
+
+// openSession opens a resumable session: a creation in appDataFolder when
+// fileID is empty, else a replacement of fileID (П4). The answer is 200
+// with an empty body and the session URI in Location.
+func (d *fakeDrive) openSession(w http.ResponseWriter, r *http.Request, fileID string) {
+	if d.failed(w, epOpen) {
+		return
+	}
+
+	var meta struct {
+		Name    string   `json:"name"`
+		Parents []string `json:"parents"`
+	}
+
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&meta); err != nil {
+		writeError(w, http.StatusBadRequest, "badRequest")
+		return
+	}
+
+	op := "replace"
+
+	switch {
+	case fileID == "" && (meta.Name == "" || !slices.Equal(meta.Parents, []string{fakeAppData})):
+		writeError(w, http.StatusBadRequest, "invalid")
+		return
+	case fileID == "":
+		op = "create"
+	case d.file(fileID) == nil:
+		writeError(w, http.StatusNotFound, "notFound")
+		return
+	}
+
+	d.nextSession++
+	sid := fmt.Sprintf("UPLOAD-SECRET-%03d", d.nextSession)
+	d.sessions[sid] = &fakeSession{
+		id: sid, op: op, name: meta.Name, fileID: fileID, mask: fieldMask(r.URL.Query().Get("fields")),
+	}
+
+	w.Header().Set("Location", d.sessionURI(sid))
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+}
+
+// sessionURI is the URI of the session sid, as Location gives it.
+func (d *fakeDrive) sessionURI(sid string) string {
+	u, _ := url.Parse(d.api.URL + fakeUploadPath + "/files")
+	if d.sessionHost != "" {
+		u.Host = d.sessionHost
+	}
+
+	u.RawQuery = url.Values{"uploadType": {"resumable"}, "upload_id": {sid}}.Encode()
+
+	return u.String()
+}
+
+// newSession opens a session as a store that crashed after it did; it
+// returns the session ID and URI.
+func (d *fakeDrive) newSession(op, fileID, name string) (sid, uri string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.nextSession++
+	sid = fmt.Sprintf("UPLOAD-SECRET-%03d", d.nextSession)
+	d.sessions[sid] = &fakeSession{
+		id: sid, op: op, name: name, fileID: fileID, mask: fieldMask("id,size,md5Checksum,sha256Checksum,headRevisionId"),
+	}
+
+	return sid, d.sessionURI(sid)
+}
+
+// commitSession commits data to the open session sid, as its lost PUT did.
+func (d *fakeDrive) commitSession(sid string, data []byte) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.commit(d.sessions[sid], data)
+}
+
+// sessionState returns the state of the session sid; -1 for an unknown one.
+func (d *fakeDrive) sessionState(sid string) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if s, ok := d.sessions[sid]; ok {
+		return s.state
+	}
+
+	return -1
+}
+
+// forgetSessions makes every session unknown, as after its expiry.
+func (d *fakeDrive) forgetSessions() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	clear(d.sessions)
+}
+
+// commit stores data as the file of s; the caller holds the lock. It is
+// false when the replaced file is gone.
+func (d *fakeDrive) commit(s *fakeSession, data []byte) bool {
+	if s.op == "create" {
+		d.nextID++
+		s.fileID = d.add(fmt.Sprintf("file-%03d", d.nextID), s.name, data, d.clock)
+		d.clock = d.clock.Add(time.Second)
+	} else {
+		if d.file(s.fileID) == nil {
+			return false
+		}
+
+		d.replaceData(s.fileID, data)
+	}
+
+	s.state = sessCommitted
+
+	return true
+}
+
+// serveSession answers the requests to a session URI (П6): the body PUT,
+// the status PUT with Content-Range "bytes */<size>" and DELETE.
+func (d *fakeDrive) serveSession(w http.ResponseWriter, r *http.Request, sid string) {
+	s := d.sessions[sid]
+
+	switch {
+	case r.Method == http.MethodDelete:
+		d.cancelSession(w, s)
+	case r.Method == http.MethodPut && strings.HasPrefix(r.Header.Get("Content-Range"), "bytes */"):
+		d.sessionStatus(w, s)
+	case r.Method == http.MethodPut:
+		d.putBody(w, r, s)
+	default:
+		http.Error(w, "Not Found", http.StatusNotFound)
+	}
+}
+
+// takeAnswer takes the next special answer of *queue.
+func takeAnswer(queue *[]int) int {
+	if len(*queue) == 0 {
+		return answerServe
+	}
+
+	a := (*queue)[0]
+	*queue = (*queue)[1:]
+
+	return a
+}
+
+// sessionStatus answers a status request: 308 without Range for an open
+// session, 200 with the file for a committed one, 499 clientClosedRequest
+// for a cancelled one and the text "Not Found" for an unknown one.
+func (d *fakeDrive) sessionStatus(w http.ResponseWriter, s *fakeSession) {
+	switch a := takeAnswer(&d.statusAnswers); a {
+	case answerServe:
+	case answerDrop:
+		dropConnection(w)
+		return
+	default:
+		w.WriteHeader(a)
+		return
+	}
+
+	switch {
+	case s == nil:
+		http.Error(w, "Not Found", http.StatusNotFound)
+	case s.state == sessOpen:
+		w.WriteHeader(http.StatusPermanentRedirect)
+	case s.state == sessCommitted:
+		d.writeSessionFile(w, s, d.statusMD5)
+	default:
+		writeError(w, 499, "clientClosedRequest")
+	}
+}
+
+// cancelSession answers DELETE: an open session is cancelled with 499, a
+// committed one gives 200 with the file and stays committed.
+func (d *fakeDrive) cancelSession(w http.ResponseWriter, s *fakeSession) {
+	a := takeAnswer(&d.deleteAnswers)
+	if a > 0 {
+		w.WriteHeader(a)
+		return
+	}
+
+	switch {
+	case s == nil:
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	case s.state == sessOpen:
+		s.state = sessCancelled
+	}
+
+	if a == answerDrop {
+		dropConnection(w)
+		return
+	}
+
+	if s.state == sessCommitted {
+		d.writeSessionFile(w, s, "")
+		return
+	}
+
+	writeError(w, 499, "clientClosedRequest")
+}
+
+// putBody answers the PUT of the whole body as onPut decides; by default it
+// commits and answers 200 with the file of the session's field mask.
+func (d *fakeDrive) putBody(w http.ResponseWriter, r *http.Request, s *fakeSession) {
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		return
+	}
+
+	switch {
+	case s == nil:
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	case s.state == sessCancelled:
+		// A PUT completed after the cancellation is not committed (П6 д).
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	case s.state == sessCommitted:
+		d.writeSessionFile(w, s, d.putMD5)
+		return
+	}
+
+	var a putAnswer
+	if d.onPut != nil {
+		a = d.onPut(d, s)
+	}
+
+	if !a.reject && !d.commit(s, data) {
+		writeError(w, http.StatusNotFound, "notFound")
+		return
+	}
+
+	switch {
+	case a.drop:
+		dropConnection(w)
+	case a.status == http.StatusUnauthorized:
+		writeError(w, a.status, "authError")
+	case a.status != 0:
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(a.status)
+	default:
+		d.writeSessionFile(w, s, d.putMD5)
+	}
+}
+
+// writeSessionFile answers 200 with the file of s by its field mask; md5,
+// when set, replaces its md5Checksum.
+func (d *fakeDrive) writeSessionFile(w http.ResponseWriter, s *fakeSession, md5 string) {
+	f := d.fileOf(s.fileID)
+	if f == nil {
+		writeError(w, http.StatusNotFound, "notFound")
+		return
+	}
+
+	out := resource(f, s.mask)
+	if md5 != "" {
+		out["md5Checksum"] = md5
+	}
+
+	writeJSON(w, http.StatusOK, out)
+}
+
+// dropConnection closes the connection without an answer.
+func dropConnection(w http.ResponseWriter) {
+	conn, _, err := http.NewResponseController(w).Hijack()
+	if err == nil {
+		_ = conn.Close()
 	}
 }
 
