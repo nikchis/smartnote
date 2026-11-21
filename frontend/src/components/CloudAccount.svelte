@@ -5,14 +5,16 @@
   // the dialog whether Test and OK must wait. account is undefined while the
   // form waits for Go to report it: the block then offers no sign-in or
   // sign-out. latest numbers the changes of account shared with the form, so
-  // that the end of an older one does not overwrite a newer answer; onSignOut
-  // tells the form that a Sign out starts, which a phase does not show.
+  // that the end of an older one does not overwrite a newer answer. onSignOut
+  // gives the form the Sign out that starts, which a phase does not show: OK
+  // and Test wait until Go has marked it. onOutdated asks the form to read the
+  // account again when a sign-in ends that the account may no longer be for.
   import GoogleSignInButton from "./GoogleSignInButton.svelte";
   import { ConnectionService, type AccountDTO } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
   import { messageOf, parseError } from "../lib/errors";
   import { i18n } from "../lib/i18n.svelte";
-  import { fromForm, type CloudKind, type Latest, type SettingsForm, type SignInPhase } from "../lib/settings";
+  import { clientOf, fromForm, type CloudKind, type Latest, type SettingsForm, type SignInPhase } from "../lib/settings";
 
   let {
     kind,
@@ -23,6 +25,7 @@
     disabled = false,
     invalid = $bindable(""),
     onSignOut = () => {},
+    onOutdated = () => {},
   }: {
     kind: CloudKind;
     account: AccountDTO | undefined;
@@ -31,7 +34,8 @@
     phase?: SignInPhase;
     disabled?: boolean;
     invalid?: string;
-    onSignOut?: () => void;
+    onSignOut?: (done: Promise<unknown>) => void;
+    onOutdated?: () => void;
   } = $props();
 
   /**
@@ -50,10 +54,13 @@
   let attempt = 0;
   /** current tells whether account is still the sign-in's to show: no later change began since it started. */
   let current: () => boolean = () => false;
+  /** client is the client of the form the running sign-in is for. */
+  let client = "";
 
   /** begin starts a sign-in attempt and claims the account it will show. */
   function begin(): number {
     current = latest.begin();
+    client = clientOf(form);
     return ++attempt;
   }
 
@@ -64,9 +71,15 @@
     if (err.code !== "canceled") await dialogs.error(messageOf(err));
   }
 
+  /**
+   * signedIn shows the sign-in that ended, if the account is still its to
+   * show and the form still has its client (spec §8). Otherwise the form
+   * reads the account of the draft as it is now: the token may be for it.
+   */
   function signedIn(login: string) {
     phase = "idle";
-    if (current()) account = { account: login, signedIn: true };
+    if (current() && clientOf(form) === client) account = { account: login, signedIn: true };
+    else onOutdated();
   }
 
   async function signIn() {
@@ -129,10 +142,11 @@
   async function signOut() {
     if (signingOut) return;
     signingOut = true;
-    onSignOut();
     const shown = latest.begin();
+    const done = ConnectionService.SignOut(kind);
+    onSignOut(done);
     try {
-      await ConnectionService.SignOut(kind);
+      await done;
       if (shown()) account = { account: "", signedIn: false };
     } catch (e) {
       await report(e);

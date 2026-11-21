@@ -22,6 +22,16 @@ export function isCloud(kind: string): kind is CloudKind {
 }
 
 /**
+ * clientOf names the client a sign-in of the form is for: the kind and its
+ * own client ID, empty for the built-in one. Go checks a token against the
+ * client ID alone.
+ */
+export function clientOf(form: Pick<SettingsDTO, "kind" | "yandexClientId" | "googleClientId">): string {
+  const own = form.kind === "yandex_disk" ? form.yandexClientId : form.kind === "google_drive" ? form.googleClientId : "";
+  return `${form.kind}\n${own}`;
+}
+
+/**
  * Latest numbers the requests that change one shown value, such as the
  * account of the settings draft: begin returns a check that stays true only
  * until the next request begins, so a late answer to an older one is dropped.

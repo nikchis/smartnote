@@ -927,3 +927,149 @@ describe("Settings sync phrase reveal", () => {
     expect(phraseInput().type).toBe("password");
   });
 });
+
+describe("Settings Sign out in progress", () => {
+  /** delayedSignOut holds SignOut until the test releases it and tells whether Go has applied the mark. */
+  function delayedSignOut() {
+    const out = pending<void>();
+    const state = { applied: false };
+    go.signOut.mockImplementationOnce(async (kind: string) => {
+      await out.promise;
+      go.accounts[kind] = none;
+      state.applied = true;
+    });
+    return { release: out.resolve, state };
+  }
+
+  const submitForm = async () => {
+    target.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await settle();
+  };
+
+  it("OK and Test wait until Go has applied the Sign out", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn() });
+    const out = delayedSignOut();
+    let appliedAtSave: boolean | undefined;
+    go.save.mockImplementation(async () => {
+      appliedAtSave = out.state.applied;
+    });
+
+    await press("Sign out");
+    expect(button("OK")!.disabled).toBe(true);
+    expect(button("Test connection")!.disabled).toBe(true);
+    await submitForm(); // Enter in a field submits the form
+    expect(go.save).not.toHaveBeenCalled();
+
+    out.release();
+    await settle();
+    expect(button("OK")!.disabled).toBe(false);
+    expect(button("Test connection")!.disabled).toBe(false);
+    await press("OK");
+    expect(go.save).toHaveBeenCalledOnce();
+    expect(appliedAtSave).toBe(true);
+  });
+
+  // Scenario 58: Sign out, then another storage and OK.
+  it("OK after a switch of the kind waits for the Sign out of the old kind", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn(), yandex_disk: signedIn("ivan") });
+    const out = delayedSignOut();
+    let appliedAtSave: boolean | undefined;
+    go.save.mockImplementation(async () => {
+      appliedAtSave = out.state.applied;
+    });
+
+    await press("Sign out");
+    await choose("Yandex Disk");
+    expect(has("Signed in as ivan")).toBe(true);
+    expect(button("OK")!.disabled).toBe(true);
+    await submitForm();
+    expect(go.save).not.toHaveBeenCalled();
+
+    out.release();
+    await settle();
+    await press("OK");
+    expect(go.signOut).toHaveBeenCalledExactlyOnceWith("google_drive");
+    expect(go.save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: "yandex_disk" }));
+    expect(appliedAtSave).toBe(true);
+  });
+
+  it("a failed Sign out no longer holds OK", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn() });
+    const out = pending<void>();
+    go.signOut.mockReturnValueOnce(out.promise);
+
+    await press("Sign out");
+    expect(button("OK")!.disabled).toBe(true);
+    out.reject(uiError("internal", "boom"));
+    await settle();
+    expect(go.error).toHaveBeenCalledOnce();
+    expect(button("OK")!.disabled).toBe(false);
+  });
+
+  it("OK waits for the Sign out after the storage is no longer a cloud", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn() });
+    const out = delayedSignOut();
+
+    await press("Sign out");
+    await choose("None (local only)");
+    expect(button("OK")!.disabled).toBe(true);
+
+    out.release();
+    await settle();
+    expect(button("OK")!.disabled).toBe(false);
+  });
+});
+
+describe("Settings answers for a previous own client", () => {
+  it("drops an answer of a read once the own client field is typed in again", async () => {
+    await open({ kind: "yandex_disk" });
+    const late = pending<AccountDTO>();
+    go.account.mockReturnValueOnce(late.promise);
+    await edit(field("Own client ID"), "id-1");
+    await type(field("Own client ID"), "id-2");
+
+    late.resolve(signedIn("ivan"));
+    await settle();
+    expect(has("Signed in as ivan")).toBe(false);
+    expect(accountButtons()).toEqual(["Sign in with Yandex"]);
+
+    await pause();
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ yandexClientId: "id-2" }));
+    expect(has("Not signed in")).toBe(true);
+  });
+
+  it("does not show a sign-in for the client the form no longer has", async () => {
+    await open({ kind: "yandex_disk" });
+    await edit(field("Own client ID"), "id-1");
+    const login = pending<string>();
+    go.signIn.mockReturnValueOnce(login.promise);
+    await press("Sign in with Yandex");
+    expect(go.signIn).toHaveBeenCalledWith(expect.objectContaining({ yandexClientId: "id-1" }));
+
+    await type(field("Own client ID"), "id-2");
+    login.resolve("ivan");
+    await settle();
+    expect(has("Signed in as ivan")).toBe(false);
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ yandexClientId: "id-2" }));
+    expect(accountButtons()).toEqual(["Sign in with Yandex"]);
+  });
+
+  it("re-reads the account when a sign-in ends after the client was changed and changed back", async () => {
+    await open({ kind: "yandex_disk" });
+    await edit(field("Own client ID"), "id-1");
+    const login = pending<string>();
+    go.signIn.mockReturnValueOnce(login.promise);
+    await press("Sign in with Yandex");
+
+    await edit(field("Own client ID"), "id-2");
+    await edit(field("Own client ID"), "id-1");
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ yandexClientId: "id-1" }));
+
+    // Go now holds the pending token of id-1, the client of the draft.
+    go.accounts.yandex_disk = signedIn("ivan");
+    login.resolve("ivan");
+    await settle();
+    expect(has("Signed in as ivan")).toBe(true);
+    expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
+  });
+});

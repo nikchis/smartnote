@@ -32,7 +32,9 @@
   let loaded = $state(false);
   let hasKey: boolean | undefined = $state();
   let phase: SignInPhase = $state("idle");
-  const allowed = $derived(settingsButtons(loaded, hasKey, form.kind, phase !== "idle"));
+  /** signOuts counts the Sign outs Go has not marked yet; it outlives the account block, which a change of the kind may remove. */
+  let signOuts = $state(0);
+  const allowed = $derived(settingsButtons(loaded, hasKey, form.kind, phase !== "idle" || signOuts > 0));
   /** busy names the running action, shown beside OK; "" when none runs. */
   let busy: Key | "" = $state("");
   let invalid = $state("");
@@ -56,7 +58,7 @@
   /** typing is the read of the account due when typing in an own client field pauses. */
   let typing: ReturnType<typeof setTimeout> | undefined;
   // A read that starts after a sign-in or a Sign out would outdate its answer.
-  // A sign-in moves phase off "idle"; a Sign out calls onSignOut.
+  // A sign-in moves phase off "idle"; a Sign out calls signOutStarted.
   $effect(() => {
     if (phase !== "idle") cancelTyping();
   });
@@ -97,8 +99,13 @@
     }
   }
 
-  /** clientTyped reads the account once typing in an own client field pauses; change fires only when the field is left. */
+  /**
+   * clientTyped reads the account once typing in an own client field pauses;
+   * change fires only when the field is left. The draft changes at once, so
+   * an answer still due, of a read or a sign-in, is for an older one.
+   */
   function clientTyped() {
+    accountTurn.begin();
     clearTimeout(typing);
     typing = setTimeout(() => {
       typing = undefined;
@@ -120,6 +127,13 @@
   function cancelTyping() {
     clearTimeout(typing);
     typing = undefined;
+  }
+
+  /** signOutStarted holds OK and Test until Go has marked the Sign out, or failed to. */
+  function signOutStarted(done: Promise<unknown>) {
+    cancelTyping();
+    signOuts++;
+    void done.catch(() => {}).finally(() => signOuts--);
   }
 
   /** kindChanged reads the account of the new kind; a read due for the old one is dropped. */
@@ -253,7 +267,7 @@
         <span class="legend" id={google ? "settings-google" : "settings-yandex"}>{i18n.t(google ? "settings.googleAccount" : "settings.yandexAccount")}</span>
         <div class="fields">
           <div class="wide">
-            <CloudAccount kind={form.kind} bind:account latest={accountTurn} {form} bind:phase bind:invalid disabled={!!busy} onSignOut={cancelTyping} />
+            <CloudAccount kind={form.kind} bind:account latest={accountTurn} {form} bind:phase bind:invalid disabled={!!busy} onSignOut={signOutStarted} onOutdated={() => void readAccount(true)} />
           </div>
           {#if google}
             <details class="wide" bind:open={advancedOpen}>

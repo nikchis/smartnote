@@ -58,11 +58,12 @@ export type SettingsButtons = { test: boolean; save: boolean; generate: boolean;
  * settingsButtons are the buttons of Settings that act on what was loaded.
  * Until the settings load, OK would save the empty form; until hasKey loads,
  * Generate could replace a key without the question. Without a storage there
- * is nothing to test; while a Yandex sign-in runs neither Test nor OK may start
- * (spec §8).
+ * is nothing to test; while a sign-in runs, or a Sign out Go has not marked
+ * yet, neither Test nor OK may start (spec §8): a Save before the mark would
+ * keep the token.
  */
-export function settingsButtons(loaded: boolean, hasKey: boolean | undefined, kind: string, signingIn: boolean): SettingsButtons {
+export function settingsButtons(loaded: boolean, hasKey: boolean | undefined, kind: string, accountPending: boolean): SettingsButtons {
   const known = hasKey !== undefined;
-  const ready = loaded && !signingIn;
+  const ready = loaded && !accountPending;
   return { test: ready && kind !== "none", save: ready, generate: known, export: hasKey === true, import: known };
 }
