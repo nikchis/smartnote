@@ -267,7 +267,7 @@
         <span class="legend" id={google ? "settings-google" : "settings-yandex"}>{i18n.t(google ? "settings.googleAccount" : "settings.yandexAccount")}</span>
         <div class="fields">
           <div class="wide">
-            <CloudAccount kind={form.kind} bind:account latest={accountTurn} {form} bind:phase bind:invalid disabled={!!busy} onSignOut={signOutStarted} onOutdated={() => void readAccount(true)} />
+            <CloudAccount kind={form.kind} bind:account latest={accountTurn} {form} bind:phase bind:invalid disabled={!!busy || signOuts > 0} onSignOut={signOutStarted} onOutdated={() => void readAccount(true)} />
           </div>
           {#if google}
             <details class="wide" bind:open={advancedOpen}>

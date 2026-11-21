@@ -1006,6 +1006,37 @@ describe("Settings Sign out in progress", () => {
     expect(button("OK")!.disabled).toBe(false);
   });
 
+  it("the sign-in buttons stay disabled until the Sign out is confirmed, also after a kind switch", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn(), yandex_disk: signedIn("ivan") });
+    const out = delayedSignOut();
+
+    await press("Sign out");
+    expect(button("Sign in again")!.disabled).toBe(true);
+    expect(button("Sign out")!.disabled).toBe(true);
+    await choose("Yandex Disk");
+    expect(has("Signed in as ivan")).toBe(true);
+    expect(button("Sign in again")!.disabled).toBe(true);
+    expect(button("Sign out")!.disabled).toBe(true);
+
+    out.release();
+    await settle();
+    expect(button("Sign in again")!.disabled).toBe(false);
+    expect(button("Sign out")!.disabled).toBe(false);
+  });
+
+  it("the sign-in buttons are enabled again after a failed Sign out", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn() });
+    const out = pending<void>();
+    go.signOut.mockReturnValueOnce(out.promise);
+
+    await press("Sign out");
+    expect(button("Sign in again")!.disabled).toBe(true);
+    out.reject(uiError("internal", "boom"));
+    await settle();
+    expect(button("Sign in again")!.disabled).toBe(false);
+    expect(button("Sign out")!.disabled).toBe(false);
+  });
+
   it("OK waits for the Sign out after the storage is no longer a cloud", async () => {
     await open({ kind: "google_drive" }, { google_drive: signedIn() });
     const out = delayedSignOut();
