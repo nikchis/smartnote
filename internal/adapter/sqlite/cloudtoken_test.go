@@ -206,13 +206,17 @@ func TestNewTablesKeepFormat2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !tables["cloud_token"] {
-		t.Error("cloud_token is missing in a new storage")
-	}
+	newTables := []string{"cloud_token", "cloud_upload"}
 
-	// 2.2.2 opens the storage: cloud_token is not required by its check.
-	if slices.Contains(requiredTablesV2, "cloud_token") {
-		t.Error("cloud_token is a required table")
+	for _, name := range newTables {
+		if !tables[name] {
+			t.Errorf("%s is missing in a new storage", name)
+		}
+
+		// 2.2.2 opens the storage: the table is not required by its check.
+		if slices.Contains(requiredTablesV2, name) {
+			t.Errorf("%s is a required table", name)
+		}
 	}
 
 	if err := checkTables(tables, 2); err != nil {
@@ -223,15 +227,19 @@ func TestNewTablesKeepFormat2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rawExec(t, dir, "DROP TABLE cloud_token")
+	for _, name := range newTables {
+		rawExec(t, dir, "DROP TABLE "+name)
+	}
 
 	s2 := openTest(t, dir)
 	if err := s2.Unlock(ctx, "secret1"); err != nil {
-		t.Fatalf("Unlock without cloud_token: %v", err)
+		t.Fatalf("Unlock without the new tables: %v", err)
 	}
 
-	if !hasTable(t, dir, "cloud_token") {
-		t.Error("cloud_token was not created on unlock")
+	for _, name := range newTables {
+		if !hasTable(t, dir, name) {
+			t.Errorf("%s was not created on unlock", name)
+		}
 	}
 
 	if v := formatOf(t, dir); v != "2" {

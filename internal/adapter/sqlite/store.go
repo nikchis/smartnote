@@ -429,7 +429,7 @@ func (s *Store) unlock(ctx context.Context, password string) ([]byte, error) {
 // ensureOptionalTables creates the tables that a database of 2.1.0 or 2.2.x
 // lacks if they are missing: the cloud tables and sync_server.
 func ensureOptionalTables(ctx context.Context, db *sql.DB) error {
-	for _, ddl := range []string{cloudAuthDDL, cloudPendingDDL, cloudTokenDDL, syncServerDDL} {
+	for _, ddl := range []string{cloudAuthDDL, cloudPendingDDL, cloudTokenDDL, cloudUploadDDL, syncServerDDL} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("create optional tables: %w", mapOpenError(err))
 		}

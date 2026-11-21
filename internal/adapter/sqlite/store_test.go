@@ -373,8 +373,9 @@ func TestKeyNaming(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The required tables plus cloud_auth, cloud_pending, cloud_token and sync_server.
-	if len(tables) != len(requiredTablesV2)+4 {
+	// The required tables plus cloud_auth, cloud_pending, cloud_token,
+	// cloud_upload and sync_server.
+	if len(tables) != len(requiredTablesV2)+5 {
 		t.Errorf("tables = %v, want %v and the optional tables", tables, requiredTablesV2)
 	}
 
@@ -393,7 +394,7 @@ func TestKeyNaming(t *testing.T) {
 		switch table {
 		case tableNoteEmbedding:
 			want = "note_uuid" // one row per note: the key is the note's own
-		case tableCloudToken:
+		case tableCloudToken, tableCloudUpload:
 			want = "provider" // one row per provider: the key is its name (spec §7.2)
 		}
 
