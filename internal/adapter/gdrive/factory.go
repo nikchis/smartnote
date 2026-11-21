@@ -33,6 +33,12 @@ func NewStoreFactory(e Endpoints, uploads UploadStore, auth Refresher, builtin u
 		opt(&o)
 	}
 
+	return newStoreFactory(e, uploads, auth, builtin, o)
+}
+
+// newStoreFactory is NewStoreFactory over the options of the stores, which
+// the tests set beyond the public ones (the emulator's client and host).
+func newStoreFactory(e Endpoints, uploads UploadStore, auth Refresher, builtin usecase.CloudClient, o storeOptions) blobremote.StoreFactory {
 	return func(t usecase.RemoteTarget) (blobremote.ObjectStore, error) {
 		if t.Token == nil {
 			return nil, domain.ReauthRequired(domain.KindGoogleDrive)
