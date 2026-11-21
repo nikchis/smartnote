@@ -30,7 +30,7 @@ func Harden() error {
 
 	// Keep the flags already set: at start the Go runtime ORs in
 	// WER_FAULT_REPORTING_NO_UI (runtime.osinit → preventErrorDialogs in
-	// runtime/signal_windows.go, checked in go1.27.3, the toolchain of go.mod).
+	// runtime/signal_windows.go, checked in go1.27.4, the toolchain of go.mod).
 	// Without them WerSetFlags would clear that flag, so it is skipped then.
 	var flags uint32
 

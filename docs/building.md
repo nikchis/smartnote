@@ -9,7 +9,7 @@ developers.
 
 | Tool | Version |
 |---|---|
-| Go | 1.27.3 (`toolchain` in `go.mod`) |
+| Go | 1.27.4 (`toolchain` in `go.mod`) |
 | Node.js / npm | LTS (developed with 24.21.0 / 12.0.2) |
 | Rust | 1.99.0 with rustfmt and clippy (`search/rust-toolchain.toml`) |
 | Wails CLI | v3.1.0: `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0` |
