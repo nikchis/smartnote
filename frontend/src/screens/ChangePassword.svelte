@@ -2,7 +2,8 @@
   // ChangePassword sets a new password for the local storage (v1 UDlgPwd).
   import { VaultService } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
-  import { parseError } from "../lib/errors";
+  import { errorMsg } from "../lib/errors";
+  import { i18n, msg } from "../lib/i18n.svelte";
   import { modal } from "../lib/modal";
   import { passwordPairOK } from "../lib/password";
 
@@ -20,10 +21,10 @@
     try {
       await VaultService.ChangePassword(password, confirm);
       password = confirm = "";
-      await dialogs.info("Password was successfully changed.");
+      await dialogs.info(msg("changePassword.done"));
       onClose();
     } catch (err) {
-      await dialogs.error(parseError(err).message);
+      await dialogs.error(errorMsg(err));
     } finally {
       busy = false;
     }
@@ -32,18 +33,18 @@
 
 <div class="backdrop" use:modal>
   <form class="card" onsubmit={change}>
-    <h2>Change password</h2>
+    <h2>{i18n.t("changePassword.title")}</h2>
     <label>
-      New password
+      {i18n.t("changePassword.new")}
       <input type="password" bind:value={password} autocomplete="new-password" />
     </label>
     <label>
-      Confirm password
+      {i18n.t("field.confirmPassword")}
       <input type="password" bind:value={confirm} autocomplete="new-password" />
     </label>
     <div class="buttons">
-      <button type="submit" disabled={!ready || busy}>OK</button>
-      <button type="button" onclick={onClose} disabled={busy}>Cancel</button>
+      <button type="submit" disabled={!ready || busy}>{i18n.t("common.ok")}</button>
+      <button type="button" onclick={onClose} disabled={busy}>{i18n.t("common.cancel")}</button>
     </div>
   </form>
 </div>

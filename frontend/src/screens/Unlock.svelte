@@ -2,7 +2,8 @@
   // Unlock opens the local storage; Enter submits.
   import { VaultService } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
-  import { parseError } from "../lib/errors";
+  import { errorMsg } from "../lib/errors";
+  import { i18n } from "../lib/i18n.svelte";
 
   let { onUnlocked }: { onUnlocked: () => void } = $props();
 
@@ -23,7 +24,7 @@
     } catch (err) {
       // wrong_password carries "Access to local storage denied.";
       // corrupt_storage and unsupported_format carry their own messages.
-      await dialogs.error(parseError(err).message);
+      await dialogs.error(errorMsg(err));
       password = "";
       input?.focus();
     } finally {
@@ -34,8 +35,8 @@
 
 <form class="card" onsubmit={unlock}>
   <label>
-    Password
+    {i18n.t("field.password")}
     <input type="password" bind:this={input} bind:value={password} autocomplete="current-password" />
   </label>
-  <button type="submit" disabled={password === "" || busy}>Unlock</button>
+  <button type="submit" disabled={password === "" || busy}>{i18n.t("unlock.submit")}</button>
 </form>

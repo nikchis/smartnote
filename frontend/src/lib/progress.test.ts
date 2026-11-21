@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "./i18n.svelte";
 import { progressView, type Progress, type ProgressView } from "./progress";
+
+vi.mock("./api", () => ({ PrefsService: { SetLanguage: async () => {} } }));
 
 const yandex = (direction: string, done: number, total: number): Progress => ({ storage: "yandex_disk", direction, unit: "bytes", done, total });
 const server = (direction: string, done: number, total: number): Progress => ({ storage: "ssh_postgres", direction, unit: "notes", done, total });
@@ -101,5 +104,24 @@ describe("progressView", () => {
 
     expect({ ...got, value: undefined }).toEqual({ ...want, value: undefined });
     expect(got.value).toBeCloseTo(want.value, 9);
+  });
+});
+
+describe("progressView in Russian", () => {
+  afterEach(async () => {
+    await i18n.set("en");
+  });
+
+  it("follows the language of the interface, with its decimal comma and plural forms", async () => {
+    await i18n.set("ru");
+    expect(progressView(yandex("upload", 2_400_000, 5_000_000))).toEqual({
+      title: "Отправка на Yandex Disk…",
+      detail: "2,4 из 5,0 МБ · 48%",
+      warning: "При медленном соединении это может занять несколько минут. Не закрывайте Smartnote.",
+      value: 0.48,
+    });
+    expect(progressView(server("download", 1, 21), true, { index: 1, count: 2 })?.detail).toBe("Шаг 2 из 2 · 1 из 21 заметки · 52%");
+    expect(progressView(server("download", 12, 340))?.title).toBe("Синхронизация с сервером…");
+    expect(progressView(server("upload", 340, 340))?.detail).toBe("Завершение…");
   });
 });

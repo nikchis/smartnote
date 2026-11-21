@@ -2,6 +2,7 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { SettingsDTO } from "../lib/api";
+import { i18n } from "../lib/i18n.svelte";
 
 // Settings talks to Go through the generated bindings; they are replaced by
 // fakes whose answers the test controls.
@@ -30,6 +31,7 @@ vi.mock("../lib/api", () => ({
     Test: go.test,
   },
   KeyService: { HasKey: async () => true },
+  PrefsService: { SetLanguage: async () => {} },
 }));
 vi.mock("../lib/dialogs.svelte", () => ({
   dialogs: { error: go.error, info: vi.fn(async () => {}), ask: vi.fn(async () => true) },
@@ -78,6 +80,7 @@ beforeEach(() => {
 afterEach(async () => {
   await unmount(screen);
   target.remove();
+  await i18n.set("en");
 });
 
 const button = (name: string) => [...target.querySelectorAll("button")].find((b) => b.textContent?.trim() === name);
@@ -209,6 +212,22 @@ describe("Settings Yandex account", () => {
     expect(button("Test connection")!.disabled).toBe(true);
   });
 
+  it("switching language while waiting for the browser re-renders the account block", async () => {
+    await open();
+    go.signIn.mockReturnValue(pending<string>().promise);
+    await press("Sign in with Yandex");
+
+    await i18n.set("ru");
+    await settle();
+
+    expect(has("Ожидание браузера…")).toBe(true);
+    expect(has("Waiting for the browser…")).toBe(false);
+    expect(button("Ввести код вручную")).toBeDefined();
+    expect([...target.querySelectorAll('[data-testid="account"] button')].map((b) => b.textContent?.trim())).toEqual(["Отмена", "Ввести код вручную"]);
+    expect(target.querySelector("#settings-yandex")?.textContent).toBe("Аккаунт Яндекса");
+    expect(button("Проверить подключение")!.disabled).toBe(true);
+  });
+
   it("shows the login after a successful sign-in", async () => {
     await open();
     go.signIn.mockResolvedValue("ivan.petrov");
@@ -293,7 +312,7 @@ describe("Settings Yandex account", () => {
     await open();
     go.signIn.mockRejectedValue(uiError("auth", "Yandex refused."));
     await press("Sign in with Yandex");
-    expect(go.error).toHaveBeenCalledWith("Yandex refused.");
+    expect(go.error).toHaveBeenCalledWith({ raw: "Yandex refused." });
     expect(has("Not signed in")).toBe(true);
   });
 
@@ -346,7 +365,7 @@ describe("Settings Yandex account", () => {
     await open({ yandexClientId: "" });
     go.signIn.mockRejectedValue(uiError("validation", "Client ID is required.", "yandex_client_id"));
     await press("Sign in with Yandex");
-    expect(go.error).toHaveBeenCalledWith("Client ID is required.");
+    expect(go.error).toHaveBeenCalledWith({ raw: "Client ID is required." });
     expect(has("Set your own client ID in Advanced")).toBe(true);
     expect(target.querySelector('input[aria-label="Own client ID"]')!.getAttribute("aria-invalid")).toBe("true");
     expect(target.querySelector("details")!.open).toBe(true);
@@ -357,7 +376,7 @@ describe("Settings Yandex account", () => {
     go.save.mockRejectedValue(uiError("validation", "Sign in to Yandex Disk first, or choose None (local only).", "yandex_account"));
     await press("OK");
     expect(target.querySelector('[data-testid="account"]')!.getAttribute("aria-invalid")).toBe("true");
-    expect(go.error).toHaveBeenCalledWith("Sign in to Yandex Disk first, or choose None (local only).");
+    expect(go.error).toHaveBeenCalledWith({ raw: "Sign in to Yandex Disk first, or choose None (local only)." });
   });
 });
 

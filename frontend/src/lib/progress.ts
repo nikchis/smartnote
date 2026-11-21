@@ -1,5 +1,7 @@
 // Progress of a transfer with the remote storage, from the sync:progress
-// event (internal/adapter/wailsui/progress.go), as the overlay shows it.
+// event (internal/adapter/wailsui/progress.go), as the overlay shows it, in
+// the current language.
+import { i18n } from "./i18n.svelte";
 
 /** Progress is the ProgressDTO of the event; direction "" ends the operation. */
 export type Progress = { storage: string; direction: string; unit: string; done: number; total: number };
@@ -29,11 +31,13 @@ export type Step = { index: number; count: number };
 const ONLY: Step = { index: 0, count: 1 };
 
 const YANDEX_DISK = "yandex_disk";
-const SLOW = "This can take several minutes on a slow connection. Do not close Smartnote.";
 
-/** megabytes are 10^6 bytes with one decimal. */
+/** CLOUDS name the cloud storages; the names are the same in every language. */
+const CLOUDS: Record<string, string> = { [YANDEX_DISK]: "Yandex Disk" };
+
+/** megabytes are 10^6 bytes with one decimal, written as the language writes it. */
 function megabytes(bytes: number): string {
-  return (bytes / 1e6).toFixed(1);
+  return new Intl.NumberFormat(i18n.lang, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false }).format(bytes / 1e6);
 }
 
 /**
@@ -41,13 +45,16 @@ function megabytes(bytes: number): string {
  * "Downloading" only for the Restore the user started, else a synchronization.
  */
 function title(p: Progress, restoring: boolean): string {
-  const place = p.storage === YANDEX_DISK ? "Yandex Disk" : "the server";
-  if (p.direction === "upload") return `Uploading to ${place}…`;
-  return restoring ? `Downloading from ${place}…` : `Synchronizing with ${place}…`;
+  const provider = CLOUDS[p.storage];
+  if (p.direction === "upload") return provider ? i18n.t("progress.uploadCloud", { provider }) : i18n.t("progress.uploadServer");
+  if (restoring) return provider ? i18n.t("progress.downloadCloud", { provider }) : i18n.t("progress.downloadServer");
+  return provider ? i18n.t("progress.syncCloud", { provider }) : i18n.t("progress.syncServer");
 }
 
 function amount(p: Progress): string {
-  return p.unit === "bytes" ? `${megabytes(p.done)} of ${megabytes(p.total)} MB` : `${p.done} of ${p.total} notes`;
+  return p.unit === "bytes"
+    ? i18n.t("progress.megabytes", { done: megabytes(p.done), total: megabytes(p.total) })
+    : i18n.t("progress.notes", { done: p.done, total: p.total });
 }
 
 /**
@@ -64,11 +71,11 @@ export function progressView(p: Progress | undefined, restoring = false, step: S
   const num = index * total + done;
   const den = count * total;
   const finished = index === count - 1 && p.done >= p.total;
-  const text = finished ? "Finishing…" : `${amount(p)} · ${Math.floor((num * 100) / den)}%`;
+  const text = finished ? i18n.t("progress.finishing") : `${amount(p)} · ${Math.floor((num * 100) / den)}%`;
   return {
     title: title(p, restoring),
-    detail: count > 1 ? `Step ${index + 1} of ${count} · ${text}` : text,
-    warning: p.storage === YANDEX_DISK ? SLOW : "",
+    detail: count > 1 ? i18n.t("progress.step", { index: index + 1, count, text }) : text,
+    warning: p.storage === YANDEX_DISK ? i18n.t("progress.slow") : "",
     value: num / den,
   };
 }

@@ -4,6 +4,7 @@ export {
   ConnectionService,
   KeyService,
   NotesService,
+  PrefsService,
   SearchService,
   SyncService,
   VaultService,

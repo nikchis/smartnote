@@ -2,6 +2,7 @@
 // of the last answer and the status line under them.
 import type { SearchHitDTO, SearchStatusDTO } from "./api";
 import { parseError } from "./errors";
+import { i18n } from "./i18n.svelte";
 
 /** SearchApi is the part of SearchService the search bar uses. */
 export type SearchApi = { Search(q: string): Promise<SearchHitDTO[] | null> };
@@ -131,18 +132,18 @@ export class SearchBox {
     return this.statusInfo().text;
   }
 
-  /** statusInfo is the status line with, for Indexing N of M, its numbers for the bar next to it. */
+  /** statusInfo is the status line in the current language with, for Indexing N of M, its numbers for the bar next to it. */
   statusInfo(): StatusInfo {
     const s = this.status;
-    if (this.failed || s?.lexical === "unavailable") return { text: "Search unavailable" };
-    if (this.answered !== undefined && this.answered.trim() !== "" && this.hits.length === 0) return { text: "No matches" };
+    if (this.failed || s?.lexical === "unavailable") return { text: i18n.t("search.unavailable") };
+    if (this.answered !== undefined && this.answered.trim() !== "" && this.hits.length === 0) return { text: i18n.t("search.noMatches") };
     if (!s) return { text: "" };
-    if (s.semantic === "loading") return { text: "Semantic search is loading" };
+    if (s.semantic === "loading") return { text: i18n.t("search.semanticLoading") };
     if (s.queued > 0) {
       const done = s.notes - s.queued;
-      return { text: `Indexing ${done} of ${s.notes}`, indexing: { done, total: s.notes } };
+      return { text: i18n.t("search.indexing", { done, total: s.notes }), indexing: { done, total: s.notes } };
     }
-    if (s.semantic === "unavailable") return { text: "Semantic search unavailable" };
+    if (s.semantic === "unavailable") return { text: i18n.t("search.semanticUnavailable") };
     return { text: "" };
   }
 

@@ -2,6 +2,7 @@
   // History lists the previous texts of a note by date; Use puts one into the
   // editor, which saves it only on Apply (v1 UDlgHistory).
   import type { VersionDTO } from "../lib/api";
+  import { i18n } from "../lib/i18n.svelte";
   import { modal } from "../lib/modal";
 
   let { versions, onUse, onClose }: { versions: VersionDTO[]; onUse: (info: string) => void; onClose: () => void } = $props();
@@ -17,10 +18,10 @@
 <svelte:window {onkeydown} />
 
 <div class="backdrop" use:modal>
-  <div class="card history" role="dialog" aria-modal="true" aria-label="History">
-    <h2>History</h2>
+  <div class="card history" role="dialog" aria-modal="true" aria-label={i18n.t("history.title")}>
+    <h2>{i18n.t("history.title")}</h2>
     <div class="panes">
-      <ul class="list" aria-label="Versions">
+      <ul class="list" aria-label={i18n.t("history.versions")}>
         {#each versions as v (v.id)}
           <li>
             <button class:active={chosen?.id === v.id} onclick={() => (chosenId = v.id)}>
@@ -32,8 +33,8 @@
       <pre class="text">{chosen?.info ?? ""}</pre>
     </div>
     <div class="buttons">
-      <button type="button" disabled={!chosen} onclick={() => chosen && onUse(chosen.info)}>Use</button>
-      <button type="button" onclick={onClose}>Close</button>
+      <button type="button" disabled={!chosen} onclick={() => chosen && onUse(chosen.info)}>{i18n.t("history.use")}</button>
+      <button type="button" onclick={onClose}>{i18n.t("common.close")}</button>
     </div>
   </div>
 </div>

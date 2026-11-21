@@ -3,12 +3,15 @@ import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NoteDTO, SearchHitDTO } from "../lib/api";
 import { answer as answerDialog, currentDialog } from "../lib/dialogs.svelte";
+import { i18n, msg } from "../lib/i18n.svelte";
 
 // Main talks to Go through the generated bindings and the Wails events: both
 // are replaced; the notes and the answers of the search come from state.
 const state = vi.hoisted(() => ({
   notes: [] as NoteDTO[],
   search: (async () => []) as (q: string) => Promise<SearchHitDTO[]>,
+  setLanguage: (async () => {}) as (lang: string) => Promise<void>,
+  languages: [] as string[],
 }));
 
 vi.mock("../lib/api", () => ({
@@ -16,6 +19,12 @@ vi.mock("../lib/api", () => ({
   SearchService: {
     Search: (q: string) => state.search(q),
     Status: async () => ({ notes: 2, queued: 0, lexical: "ready", semantic: "ready" }),
+  },
+  PrefsService: {
+    SetLanguage: (lang: string) => {
+      state.languages.push(lang);
+      return state.setLanguage(lang);
+    },
   },
 }));
 vi.mock("@wailsio/runtime", () => ({ Events: { On: () => () => {} } }));
@@ -38,6 +47,8 @@ let target: HTMLElement;
 let screen: ReturnType<typeof mount>;
 
 beforeEach(async () => {
+  state.setLanguage = async () => {};
+  state.languages = [];
   state.notes = [
     { id: "a", name: "alpha", info: "first", updated: 1 },
     { id: "b", name: "beta", info: "prefix needle", updated: 2 },
@@ -57,12 +68,16 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  while (currentDialog()) answerDialog("yes");
   await unmount(screen);
   target.remove();
+  state.setLanguage = async () => {};
+  await i18n.set("en");
 });
 
-const field = () => target.querySelector<HTMLInputElement>('input[aria-label="Search records"]')!;
+const field = () => target.querySelector<HTMLInputElement>('[role="search"] input')!;
 const text = () => target.querySelector("textarea")!;
+const toggle = () => target.querySelector<HTMLButtonElement>('button[aria-label^="Language"], button[aria-label^="Язык"]')!;
 
 async function search(q: string): Promise<void> {
   field().focus();
@@ -86,6 +101,7 @@ describe("Main", () => {
     expect([...notes.querySelectorAll("button")].map((b) => b.getAttribute("title"))).toEqual(["Add a new note", "Remove current note"]);
     expect(notes.compareDocumentPosition(top.querySelector('[role="search"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(field().placeholder).toBe("Search records");
+    expect(field().getAttribute("aria-label")).toBe("Search records");
     expect([...target.querySelectorAll(".editor .actions button")].map((b) => b.textContent?.trim())).toEqual(["Apply changes", "Cancel changes"]);
   });
 
@@ -109,7 +125,7 @@ describe("Main", () => {
 
     const kept = (screen as { discardDraft(): Promise<boolean> }).discardDraft();
     await settle();
-    expect(currentDialog()?.message).toBe("Discard unsaved changes in the editor?");
+    expect(currentDialog()?.message).toEqual(msg("editor.discard"));
     answerDialog("no");
     await expect(kept).resolves.toBe(false);
     expect(text().value).toBe("first, edited");
@@ -143,5 +159,42 @@ describe("Main", () => {
     await settle();
 
     expect([text().value, text().selectionStart, text().selectionEnd]).toEqual(["prefix needle", 7, 13]);
+  });
+
+  // Spec §16.4: the language button is right of the search, before the
+  // buttons that come later at the right end of the row.
+  it("language toggle right after search", () => {
+    const top = target.querySelector(".find")!;
+    const search = top.querySelector('[role="search"]')!;
+    expect(search.nextElementSibling?.firstElementChild).toBe(toggle());
+  });
+
+  it("language toggle shows current and switches", async () => {
+    expect(toggle().textContent?.trim()).toBe("EN");
+    expect(toggle().getAttribute("title")).toBe("Language: English");
+
+    toggle().click();
+    await settle();
+
+    expect(state.languages).toEqual(["ru"]);
+    expect(toggle().textContent?.trim()).toBe("RU");
+    expect(toggle().getAttribute("aria-label")).toBe("Язык: русский");
+    expect([...target.querySelectorAll(".notes button")].map((b) => b.textContent?.trim())).toEqual(["Новая", "Удалить"]);
+    expect(field().placeholder).toBe("Поиск по заметкам");
+    expect([...target.querySelectorAll("footer button")].map((b) => b.textContent?.trim())).toContain("Создать резервную копию");
+  });
+
+  // Task 13: when Go cannot save the language it keeps the old one, so must the interface.
+  it("language toggle keeps the language and shows the error when Go cannot save it", async () => {
+    const messages = { en: "Cannot save the settings.", ru: "Не удалось сохранить настройки." };
+    state.setLanguage = async () => {
+      throw new Error(JSON.stringify({ code: "internal", message: messages.en, messages }));
+    };
+
+    toggle().click();
+    await settle();
+
+    expect(toggle().textContent?.trim()).toBe("EN");
+    expect(currentDialog()).toEqual({ kind: "error", message: { messages } });
   });
 });

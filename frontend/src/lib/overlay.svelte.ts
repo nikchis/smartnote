@@ -1,12 +1,13 @@
 // The overlay of the synchronization processes (Connect, Backup, Restore, the
 // Backup on close): one for the whole process, not one per call to the server.
 import type { Dialogs } from "./dialogs.svelte";
+import { i18n, type Key, type Msg } from "./i18n.svelte";
 import { progressView, type Progress, type ProgressView } from "./progress";
 
 /** ProcessKind names a synchronization process; the Backup on close is a "backup". */
 export type ProcessKind = "connect" | "backup" | "restore";
 
-const LABELS: Record<ProcessKind, string> = { connect: "Connecting…", backup: "Synchronizing…", restore: "Synchronizing…" };
+const LABELS: Record<ProcessKind, Key> = { connect: "overlay.connecting", backup: "overlay.synchronizing", restore: "overlay.synchronizing" };
 
 /**
  * TRANSFERS is how many transfers report their progress in a process, by
@@ -32,8 +33,8 @@ const TRANSFERS: Record<ProcessKind, Record<string, number>> = {
  * shared by the transfers of the process (TRANSFERS).
  */
 export class SyncOverlay {
-  /** text is shown over the window; "" hides the overlay. */
-  text = $state("");
+  /** label is the key of the text over the window; "" hides the overlay. */
+  private label: Key | "" = $state("");
   /** progress is the last transfer reported during the running process. */
   progress: Progress | undefined = $state();
   /** restoring is true from the Restore download the user started until the next call. */
@@ -54,6 +55,11 @@ export class SyncOverlay {
    */
   private step = $state(-1);
   private ended = true;
+
+  /** text is shown over the window, in the current language; "" hides the overlay. */
+  get text(): string {
+    return this.label && i18n.t(this.label);
+  }
 
   private get kind(): ProcessKind {
     return this.processes[0]?.kind ?? "backup";
@@ -76,7 +82,7 @@ export class SyncOverlay {
       } else if (owner) {
         // The next process owns the overlay now and counts its own transfers.
         this.reset();
-        if (this.text) this.text = LABELS[this.kind];
+        if (this.label) this.label = LABELS[this.kind];
       }
     }
   }
@@ -86,7 +92,7 @@ export class SyncOverlay {
    * Restore download, until the next call, as its progress stays on screen.
    */
   call<T>(call: () => Promise<T>, restore = false): Promise<T> {
-    this.text = LABELS[this.kind];
+    this.label = LABELS[this.kind];
     if (this.processes.length <= 1) this.restoring = restore;
     return call();
   }
@@ -119,8 +125,8 @@ export class SyncOverlay {
    */
   dialogs(d: Dialogs): Dialogs {
     const final =
-      (show: (msg: string) => Promise<void>) =>
-      (msg: string): Promise<void> => {
+      (show: (msg: Msg) => Promise<void>) =>
+      (msg: Msg): Promise<void> => {
         if (this.processes.length <= 1) this.hide();
         return show(msg);
       };
@@ -134,7 +140,7 @@ export class SyncOverlay {
   }
 
   private hide(): void {
-    this.text = "";
+    this.label = "";
     this.reset();
   }
 

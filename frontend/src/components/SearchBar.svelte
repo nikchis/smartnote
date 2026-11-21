@@ -5,6 +5,7 @@
   // to a changed query comes, the hits of the previous one stay dimmed and do
   // not open; Enter then opens a hit of the new answer.
   import type { SearchHitDTO } from "../lib/api";
+  import { i18n } from "../lib/i18n.svelte";
   import { highlight, type SearchBox } from "../lib/search.svelte";
 
   /** MAX_QUERY is the most UTF-16 units of a query the worker reads; maxlength counts them too. */
@@ -120,8 +121,8 @@
   <input
     bind:this={field}
     value={box.query}
-    placeholder="Search records"
-    aria-label="Search records"
+    placeholder={i18n.t("search.placeholder")}
+    aria-label={i18n.t("search.placeholder")}
     maxlength={MAX_QUERY}
     role="combobox"
     aria-autocomplete="list"
@@ -136,7 +137,7 @@
   />
   {#if shown}
     <div class="dropdown">
-      <ul id="search-results" role="listbox" aria-label="Search results" aria-busy={box.stale} bind:this={results}>
+      <ul id="search-results" role="listbox" aria-label={i18n.t("search.results")} aria-busy={box.stale} bind:this={results}>
         {#each box.hits as hit, i (i)}
           <!-- The field keeps the focus: a click must not take it, the keys work in the field. -->
           <li
@@ -151,7 +152,7 @@
           >
             <div class="head">
               <span class="note">{nameOf(hit.noteId)}</span>
-              <span class="where">{hit.line === 0 ? "name" : `line ${hit.line}`}</span>
+              <span class="where">{hit.line === 0 ? i18n.t("search.inName") : i18n.t("search.line", { n: hit.line })}</span>
             </div>
             <div class="snippet">
               {#each highlight(hit.snippet, hit.marks) as piece, j (j)}{#if piece.mark}<mark>{piece.text}</mark>{:else}{piece.text}{/if}{/each}
@@ -163,7 +164,7 @@
         <div class="status" role="status">
           {line}
           {#if info.indexing}
-            <progress max={info.indexing.total} value={info.indexing.done} aria-label="Indexing progress"></progress>
+            <progress max={info.indexing.total} value={info.indexing.done} aria-label={i18n.t("search.indexingProgress")}></progress>
           {/if}
         </div>
       {/if}

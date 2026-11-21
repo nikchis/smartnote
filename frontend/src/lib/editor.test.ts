@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { NoteDTO, SearchHitDTO, VersionDTO } from "./api";
 import type { Dialogs, Labels } from "./dialogs.svelte";
 import { Editor, type NotesApi } from "./editor.svelte";
+import { i18n, type Msg } from "./i18n.svelte";
 import { SearchBox, type SearchApi } from "./search.svelte";
 
 class FakeNotes implements NotesApi {
@@ -43,22 +44,22 @@ class FakeDialogs implements Dialogs {
   shown: string[] = [];
   labels: (Labels | undefined)[] = [];
   answer = true;
-  async info(msg: string) {
-    this.shown.push(`info: ${msg}`);
+  async info(msg: Msg) {
+    this.shown.push(`info: ${i18n.text(msg)}`);
   }
-  async warning(msg: string) {
-    this.shown.push(`warning: ${msg}`);
+  async warning(msg: Msg) {
+    this.shown.push(`warning: ${i18n.text(msg)}`);
   }
-  async error(msg: string) {
-    this.shown.push(`error: ${msg}`);
+  async error(msg: Msg) {
+    this.shown.push(`error: ${i18n.text(msg)}`);
   }
-  async ask(msg: string, labels?: Labels) {
+  async ask(msg: Msg, labels?: Labels) {
     this.labels.push(labels);
-    this.shown.push(labels ? `ask: ${msg} [${labels.yes}/${labels.no}]` : `ask: ${msg}`);
+    this.shown.push(labels ? `ask: ${i18n.text(msg)} [${i18n.t(labels.yes)}/${i18n.t(labels.no)}]` : `ask: ${i18n.text(msg)}`);
     return this.answer;
   }
-  async choose(msg: string) {
-    this.shown.push(`choose: ${msg}`);
+  async choose(msg: Msg) {
+    this.shown.push(`choose: ${i18n.text(msg)}`);
     return this.answer ? ("yes" as const) : ("no" as const);
   }
 }
@@ -247,7 +248,7 @@ describe("Editor", () => {
     d.answer = false;
     await expect(ed.openHit(hit("b", 1, 0, "second"))).resolves.toBe("cancelled");
     expect(d.shown).toEqual([DISCARD]);
-    expect(d.labels).toEqual([{ yes: "Discard", no: "Cancel", primary: "no" }]);
+    expect(d.labels).toEqual([{ yes: "editor.discardYes", no: "common.cancel", primary: "no" }]);
     expect(ed.state).toMatchObject({ mode: "edit", name: "alpha", info: "unsaved" });
 
     d.answer = true;

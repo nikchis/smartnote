@@ -1,5 +1,6 @@
 <script lang="ts">
   import { answer, currentDialog, dismiss, type DialogKind } from "../lib/dialogs.svelte";
+  import { i18n, type Key } from "../lib/i18n.svelte";
   import { modal } from "../lib/modal";
 
   const dialog = $derived(currentDialog());
@@ -19,19 +20,31 @@
     }
   }
 
-  // The look of the sign-in pages (internal/adapter/yadisk/pages.go): a
-  // centered card with an outlined mark. info reports a done action, so it
-  // shows a check mark and no title.
+  // The look of the sign-in pages (internal/adapter/cloudauth/pages.go): a
+  // centered card with an outlined mark. info reports a done action, so it shows a
+  // check mark and no title.
   type Mark = "success" | "warning" | "error" | "question";
   const marks: Record<DialogKind, Mark> = { info: "success", warning: "warning", error: "error", ask: "question", choose: "question" };
-  const titles: Record<DialogKind, string | null> = { info: null, warning: "Warning", error: "Error", ask: "Question", choose: "Question" };
+  const titles: Record<DialogKind, Key | null> = { info: null, warning: "dialog.warning", error: "dialog.error", ask: "dialog.question", choose: "dialog.question" };
+
+  /** view is the dialog in the current language: a switch while it is open shows it anew. */
+  const view = $derived.by(() => {
+    if (!dialog) return undefined;
+    const title = titles[dialog.kind];
+    return {
+      title: title && i18n.t(title),
+      message: i18n.text(dialog.message),
+      yes: i18n.t(dialog.labels?.yes ?? "common.yes"),
+      no: i18n.t(dialog.labels?.no ?? "common.no"),
+    };
+  });
 </script>
 
 <svelte:window {onkeydown} />
 
-{#if dialog}
+{#if dialog && view}
   {@const mark = marks[dialog.kind]}
-  {@const title = titles[dialog.kind]}
+  {@const title = view.title}
   <div class="backdrop" use:modal>
     <div
       class="dialog"
@@ -55,16 +68,16 @@
       {#if title}
         <h2 id="dialog-title" class={dialog.kind}>{title}</h2>
       {/if}
-      <p id="dialog-message">{dialog.message}</p>
+      <p id="dialog-message">{view.message}</p>
       <div class="buttons">
         {#if dialog.kind === "ask" || dialog.kind === "choose"}
-          <button bind:this={primary} onclick={() => answer("yes")}>{dialog.labels?.yes ?? "Yes"}</button>
-          <button bind:this={noButton} onclick={() => answer("no")}>{dialog.labels?.no ?? "No"}</button>
+          <button bind:this={primary} onclick={() => answer("yes")}>{view.yes}</button>
+          <button bind:this={noButton} onclick={() => answer("no")}>{view.no}</button>
           {#if dialog.kind === "choose"}
-            <button onclick={() => answer("cancel")}>Cancel</button>
+            <button onclick={() => answer("cancel")}>{i18n.t("common.cancel")}</button>
           {/if}
         {:else}
-          <button bind:this={primary} onclick={() => answer("yes")}>OK</button>
+          <button bind:this={primary} onclick={() => answer("yes")}>{i18n.t("common.ok")}</button>
         {/if}
       </div>
     </div>

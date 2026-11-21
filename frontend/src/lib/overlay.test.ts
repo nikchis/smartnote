@@ -1,8 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { backupFlow, closeFlow, restoreFlow, type SyncApi } from "../flows/sync";
 import type { Dialogs } from "./dialogs.svelte";
+import { i18n, type Msg } from "./i18n.svelte";
 import { SyncOverlay } from "./overlay.svelte";
 import type { Progress } from "./progress";
+
+vi.mock("./api", () => ({ PrefsService: { SetLanguage: async () => {} } }));
 
 const zero = { added: 0, updated: 0, deleted: 0 };
 const upload: Progress = { storage: "yandex_disk", direction: "upload", unit: "bytes", done: 5, total: 10 };
@@ -17,23 +20,23 @@ class RecordingDialogs implements Dialogs {
     private readonly overlay: SyncOverlay,
     private readonly answers: boolean[] = [],
   ) {}
-  private note(kind: string, msg: string) {
-    this.log.push(`${kind} ${msg} [overlay: ${this.overlay.text}]`);
+  private note(kind: string, msg: Msg) {
+    this.log.push(`${kind} ${i18n.text(msg)} [overlay: ${this.overlay.text}]`);
   }
-  async info(msg: string) {
+  async info(msg: Msg) {
     this.note("info", msg);
   }
-  async warning(msg: string) {
+  async warning(msg: Msg) {
     this.note("warning", msg);
   }
-  async error(msg: string) {
+  async error(msg: Msg) {
     this.note("error", msg);
   }
-  async ask(msg: string) {
+  async ask(msg: Msg) {
     this.note("ask", msg);
     return this.answers.shift() === true;
   }
-  async choose(msg: string) {
+  async choose(msg: Msg) {
     this.note("choose", msg);
     return "yes" as const;
   }
@@ -373,3 +376,22 @@ describe("SyncOverlay", () => {
   });
 });
 
+describe("SyncOverlay and the language", () => {
+  afterEach(async () => {
+    await i18n.set("en");
+  });
+
+  it("shows its text in the language of the moment", async () => {
+    const overlay = new SyncOverlay();
+    let resume!: () => void;
+    const running = overlay.process("connect", () => overlay.call(() => new Promise<void>((r) => (resume = r))));
+    expect(overlay.text).toBe("Connecting…");
+
+    await i18n.set("ru");
+    expect(overlay.text).toBe("Подключение…");
+
+    resume();
+    await running;
+    expect(overlay.text).toBe("");
+  });
+});

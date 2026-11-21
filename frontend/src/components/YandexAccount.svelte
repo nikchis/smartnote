@@ -4,7 +4,8 @@
   // phase tells the dialog whether Test and OK must wait.
   import { ConnectionService } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
-  import { parseError } from "../lib/errors";
+  import { messageOf, parseError } from "../lib/errors";
+  import { i18n } from "../lib/i18n.svelte";
   import { fromForm, type SettingsForm, type SignInPhase } from "../lib/settings";
 
   let {
@@ -22,7 +23,7 @@
   async function report(e: unknown) {
     const err = parseError(e);
     invalid = err.code === "validation" ? (err.field ?? "") : "";
-    if (err.code !== "canceled") await dialogs.error(err.message);
+    if (err.code !== "canceled") await dialogs.error(messageOf(err));
   }
 
   function signedIn(account: string) {
@@ -104,33 +105,33 @@
 
 <div class="account" data-testid="account" aria-invalid={invalid === "yandex_account"}>
   {#if phase === "browser"}
-    <span class="muted">Waiting for the browser…</span>
+    <span class="muted">{i18n.t("account.waiting")}</span>
     <span class="spacer"></span>
-    <button type="button" onclick={cancel}>Cancel</button>
-    <button type="button" class="link" onclick={manual}>Enter code manually</button>
+    <button type="button" onclick={cancel}>{i18n.t("common.cancel")}</button>
+    <button type="button" class="link" onclick={manual}>{i18n.t("account.manual")}</button>
   {:else if phase === "manual"}
     <label class="code">
-      Code:
+      {i18n.t("account.code")}
       <!-- svelte-ignore a11y_autofocus -->
-      <input aria-label="Code" bind:value={code} autocomplete="off" autofocus />
+      <input aria-label={i18n.t("account.codeLabel")} bind:value={code} autocomplete="off" autofocus />
     </label>
-    <button type="button" onclick={submit} disabled={code.trim() === ""}>Submit</button>
+    <button type="button" onclick={submit} disabled={code.trim() === ""}>{i18n.t("account.submit")}</button>
     <span class="spacer"></span>
-    <button type="button" onclick={cancel}>Cancel</button>
+    <button type="button" onclick={cancel}>{i18n.t("common.cancel")}</button>
   {:else if form.yandexSignedIn}
-    <span>{form.yandexAccount ? `Signed in as ${form.yandexAccount}` : "Signed in"}</span>
+    <span>{form.yandexAccount ? i18n.t("account.signedInAs", { account: form.yandexAccount }) : i18n.t("account.signedIn")}</span>
     <span class="spacer"></span>
     <!-- A new sign-in replaces the saved token on OK, e.g. after its access was revoked. -->
-    <button type="button" onclick={signIn} {disabled}>Sign in again</button>
-    <button type="button" onclick={signOut} {disabled}>Sign out</button>
+    <button type="button" onclick={signIn} {disabled}>{i18n.t("account.signInAgain")}</button>
+    <button type="button" onclick={signOut} {disabled}>{i18n.t("account.signOut")}</button>
   {:else}
-    <span class="muted">Not signed in</span>
+    <span class="muted">{i18n.t("account.notSignedIn")}</span>
     <span class="spacer"></span>
-    <button type="button" onclick={signIn} {disabled}>Sign in with Yandex</button>
+    <button type="button" onclick={signIn} {disabled}>{i18n.t("account.signInYandex")}</button>
   {/if}
 </div>
 {#if invalid === "yandex_client_id"}
-  <p class="hint">Set your own client ID in Advanced</p>
+  <p class="hint">{i18n.t("account.ownClientHint")}</p>
 {/if}
 
 <style>

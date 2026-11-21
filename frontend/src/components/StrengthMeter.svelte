@@ -1,11 +1,12 @@
 <script lang="ts">
   // StrengthMeter hints how hard the sync phrase is to guess; it never blocks saving.
-  import { strength } from "../lib/strength";
+  import { i18n, type Key } from "../lib/i18n.svelte";
+  import { strength, type Strength } from "../lib/strength";
 
   let { phrase }: { phrase: string } = $props();
 
   const score = $derived(strength(phrase));
-  const labels = ["Very weak", "Weak", "Fair", "Strong", "Very strong"] as const;
+  const labels: Record<Strength, Key> = { 0: "strength.0", 1: "strength.1", 2: "strength.2", 3: "strength.3", 4: "strength.4" };
 </script>
 
 <div class="meter" aria-live="polite">
@@ -14,7 +15,7 @@
       <span class:on={phrase !== "" && score > i} class="s{score}"></span>
     {/each}
   </div>
-  <span class="label">{phrase === "" ? "" : labels[score]}</span>
+  <span class="label">{phrase === "" ? "" : i18n.t(labels[score])}</span>
 </div>
 
 <style>

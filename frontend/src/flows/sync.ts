@@ -1,7 +1,8 @@
 // Synchronization scenarios of spec §6.3: the connect check, Backup, Restore
 // and the close question. They only talk to the user through Dialogs.
 import type { Dialogs } from "../lib/dialogs.svelte";
-import { parseError, type UIError } from "../lib/errors";
+import { messageOf, parseError, type UIError } from "../lib/errors";
+import { msg, type Msg } from "../lib/i18n.svelte";
 
 export type Counts = { added: number; updated: number; deleted: number };
 export type BackupPreview = { counts: Counts; remoteNewer: boolean };
@@ -38,17 +39,18 @@ export type ConnectHooks = {
   restored?: () => void | Promise<void>;
 };
 
-const fresher = "It seems like your remote storage has fresher version of data.";
-
-function lines(...parts: string[]): string {
-  return parts.filter((p) => p !== "").join("\n");
+/** lines are the messages one per line; an omitted line is left out. */
+function lines(...parts: (Msg | undefined)[]): Msg {
+  return { lines: parts.filter((p) => p !== undefined) };
 }
 
-const olderPrefix = "The remote storage holds an older version of the data than this device last synchronized with.";
-const olderWarning = `${olderPrefix} It may have been restored from an earlier copy. Use Backup to overwrite it, or Restore to replace your notes with it.`;
+/** restoreDeletes is the line about local notes a Restore deletes, if any. */
+function restoreDeletes(c: Counts): Msg | undefined {
+  return c.deleted > 0 ? msg("sync.restoreDeletes", { n: c.deleted }) : undefined;
+}
 
-function restoreQuestion(c: Counts, remoteOlder = false): string {
-  return lines(remoteOlder ? olderPrefix : "", "Would you like to restore data from remote storage?", c.deleted > 0 ? `Restore will delete ${c.deleted} local notes.` : "");
+function restoreQuestion(c: Counts, remoteOlder = false): Msg {
+  return lines(remoteOlder ? msg("sync.olderPrefix") : undefined, msg("sync.restoreQuestion"), restoreDeletes(c));
 }
 
 /** needsBackupQuestion: a Backup is confirmed only when it deletes notes on the server or overwrites newer data. */
@@ -56,23 +58,18 @@ function needsBackupQuestion(p: BackupPreview): boolean {
   return p.counts.deleted > 0 || p.remoteNewer;
 }
 
-function backupQuestion(p: BackupPreview): string {
+function backupQuestion(p: BackupPreview): Msg {
   return lines(
-    p.remoteNewer ? `${fresher} Backup will overwrite it.` : "",
-    "Would you like to save data on remote storage?",
-    p.counts.deleted > 0 ? `Backup will delete ${p.counts.deleted} notes on the server.` : "",
+    p.remoteNewer ? msg("sync.fresherBackup") : undefined,
+    msg("sync.backupQuestion"),
+    p.counts.deleted > 0 ? msg("sync.backupDeletes", { n: p.counts.deleted }) : undefined,
   );
 }
 
 /** errorText is the message shown for err; a changed server key shows both fingerprints. */
-function errorText(err: UIError): string {
-  if (err.code !== "host_key_mismatch") return err.message;
-  return lines(
-    "The server host key does not match the trusted one.",
-    `Expected: ${err.expected ?? ""}`,
-    `Got: ${err.got ?? ""}`,
-    "If the server key was changed on purpose, reset the trusted key in Settings.",
-  );
+function errorText(err: UIError): Msg {
+  if (err.code !== "host_key_mismatch") return messageOf(err);
+  return msg("sync.hostKeyMismatch", { expected: err.expected ?? "", got: err.got ?? "" });
 }
 
 /** report shows err unless the user needs no message: a cancellation, or a busy app whose buttons are already off. */
@@ -82,12 +79,8 @@ async function report(d: Dialogs, err: UIError): Promise<void> {
 }
 
 /** trustQuestion asks about a server key that is not trusted yet. */
-export function trustQuestion(err: UIError): string {
-  return lines(
-    `The authenticity of the server ${err.address ?? ""} cannot be established.`,
-    `Its host key fingerprint is ${err.fingerprint ?? ""}.`,
-    "Would you like to trust this key?",
-  );
+export function trustQuestion(err: UIError): Msg {
+  return msg("sync.trustQuestion", { address: err.address ?? "", fingerprint: err.fingerprint ?? "" });
 }
 
 /**
@@ -107,13 +100,13 @@ export async function connectFlow(api: SyncApi, d: Dialogs, hooks: ConnectHooks 
   }
 
   if (out.status === "remote_older") {
-    await d.warning(olderWarning);
+    await d.warning(msg("sync.olderWarning"));
     return;
   }
 
   if (out.status !== "remote_newer") return;
 
-  if (!(await d.ask(`${fresher} ${restoreQuestion(out.restore)}`)) || !(await (hooks.discardDraft ?? noDraft)())) {
+  if (!(await d.ask(lines(msg("sync.fresherRestore"), restoreDeletes(out.restore)))) || !(await (hooks.discardDraft ?? noDraft)())) {
     await api.cancelPending();
     return;
   }
@@ -150,7 +143,7 @@ export async function backupFlow(api: SyncApi, d: Dialogs): Promise<boolean> {
     return false;
   }
 
-  await d.info("Data successfully saved.");
+  await d.info(msg("sync.saved"));
   return true;
 }
 
@@ -182,7 +175,7 @@ async function commitRestore(api: SyncApi, d: Dialogs): Promise<boolean> {
     return false;
   }
 
-  await d.info("Data successfully restored.");
+  await d.info(msg("sync.restored"));
   return true;
 }
 
@@ -202,7 +195,7 @@ export async function closeFlow(api: SyncApi, d: Dialogs, quit: () => Promise<vo
     return;
   }
 
-  const save = await d.choose("Would you like to save your data changes to remote storage?");
+  const save = await d.choose(msg("sync.closeQuestion"));
   if (save === "cancel") return;
   if (save === "no") {
     await quit();
@@ -218,10 +211,10 @@ export async function closeFlow(api: SyncApi, d: Dialogs, quit: () => Promise<vo
     await api.commitBackup();
   } catch (e) {
     await d.error(errorText(parseError(e)));
-    if (await d.ask("Close anyway?")) await quit();
+    if (await d.ask(msg("sync.closeAnyway"))) await quit();
     return;
   }
 
-  await d.info("Data successfully synchronized.");
+  await d.info(msg("sync.synchronized"));
   await quit();
 }
