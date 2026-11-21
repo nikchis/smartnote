@@ -204,7 +204,7 @@ describe("Main", () => {
     expect(toggle().getAttribute("aria-label")).toBe("Язык: русский");
     expect([...target.querySelectorAll(".notes button")].map((b) => b.textContent?.trim())).toEqual(["Новая", "Удалить"]);
     expect(field().placeholder).toBe("Поиск по заметкам");
-    expect([...target.querySelectorAll("footer button")].map((b) => b.textContent?.trim())).toContain("Создать резервную копию");
+    expect([...target.querySelectorAll("footer button")].map((b) => b.textContent?.trim())).toContain("Резервная копия");
   });
 
   // Task 13: when Go cannot save the language it keeps the old one, so must the interface.
