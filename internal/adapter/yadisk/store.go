@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nikchis/smartnote/internal/adapter/blobremote"
+	"github.com/nikchis/smartnote/internal/adapter/cloudhttp"
 	"github.com/nikchis/smartnote/internal/applog"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/usecase"
@@ -164,7 +165,7 @@ func NewStoreFactory(e Endpoints, pending PendingStore, options ...FactoryOption
 func newStoreFactory(e Endpoints, pending PendingStore, opts StoreOptions) blobremote.StoreFactory {
 	return func(t usecase.RemoteTarget) (blobremote.ObjectStore, error) {
 		if t.Token == nil {
-			return nil, domain.ErrReauthRequired
+			return nil, domain.ReauthRequired(domain.KindYandexDisk)
 		}
 
 		if pending == nil {
@@ -236,7 +237,7 @@ func (s *Store) download(ctx context.Context, path string) (data []byte, sum str
 
 	var l link
 	if err := s.get(ctx, stepDownloadLink, downloadPath, url.Values{qPath: {path}}, &l); err != nil {
-		if isStatus(err, http.StatusNotFound) {
+		if cloudhttp.IsStatus(err, http.StatusNotFound) {
 			return nil, "", false, nil
 		}
 
@@ -259,7 +260,7 @@ func (s *Store) download(ctx context.Context, path string) (data []byte, sum str
 // false on 404.
 func (s *Store) meta(ctx context.Context, step, path, fields string) (r resource, found bool, err error) {
 	err = s.get(ctx, step, resourcesPath, url.Values{qPath: {path}, qFields: {fields}}, &r)
-	if isStatus(err, http.StatusNotFound) {
+	if cloudhttp.IsStatus(err, http.StatusNotFound) {
 		return resource{}, false, nil
 	}
 
@@ -333,9 +334,9 @@ func lostUpload(ctx context.Context, err error) bool {
 		return false
 	}
 
-	ce, ok := errors.AsType[CloudError](err)
+	ce, ok := errors.AsType[cloudhttp.CloudError](err)
 
-	return ok && ce.Code == codeNetwork && ce.Step == stepUpload
+	return ok && ce.Code == cloudhttp.CodeNetwork && ce.Step == stepUpload
 }
 
 // uploadTo gets an upload link of tmp and puts data to it.
@@ -365,7 +366,7 @@ func (s *Store) waitMD5(ctx context.Context, tmp, sum string) error {
 
 		if found && r.MD5 != "" {
 			if !strings.EqualFold(r.MD5, sum) {
-				return CloudError{Code: codeOther, Step: stepWaitMD5, err: errChecksum}
+				return otherError(0, stepWaitMD5, errChecksum)
 			}
 
 			return nil
@@ -430,7 +431,7 @@ func (s *Store) replace(ctx context.Context, tmpName, path, sum string, create b
 			s.clearPending(base)
 		}
 
-		if create && isStatus(err, http.StatusConflict) {
+		if create && cloudhttp.IsStatus(err, http.StatusConflict) {
 			return fmt.Errorf("move: %w", blobremote.ErrVersionMismatch)
 		}
 
@@ -477,7 +478,7 @@ func (s *Store) move(ctx context.Context, tmp, path string, create bool) (moveRe
 	case err != nil:
 		return moveUnknown, err
 	case !done:
-		return moveRejected, CloudError{Code: codeOther, Step: stepMove, err: errOperationFailed}
+		return moveRejected, otherError(0, stepMove, errOperationFailed)
 	}
 
 	return moveDone, nil
@@ -488,7 +489,7 @@ func (s *Store) move(ctx context.Context, tmp, path string, create bool) (moveRe
 // with a body that could not be read. Other answers and failures before
 // sending (token, 401) are known to change nothing.
 func mayBeApplied(err error) bool {
-	ce, ok := errors.AsType[CloudError](err)
+	ce, ok := errors.AsType[cloudhttp.CloudError](err)
 	accepted := ce.Status >= http.StatusOK && ce.Status < http.StatusMultipleChoices
 
 	return ok && (ce.Status == 0 || accepted || ce.Status >= http.StatusInternalServerError)
@@ -557,11 +558,11 @@ func (s *Store) fence(base context.Context, tmpName, path, sum string, cause err
 
 	// An end of the operation's context stays as it is, so that the interface
 	// shows the operation's timeout or cancellation.
-	_, isCloud := errors.AsType[CloudError](cause)
+	_, isCloud := errors.AsType[cloudhttp.CloudError](cause)
 	isCtx := errors.Is(cause, context.DeadlineExceeded) || errors.Is(cause, context.Canceled)
 
 	if !isCloud && !isCtx {
-		cause = withStep(networkError(cause), stepMove)
+		cause = cloudhttp.WithStep(networkError(cause), stepMove)
 	}
 
 	return fmt.Errorf("move: %w", cause)
@@ -647,14 +648,14 @@ func (s *Store) deleteTempAt(ctx context.Context, step, path string) error {
 		status, err := s.call(ctx, step, http.MethodDelete, u, &l)
 
 		switch {
-		case isStatus(err, http.StatusNotFound):
+		case cloudhttp.IsStatus(err, http.StatusNotFound):
 			return nil
 		case err != nil:
 			return err
 		case status == http.StatusAccepted:
 			done, err := s.waitOperation(ctx, step, l.Href)
 			if err == nil && !done {
-				err = CloudError{Code: codeOther, Step: step, err: errOperationFailed}
+				err = otherError(0, step, errOperationFailed)
 			}
 
 			return err
@@ -762,7 +763,7 @@ func (s *Store) get(ctx context.Context, step, path string, q url.Values, out an
 // (spec §14).
 func (s *Store) call(ctx context.Context, step, method string, u *url.URL, out any) (int, error) {
 	if s.reauth {
-		return 0, domain.ErrReauthRequired
+		return 0, domain.ReauthRequired(domain.KindYandexDisk)
 	}
 
 	tok, err := s.token(ctx)
@@ -772,7 +773,7 @@ func (s *Store) call(ctx context.Context, step, method string, u *url.URL, out a
 
 	status, err := s.api.send(ctx, step, method, u, tok.Access, out)
 	if status == http.StatusUnauthorized {
-		return 0, s.noteReauth(domain.ErrReauthRequired)
+		return 0, s.noteReauth(domain.ReauthRequired(domain.KindYandexDisk))
 	}
 
 	return status, err
@@ -796,7 +797,7 @@ func (s *Store) token(ctx context.Context) (usecase.CloudToken, error) {
 	}
 
 	if !t.Expiry.IsZero() && !s.now().Before(t.Expiry) {
-		return usecase.CloudToken{}, domain.ErrReauthRequired
+		return usecase.CloudToken{}, domain.ReauthRequired(domain.KindYandexDisk)
 	}
 
 	return t, nil
@@ -806,14 +807,14 @@ func (s *Store) token(ctx context.Context) (usecase.CloudToken, error) {
 // direction; nil when nobody receives the progress. A download whose body
 // is longer than its metadata says counts up to its own length; an upload
 // always has the length of its data as Total.
-func (s *Store) meter(direction string, total int64) *meter {
+func (s *Store) meter(direction string, total int64) *cloudhttp.Meter {
 	if s.progress == nil {
 		return nil
 	}
 
 	report := usecase.ThrottleProgress(s.progress, s.now)
 
-	return startMeter(func(done int64) {
+	return cloudhttp.StartMeter(func(done int64) {
 		if direction == usecase.DirectionDownload {
 			total = max(total, done)
 		}

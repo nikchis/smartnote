@@ -16,8 +16,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/nikchis/smartnote/internal/adapter/cloudhttp"
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
-	"github.com/nikchis/smartnote/internal/adapter/yadisk"
 	"github.com/nikchis/smartnote/internal/domain"
 )
 
@@ -211,15 +211,17 @@ func pgConnectError(t *testing.T) error {
 }
 
 func TestToUIErrorCloud(t *testing.T) {
+	tooLarge := cloudhttp.CloudError{Provider: domain.KindYandexDisk, Status: 413, Code: "other", Reason: cloudhttp.ReasonTooLarge}
+
 	tests := []struct {
 		name string
 		err  error
 		want string
 	}{
-		{"no space", yadisk.CloudError{Status: 507, Code: "other"}, "Not enough space on Yandex Disk."},
-		{"too large", fmt.Errorf("upload: %w", yadisk.CloudError{Status: 413, Code: "other"}), "The file is larger than your Yandex Disk plan allows."},
-		{"server error", yadisk.CloudError{Status: 503, Code: "DiskInternalError"}, "Yandex Disk error: 503 DiskInternalError."},
-		{"network", yadisk.CloudError{Code: "network"}, "Yandex Disk error: network."},
+		{"no space", cloudhttp.CloudError{Provider: domain.KindYandexDisk, Status: 507, Code: "other", Reason: cloudhttp.ReasonNoSpace}, "Not enough space on Yandex Disk."},
+		{"too large", fmt.Errorf("upload: %w", tooLarge), "The file is larger than your Yandex Disk plan allows."},
+		{"server error", cloudhttp.CloudError{Provider: domain.KindYandexDisk, Status: 503, Code: "DiskInternalError"}, "Yandex Disk error: 503 DiskInternalError."},
+		{"network", cloudhttp.CloudError{Provider: domain.KindYandexDisk, Code: "network"}, "Yandex Disk error: network."},
 	}
 
 	for _, tc := range tests {
@@ -251,7 +253,7 @@ func TestToUIErrorNewSentinels(t *testing.T) {
 		}
 	}
 
-	if ui := classify(errors.Join(context.DeadlineExceeded, yadisk.CloudError{Status: 503, Code: "x"})); ui.Code != codeTimeout {
+	if ui := classify(errors.Join(context.DeadlineExceeded, cloudhttp.CloudError{Provider: domain.KindYandexDisk, Status: 503, Code: "x"})); ui.Code != codeTimeout {
 		t.Errorf("deadline code = %q, want timeout", ui.Code)
 	}
 }
@@ -261,7 +263,7 @@ func TestLogErrorCloud(t *testing.T) {
 
 	log := slog.New(slog.NewTextHandler(&buf, nil))
 
-	LogError(log, "sync", fmt.Errorf("https://cloud-api.yandex.net/v1?token=SECRET: %w", yadisk.CloudError{Status: 503, Code: "DiskInternalError"}))
+	LogError(log, "sync", fmt.Errorf("https://cloud-api.yandex.net/v1?token=SECRET: %w", cloudhttp.CloudError{Provider: domain.KindYandexDisk, Status: 503, Code: "DiskInternalError"}))
 
 	got := buf.String()
 	for _, want := range []string{"status=503", "code=cloud", "DiskInternalError"} {
@@ -275,7 +277,7 @@ func TestLogErrorCloud(t *testing.T) {
 	}
 
 	buf.Reset()
-	LogError(log, "backup", fmt.Errorf("upload: %w", yadisk.CloudError{Code: "network", Step: "upload", Net: "reset"}))
+	LogError(log, "backup", fmt.Errorf("upload: %w", cloudhttp.CloudError{Provider: domain.KindYandexDisk, Code: "network", Step: "upload", Net: "reset"}))
 
 	got = buf.String()
 	for _, want := range []string{"code=cloud", "status=0", "cloud_code=network", "step=upload", "net=reset"} {
@@ -308,7 +310,7 @@ func TestLogErrorCloud(t *testing.T) {
 }
 
 func TestTransportTimeoutIsCloudError(t *testing.T) {
-	err := fmt.Errorf("upload: %w", yadisk.CloudError{Code: "network", Step: "upload", Net: "timeout"})
+	err := fmt.Errorf("upload: %w", cloudhttp.CloudError{Provider: domain.KindYandexDisk, Code: "network", Step: "upload", Net: "timeout"})
 
 	if ui := classify(err); ui.Code != codeCloud || ui.Message != "Yandex Disk error: network." {
 		t.Errorf("classify = %q %q, want cloud \"Yandex Disk error: network.\"", ui.Code, ui.Message)
@@ -322,5 +324,32 @@ func TestTransportTimeoutIsCloudError(t *testing.T) {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log %q lacks %q", buf.String(), want)
 		}
+	}
+}
+
+func TestReauthMessageFromErrorKind(t *testing.T) {
+	err := fmt.Errorf("sync: %w", domain.ReauthRequired(domain.KindYandexDisk))
+
+	ui := classify(err)
+	if ui.Code != codeReauthRequired || ui.Message != "Sign in to Yandex Disk again." {
+		t.Errorf("classify = %q %q, want reauth_required \"Sign in to Yandex Disk again.\"", ui.Code, ui.Message)
+	}
+
+	other := classify(domain.ReauthRequired(domain.StorageKind("google_drive")))
+	if other.Code != codeReauthRequired || other.Message != "Sign in to google_drive again." {
+		t.Errorf("other kind = %q %q", other.Code, other.Message)
+	}
+}
+
+func TestCloudMessageByReasonAndProvider(t *testing.T) {
+	ce := cloudhttp.NewAnswerError(domain.KindYandexDisk, 507, "x", cloudhttp.ReasonNoSpace)
+	if got := cloudMessage(ce); got != "Not enough space on Yandex Disk." {
+		t.Errorf("no space = %q", got)
+	}
+
+	// The reason, not the status, selects the text.
+	ce = cloudhttp.NewAnswerError(domain.KindYandexDisk, 507, "x", cloudhttp.ReasonNone)
+	if got := cloudMessage(ce); got != "Yandex Disk error: 507 x." {
+		t.Errorf("no reason = %q", got)
 	}
 }

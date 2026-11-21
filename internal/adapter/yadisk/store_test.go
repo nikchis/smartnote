@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nikchis/smartnote/internal/adapter/blobremote"
+	"github.com/nikchis/smartnote/internal/adapter/cloudhttp"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
@@ -172,13 +173,13 @@ func wantNoTemps(t *testing.T, d *fakeDisk) {
 	}
 }
 
-// cloudError returns the CloudError in err and fails the test without one.
-func cloudError(t *testing.T, err error) (ce CloudError) {
+// cloudError returns the cloudhttp.CloudError in err and fails the test without one.
+func cloudError(t *testing.T, err error) (ce cloudhttp.CloudError) {
 	t.Helper()
 
-	ce, ok := errors.AsType[CloudError](err)
+	ce, ok := errors.AsType[cloudhttp.CloudError](err)
 	if !ok {
-		t.Fatalf("err = %v, want CloudError", err)
+		t.Fatalf("err = %v, want cloudhttp.CloudError", err)
 	}
 
 	return ce
@@ -564,7 +565,7 @@ func TestLostUpload(t *testing.T) {
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	network := CloudError{Code: codeNetwork, Step: stepUpload}
+	network := cloudhttp.CloudError{Code: cloudhttp.CodeNetwork, Step: stepUpload}
 
 	tests := []struct {
 		name string
@@ -575,8 +576,8 @@ func TestLostUpload(t *testing.T) {
 		{name: "no error", ctx: t.Context(), err: nil},
 		{name: "network at upload", ctx: t.Context(), err: fmt.Errorf("upload: %w", network), want: true},
 		{name: "operation over", ctx: canceled, err: network},
-		{name: "network at upload link", ctx: t.Context(), err: CloudError{Code: codeNetwork, Step: stepUploadLink}},
-		{name: "answer of the node", ctx: t.Context(), err: CloudError{Status: http.StatusInsufficientStorage, Code: codeOther, Step: stepUpload}},
+		{name: "network at upload link", ctx: t.Context(), err: cloudhttp.CloudError{Code: cloudhttp.CodeNetwork, Step: stepUploadLink}},
+		{name: "answer of the node", ctx: t.Context(), err: cloudhttp.CloudError{Status: http.StatusInsufficientStorage, Code: codeOther, Step: stepUpload}},
 		{name: "context error", ctx: t.Context(), err: context.DeadlineExceeded},
 	}
 
@@ -595,7 +596,7 @@ func TestUploadNotRetriedTwice(t *testing.T) {
 	h.disk.set(func(d *fakeDisk) { d.dropPuts = 2 })
 
 	err := h.store().Write(t.Context(), container, []byte("new"), old)
-	if ce := cloudError(t, err); ce.Code != codeNetwork || ce.Step != stepUpload {
+	if ce := cloudError(t, err); ce.Code != cloudhttp.CodeNetwork || ce.Step != stepUpload {
 		t.Errorf("error = %+v, want a network error of step upload", ce)
 	}
 
@@ -700,7 +701,7 @@ func TestMoveServerErrorIsFenced(t *testing.T) {
 
 	err := h.store().Write(t.Context(), container, []byte("new"), old)
 	if ce := cloudError(t, err); ce.Status != http.StatusGatewayTimeout {
-		t.Errorf("CloudError = %+v, want the move's 504", ce)
+		t.Errorf("cloudhttp.CloudError = %+v, want the move's 504", ce)
 	}
 
 	if !slices.Contains(h.disk.eventLog(), "save "+tempName(1)) {
@@ -739,8 +740,8 @@ func TestFencePollLostNotApplied(t *testing.T) {
 	h.disk.set(func(d *fakeDisk) { d.deferMove, d.dropPollAfter = true, 1 })
 
 	err := h.store().Write(t.Context(), container, []byte("new"), old)
-	if ce := cloudError(t, err); ce.Code != codeNetwork {
-		t.Errorf("CloudError = %+v, want the lost poll's network error", ce)
+	if ce := cloudError(t, err); ce.Code != cloudhttp.CodeNetwork {
+		t.Errorf("cloudhttp.CloudError = %+v, want the lost poll's network error", ce)
 	}
 
 	if errors.Is(err, blobremote.ErrOutcomeUnknown) {
@@ -1120,7 +1121,7 @@ func TestAPIRedirectNotFollowed(t *testing.T) {
 
 	err := readErr(t, h.store())
 	if ce := cloudError(t, err); ce.Status != http.StatusFound {
-		t.Errorf("CloudError = %+v, want the 302", ce)
+		t.Errorf("cloudhttp.CloudError = %+v, want the 302", ce)
 	}
 
 	if n := h.disk.count("href", http.MethodGet, "/probe"); n != 0 {
@@ -1364,7 +1365,7 @@ func TestErrorsMapped(t *testing.T) {
 
 			ce := cloudError(t, err)
 			if ce.Status != tc.status || ce.Code != tc.code {
-				t.Errorf("CloudError = %d %s, want %d %s", ce.Status, ce.Code, tc.status, tc.code)
+				t.Errorf("cloudhttp.CloudError = %d %s, want %d %s", ce.Status, ce.Code, tc.status, tc.code)
 			}
 
 			wantSafeText(t, h.disk, err)
@@ -1389,8 +1390,8 @@ func TestNetworkError(t *testing.T) {
 	h.disk.api.Close()
 
 	err := readErr(t, h.store())
-	if ce := cloudError(t, err); ce.Status != 0 || ce.Code != codeNetwork || ce.Step != "stat" || ce.Net != "refused" {
-		t.Errorf("CloudError = %+v, want 0 network at stat, refused", ce)
+	if ce := cloudError(t, err); ce.Status != 0 || ce.Code != cloudhttp.CodeNetwork || ce.Step != "stat" || ce.Net != "refused" {
+		t.Errorf("cloudhttp.CloudError = %+v, want 0 network at stat, refused", ce)
 	}
 
 	cause := errors.Unwrap(cloudError(t, err))
@@ -1641,7 +1642,7 @@ func TestErrorSteps(t *testing.T) {
 			}
 
 			if ce := cloudError(t, err); ce.Step != tc.step || ce.Net != "" {
-				t.Errorf("CloudError = %+v, want step %s without net", ce, tc.step)
+				t.Errorf("cloudhttp.CloudError = %+v, want step %s without net", ce, tc.step)
 			}
 		})
 	}

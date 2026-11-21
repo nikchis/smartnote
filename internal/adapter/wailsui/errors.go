@@ -9,8 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/nikchis/smartnote/internal/adapter/cloudhttp"
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
-	"github.com/nikchis/smartnote/internal/adapter/yadisk"
 	"github.com/nikchis/smartnote/internal/applog"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/usecase"
@@ -81,8 +81,6 @@ const (
 	msgBusy                  = "Another operation with the remote storage is in progress."
 	msgTimeout               = "The operation timed out."
 	msgCanceled              = "The operation was canceled."
-	msgNoSpace               = "Not enough space on Yandex Disk."
-	msgFileTooLarge          = "The file is larger than your Yandex Disk plan allows."
 	msgLoopbackUnavailable   = "The local sign-in address is unavailable. Enter the code manually."
 	msgSignInFirst           = "Sign in to Yandex Disk first, or choose None (local only)."
 )
@@ -150,8 +148,12 @@ func classify(err error) *UIError {
 		return &UIError{Code: codeHostKeyMismatch, Message: hk.Error(), Expected: hk.Expected, Got: hk.Got}
 	}
 
-	if ce, ok := errors.AsType[yadisk.CloudError](err); ok {
+	if ce, ok := errors.AsType[cloudhttp.CloudError](err); ok {
 		return &UIError{Code: codeCloud, Message: cloudMessage(ce)}
+	}
+
+	if re, ok := errors.AsType[*domain.ReauthRequiredError](err); ok {
+		return &UIError{Code: codeReauthRequired, Message: "Sign in to " + storageName(re.Kind) + " again."}
 	}
 
 	for _, s := range sentinels {
@@ -180,18 +182,30 @@ func validationError(ve *domain.ValidationError) *UIError {
 	return &UIError{Code: codeValidation, Message: ve.Error(), Field: ve.Field}
 }
 
-// cloudMessage is the text of a Yandex Disk error: the two statuses with a
-// known cause, otherwise the status, if any, and the code from the closed list.
-func cloudMessage(ce yadisk.CloudError) string {
-	switch ce.Status {
-	case 507:
-		return msgNoSpace
-	case 413:
-		return msgFileTooLarge
-	case 0:
-		return "Yandex Disk error: " + ce.Code + "."
+// storageName is the name of the cloud in the texts for the user; the kind
+// itself for a cloud without a name here.
+func storageName(k domain.StorageKind) string {
+	if k == domain.KindYandexDisk {
+		return "Yandex Disk"
+	}
+
+	return string(k)
+}
+
+// cloudMessage is the text of a cloud error: the known reasons, otherwise the
+// status, if any, and the code from the closed list of the provider.
+func cloudMessage(ce cloudhttp.CloudError) string {
+	name := storageName(ce.Provider)
+
+	switch {
+	case ce.Reason == cloudhttp.ReasonNoSpace:
+		return "Not enough space on " + name + "."
+	case ce.Reason == cloudhttp.ReasonTooLarge:
+		return "The file is larger than your " + name + " plan allows."
+	case ce.Status == 0:
+		return name + " error: " + ce.Code + "."
 	default:
-		return "Yandex Disk error: " + strconv.Itoa(ce.Status) + " " + ce.Code + "."
+		return name + " error: " + strconv.Itoa(ce.Status) + " " + ce.Code + "."
 	}
 }
 
@@ -229,17 +243,17 @@ func LogError(log *slog.Logger, msg string, err error) {
 	case codeSSH, codeDatabase, codeTimeout:
 		log.Error(msg, "code", ui.Code, applog.Redacted(err))
 	case codeCloud:
-		ce, _ := errors.AsType[yadisk.CloudError](err)
+		ce, _ := errors.AsType[cloudhttp.CloudError](err)
 		log.Error(msg, cloudAttrs(ui.Code, ce)...)
 	case codeReauthRequired, codeRemoteOutcomeUnknown, codeRemoteDamaged:
 		log.Error(msg, "code", ui.Code)
 	}
 }
 
-// cloudAttrs are the log attributes of a Yandex Disk error; the step and the
+// cloudAttrs are the log attributes of a cloud error; the step and the
 // network class only when the error has them.
-func cloudAttrs(code string, ce yadisk.CloudError) []any {
-	attrs := []any{"code", code, "status", ce.Status, "cloud_code", ce.Code}
+func cloudAttrs(code string, ce cloudhttp.CloudError) []any {
+	attrs := []any{"code", code, "provider", string(ce.Provider), "status", ce.Status, "cloud_code", ce.Code}
 	if ce.Step != "" {
 		attrs = append(attrs, "step", ce.Step)
 	}

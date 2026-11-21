@@ -63,3 +63,19 @@ type HostKeyMismatchError struct {
 func (e *HostKeyMismatchError) Error() string {
 	return fmt.Sprintf("server host key mismatch: expected %s, got %s", e.Expected, e.Got)
 }
+
+// ReauthRequiredError asks for a new sign-in to the cloud of Kind. It matches
+// ErrReauthRequired; the source that knows the provider creates it.
+type ReauthRequiredError struct {
+	Kind StorageKind
+}
+
+func (e *ReauthRequiredError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Kind, ErrReauthRequired.Error())
+}
+
+// Is reports whether target is ErrReauthRequired.
+func (e *ReauthRequiredError) Is(target error) bool { return target == ErrReauthRequired }
+
+// ReauthRequired returns the error that asks for a new sign-in to k.
+func ReauthRequired(k StorageKind) error { return &ReauthRequiredError{Kind: k} }

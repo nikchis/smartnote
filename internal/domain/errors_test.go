@@ -61,3 +61,23 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 		}
 	}
 }
+
+func TestReauthRequiredIsSentinel(t *testing.T) {
+	err := fmt.Errorf("sync: %w", ReauthRequired(KindYandexDisk))
+	if !errors.Is(err, ErrReauthRequired) {
+		t.Error("errors.Is(err, ErrReauthRequired) = false")
+	}
+
+	if errors.Is(err, ErrBusy) {
+		t.Error("errors.Is(err, ErrBusy) = true")
+	}
+
+	var re *ReauthRequiredError
+	if !errors.As(err, &re) || re.Kind != KindYandexDisk {
+		t.Fatalf("errors.As = %+v, want Kind yandex_disk", re)
+	}
+
+	if re.Error() == "" {
+		t.Error("empty Error()")
+	}
+}

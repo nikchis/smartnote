@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nikchis/smartnote/internal/adapter/cloudhttp"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
@@ -423,7 +424,7 @@ func callbackOf(q url.Values) (callback, bool) {
 	case name == errorAccessDenied:
 		return callback{err: context.Canceled}, true
 	case name != "":
-		return callback{err: fmt.Errorf("sign-in refused: %w", CloudError{Code: knownCode(name)})}, true
+		return callback{err: fmt.Errorf("sign-in refused: %w", cloudhttp.NewAnswerError(domain.KindYandexDisk, 0, knownCode(name), cloudhttp.ReasonNone))}, true
 	case q.Get(paramCode) != "":
 		return callback{code: q.Get(paramCode)}, true
 	}

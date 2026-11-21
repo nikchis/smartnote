@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nikchis/smartnote/internal/adapter/cloudhttp"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
@@ -759,7 +760,7 @@ func TestCloseDuringExchange(t *testing.T) {
 		t.Fatalf("Wait = %s, %v; want context.Canceled", describeToken(r.tok), r.err)
 	}
 
-	if _, ok := errors.AsType[CloudError](r.err); ok {
+	if _, ok := errors.AsType[cloudhttp.CloudError](r.err); ok {
 		t.Errorf("a cancelled exchange reads as a Disk error: %v", r.err)
 	}
 }
