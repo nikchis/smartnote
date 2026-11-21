@@ -24,6 +24,9 @@ import (
 // it is proven that its session cannot commit any more (spec §5.4, §7.2).
 // The record is opaque bytes; local.db implements the store and seals them
 // with the DEK, because the session URI alone lets anyone finish the upload.
+// One record per provider is saved and removed without a condition: that
+// relies on usecase.Gate, which runs one cloud operation at a time in the
+// app, so no two uploads of a device overlap.
 type UploadStore interface {
 	LoadCloudUpload(ctx context.Context, p domain.StorageKind) (data []byte, found bool, err error)
 	SaveCloudUpload(ctx context.Context, p domain.StorageKind, data []byte) error
@@ -81,8 +84,9 @@ func (refusedError) Error() string { return "final upload request refused" }
 // upload writes data with one resumable session (spec §5.4) and returns the
 // committed file: its md5Checksum is the MD5 of data, so it is our commit.
 // The record of the session is saved before the final PUT and removed once
-// the session cannot commit any more. The final PUT is never repeated on
-// its URI.
+// the session cannot commit any more (unconditionally: usecase.Gate keeps
+// one operation at a time, see UploadStore). The final PUT is never
+// repeated on its URI.
 func (s *Store) upload(ctx context.Context, t uploadTarget, data []byte) (driveFile, error) {
 	sess, err := s.openSession(ctx, t, int64(len(data)))
 	if err != nil {

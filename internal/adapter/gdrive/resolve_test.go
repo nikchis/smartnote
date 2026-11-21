@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nikchis/smartnote/internal/adapter/blobremote"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
@@ -38,8 +39,8 @@ func TestStoreResolvesUploadAfterRestart(t *testing.T) {
 	d.set(func(d *fakeDrive) { d.statusAnswers = []int{503, 503, 503} })
 
 	err := writeErr(t, uploadStore(t, d, up), []byte("mine"), "")
-	if err == nil {
-		t.Fatal("Write succeeded without an answer and a status")
+	if !errors.Is(err, blobremote.ErrOutcomeUnknown) {
+		t.Fatalf("Write: err = %v, want ErrOutcomeUnknown", err)
 	}
 
 	wantRecord(t, up, 4)

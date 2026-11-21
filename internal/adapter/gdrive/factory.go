@@ -39,7 +39,7 @@ func NewStoreFactory(e Endpoints, uploads UploadStore, auth Refresher, builtin u
 		}
 
 		if uploads == nil {
-			return nil, errNoUploadStore
+			return nil, usecase.LocalError{Err: errNoUploadStore}
 		}
 
 		// Without a client the store resolves an unfinished upload, which

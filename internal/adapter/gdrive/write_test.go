@@ -569,3 +569,33 @@ func TestRecordWriteFailureCancelsSession(t *testing.T) {
 		t.Errorf("container files = %q, want none", got)
 	}
 }
+
+// TestCreateEmptyListAfterCreateIsUnknown: a list without any file right
+// after our own creation is an anomaly, not a lost race: the own file is
+// not deleted and the outcome is unknown.
+func TestCreateEmptyListAfterCreateIsUnknown(t *testing.T) {
+	d := newFakeDrive(t)
+	up := &memUploads{}
+
+	d.set(func(d *fakeDrive) {
+		d.onPut = func(d *fakeDrive, _ *fakeSession) putAnswer {
+			d.hideFromList = true // the next lists miss the new file
+			return putAnswer{}
+		}
+	})
+
+	err := writeErr(t, uploadStore(t, d, up), []byte("mine"), "")
+	if !errors.Is(err, blobremote.ErrOutcomeUnknown) {
+		t.Fatalf("Write: err = %v, want ErrOutcomeUnknown", err)
+	}
+
+	wantNoRecord(t, up)
+
+	if n := len(deletedFiles(d)); n != 0 {
+		t.Errorf("deleted files = %d, want 0", n)
+	}
+
+	if got := d.containerData(); len(got) != 1 || got[0] != "mine" {
+		t.Errorf("container files = %q, want the created one", got)
+	}
+}

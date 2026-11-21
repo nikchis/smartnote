@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/nikchis/smartnote/internal/adapter/blobremote"
 	"github.com/nikchis/smartnote/internal/domain"
@@ -384,19 +383,24 @@ func TestWriteReportsUploadProgress(t *testing.T) {
 
 // TestPutTimeoutStillResolves: the operation's time runs out during the
 // final PUT; the resolution gets its own deadline, cancels the incomplete
-// session and the operation's timeout is returned.
+// session and the operation's timeout is returned. The PUT is held until
+// the operation's context is done and then dropped uncommitted, so no
+// timing decides the test.
 func TestPutTimeoutStillResolves(t *testing.T) {
 	d := newFakeDrive(t)
 	up := &memUploads{}
 
-	d.set(func(d *fakeDrive) { d.beforePut = func() { time.Sleep(300 * time.Millisecond) } })
-
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
+	d.set(func(d *fakeDrive) {
+		d.beforePut = cancel // the operation ends while the PUT is on the way
+		d.onPut = func(*fakeDrive, *fakeSession) putAnswer { return putAnswer{reject: true, drop: true} }
+	})
+
 	err := uploadStore(t, d, up).Write(ctx, container, []byte("mine"), "")
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Write: err = %v, want the operation's deadline", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Write: err = %v, want the end of the operation's context", err)
 	}
 
 	wantNoRecord(t, up)

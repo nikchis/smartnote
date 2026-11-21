@@ -81,7 +81,14 @@ func (s *Store) create(ctx context.Context, name string, data []byte) error {
 		return fmt.Errorf("list the created container: %w", blobremote.ErrOutcomeUnknown)
 	}
 
-	if len(files) == 0 || files[0].ID != own.ID {
+	if len(files) == 0 {
+		// Not even our own file is listed: an anomaly, not a lost race, so
+		// the file stays; the next Connect compares the sets.
+		s.log.Error("google drive: created container missing in the list")
+		return fmt.Errorf("list the created container: %w", blobremote.ErrOutcomeUnknown)
+	}
+
+	if files[0].ID != own.ID {
 		// Its duplicate, if not deleted now, goes with a later write.
 		if err := s.deleteFile(ctx, own.ID); err != nil {
 			s.log.Error("google drive: own duplicate of the container not deleted", applog.Err(err))

@@ -85,3 +85,14 @@ func TestFactoryRefreshesWithEffectiveClient(t *testing.T) {
 		})
 	}
 }
+
+// TestFactoryWithoutUploadStoreIsLocal: a store without the upload record
+// store is a local error, as settle reports it.
+func TestFactoryWithoutUploadStoreIsLocal(t *testing.T) {
+	d := newFakeDrive(t)
+
+	_, err := NewStoreFactory(d.endpoints(), nil, testRefresher(t, d), fakeClient, withEmulator(d))(googleTarget(testTokens()))
+	if _, ok := errors.AsType[usecase.LocalError](err); !ok {
+		t.Errorf("factory: err = %v, want usecase.LocalError", err)
+	}
+}
