@@ -238,7 +238,7 @@ var reasonRules = compileReasons(
 	i18n.InvalidMaxChars, i18n.InvalidNameTaken, i18n.InvalidConfirm, i18n.InvalidUUID, i18n.InvalidKind,
 	i18n.InvalidNotCloud, i18n.InvalidYandexClientID, i18n.InvalidGoogleClientID, i18n.InvalidClientSecret,
 	i18n.InvalidDBHost, i18n.InvalidPort, i18n.InvalidNotOffered, i18n.InvalidOfferedOther, i18n.InvalidOwnClient,
-	i18n.InvalidKeyTooLarge, i18n.InvalidKeyDSA, i18n.InvalidKeyRSA, i18n.InvalidLanguage,
+	i18n.InvalidNoBuiltin, i18n.InvalidKeyTooLarge, i18n.InvalidKeyDSA, i18n.InvalidKeyRSA, i18n.InvalidLanguage,
 )
 
 // reasonRule matches the reason of one key; params name its groups.

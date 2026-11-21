@@ -48,8 +48,11 @@ needs no new sign-in, and **Sign out** in one of them leaves the other as it is.
 
 ## Your own client
 
-The package carries the client ID and the client secret of the author's Desktop OAuth client in
-Google Cloud, so normally you only press **Sign in with Google**. If you want the access to go
+The release packages carry the client ID and the client secret of the author's Desktop OAuth client
+in Google Cloud, so normally you only press **Sign in with Google**. A build from source has this
+client only with the values from the owner of the project
+([Building from source](building.md#built-in-google-client)); without them **Sign in with Google**
+asks for your own client. If you want the access to go
 through your own client, create one. The names below are those of the English Google Cloud console
 as of November 2026; Google may rename them.
 

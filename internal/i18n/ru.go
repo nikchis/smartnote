@@ -92,6 +92,7 @@ var ru = map[Key]string{ //nolint:gosec // catalog texts, not credentials
 	InvalidNotOffered:     "Сервер не предлагал этот ключ.",
 	InvalidOfferedOther:   "Этот ключ предложил другой сервер.",
 	InvalidOwnClient:      "Укажите свой client ID в разделе «Дополнительно».",
+	InvalidNoBuiltin:      "В этой сборке нет встроенного клиента Google. Укажите свои client ID и client secret в разделе «Дополнительно».",
 	InvalidKeyTooLarge:    "Файл слишком велик для закрытого ключа.",
 	InvalidKeyDSA:         "Ключи DSA больше не считаются надёжными; используйте Ed25519 или RSA длиной не меньше 2048 бит.",
 	InvalidKeyRSA:         "Ключ RSA слишком короткий ({bits} бит); нужно не меньше {min} бит.",

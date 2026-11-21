@@ -61,7 +61,9 @@ search by meaning in [Search](search.md#semantic-search).
   client of the same Google Cloud project while another device removes copies, the current file may
   be lost. The Google Drive interface cannot delete a single file there.
 - Google Drive: the built-in client may be revoked by Google; then the sign-in works only with your
-  own client (see [Your own client](google-drive.md#your-own-client)).
+  own client (see [Your own client](google-drive.md#your-own-client)). A build from source without
+  the values of the built-in client ([Building from source](building.md#built-in-google-client))
+  works with Google Drive only through your own client too.
 - Language of the interface: the technical texts of SSH and PostgreSQL errors come from the
   libraries and stay in English. A file dialog or a browser page after a sign-in that is already
   open keeps the language it was shown in.

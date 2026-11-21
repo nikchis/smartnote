@@ -632,28 +632,22 @@ func (c *Connection) refreshPending(t CloudToken, gen uint64) {
 // returns the effective client. Settings of another kind are a
 // ValidationError for "kind".
 func (c *Connection) client(s domain.ConnectionSettings) (CloudClient, error) {
-	var field string
-
 	switch s.Kind() {
 	case domain.KindYandexDisk:
 		if err := domain.ValidateYandexClientID(s.YandexClientID); err != nil {
 			return CloudClient{}, err
 		}
-
-		field = "yandex_client_id"
 	case domain.KindGoogleDrive:
 		if err := domain.ValidateGoogleClient(s.GoogleClientID, s.GoogleClientSecret); err != nil {
 			return CloudClient{}, err
 		}
-
-		field = "google_client_id"
 	default:
 		return CloudClient{}, &domain.ValidationError{Field: "kind", Reason: "is not a cloud storage"}
 	}
 
 	cl, ok := EffectiveClient(s, c.builtin)
 	if !ok {
-		return CloudClient{}, &domain.ValidationError{Field: field, Reason: "set your own client ID in Advanced"}
+		return CloudClient{}, errNoClient(s.Kind())
 	}
 
 	return cl, nil

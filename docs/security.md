@@ -69,8 +69,10 @@ encrypted in the same way, in the same container.
   accepts without the token: Smartnote asks for the status of the session and cancels it if the
   upload is not complete; it never resumes it. Smartnote keeps that address encrypted in `local.db` until the
   result of the upload is known and never writes it to the log.
-- The package holds the client ID and the client secret of the author's Desktop OAuth client. Google
-  requires the secret both for exchanging the sign-in code and for renewing the access, even with
+- The release packages hold the client ID and the client secret of the author's Desktop OAuth
+  client. The release build takes them from the secrets of CI, not from the source repository
+  ([Building from source](building.md#built-in-google-client)); in the package they are still
+  public. Google requires the secret both for exchanging the sign-in code and for renewing the access, even with
   PKCE, and does not treat the secret of an installed application as confidential. Anyone can take
   it from the package and present another program as Smartnote with this client; that gives no
   access to anyone's data, because only you sign in to your account and allow the access. If Google

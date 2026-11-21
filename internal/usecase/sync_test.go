@@ -1558,3 +1558,66 @@ func TestDisconnectsNewErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestSyncGoogleWithoutBuiltinClient: without the built-in Google client and
+// without an own one Connect stays offline, while Backup and Restore refuse
+// with the ValidationError of Sign in instead of asking to sign in again.
+func TestSyncGoogleWithoutBuiltinClient(t *testing.T) {
+	google := domain.ConnectionSettings{StorageKind: domain.KindGoogleDrive}
+
+	newFixture := func(t *testing.T) (*syncFixture, *fakeServer) {
+		t.Helper()
+
+		srv := &fakeServer{serverID: serverA}
+		f := newSyncFixture(t, LocalSnapshot{}, srv)
+		f.sync.d.Settings = &fakeSettings{s: google}
+		f.sync.d.Tokens = tokensOf()
+		f.sync.d.Builtin = map[domain.StorageKind]CloudClient{domain.KindYandexDisk: {ID: "y-builtin"}}
+
+		return f, srv
+	}
+
+	assertNoBuiltin := func(t *testing.T, err error) {
+		t.Helper()
+
+		ve, ok := errors.AsType[*domain.ValidationError](err)
+		if !ok || ve.Field != "google_client_id" || ve.Reason != noBuiltinGoogleReason {
+			t.Errorf("err = %v, want a ValidationError for google_client_id: %s", err, noBuiltinGoogleReason)
+		}
+	}
+
+	t.Run("connect", func(t *testing.T) {
+		f, srv := newFixture(t)
+
+		out, err := f.sync.Connect(context.Background())
+		if err != nil || out.Status != StatusOffline {
+			t.Errorf("Connect = %+v, %v; want offline", out, err)
+		}
+
+		if len(srv.targets) != 0 {
+			t.Errorf("Open called %d times without a client", len(srv.targets))
+		}
+	})
+
+	t.Run("backup", func(t *testing.T) {
+		f, srv := newFixture(t)
+
+		_, err := f.sync.PrepareBackup(context.Background())
+		assertNoBuiltin(t, err)
+
+		if len(srv.targets) != 0 {
+			t.Errorf("Open called %d times without a client", len(srv.targets))
+		}
+	})
+
+	t.Run("restore", func(t *testing.T) {
+		f, srv := newFixture(t)
+
+		_, err := f.sync.PrepareRestore(context.Background())
+		assertNoBuiltin(t, err)
+
+		if len(srv.targets) != 0 {
+			t.Errorf("Open called %d times without a client", len(srv.targets))
+		}
+	})
+}

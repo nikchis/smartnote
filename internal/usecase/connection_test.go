@@ -1710,3 +1710,48 @@ func TestSaveKeepsPendingTokenOfOtherProvider(t *testing.T) {
 		})
 	}
 }
+
+// TestGoogleWithoutBuiltinClient: a build without the built-in Google client
+// (spec §1, ред. 8) refuses Sign in, Test and Save for Google settings
+// without an own client with a ValidationError for google_client_id that
+// tells the user to set an own client; an own client still works.
+func TestGoogleWithoutBuiltinClient(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+
+	d := f.deps()
+	d.Builtin = nil
+
+	c, err := NewConnection(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertNoBuiltin := func(t *testing.T, err error) {
+		t.Helper()
+
+		ve, ok := errors.AsType[*domain.ValidationError](err)
+		if !ok || ve.Field != "google_client_id" || ve.Reason != noBuiltinGoogleReason {
+			t.Errorf("err = %v, want a ValidationError for google_client_id: %s", err, noBuiltinGoogleReason)
+		}
+	}
+
+	_, err = c.SignIn(context.Background(), googleSettings("", ""))
+	assertNoBuiltin(t, err)
+
+	_, err = c.Test(context.Background(), googleSettings("", ""))
+	assertNoBuiltin(t, err)
+
+	assertNoBuiltin(t, c.Save(context.Background(), googleSettings("", "")))
+
+	if calls := f.auth.beginCalls(); len(calls) != 0 {
+		t.Errorf("Begin calls = %+v, want none", calls)
+	}
+
+	f.c = c
+	f.signIn(t, googleSettings(ownGoogleID, "own-secret"), issued)
+
+	want := CloudClient{Provider: domain.KindGoogleDrive, ID: ownGoogleID, Secret: "own-secret"}
+	if calls := f.auth.beginCalls(); len(calls) != 1 || calls[0].client != want {
+		t.Errorf("Begin calls = %+v, want one for the own Google client", calls)
+	}
+}

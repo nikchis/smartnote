@@ -103,6 +103,7 @@ const (
 	InvalidNotOffered     Key = "invalid.not_offered"
 	InvalidOfferedOther   Key = "invalid.offered_elsewhere"
 	InvalidOwnClient      Key = "invalid.own_client"
+	InvalidNoBuiltin      Key = "invalid.no_builtin_google"
 	InvalidKeyTooLarge    Key = "invalid.key_too_large"
 	InvalidKeyDSA         Key = "invalid.key_dsa"
 	InvalidKeyRSA         Key = "invalid.key_rsa" // {bits}, {min}
@@ -193,6 +194,7 @@ var en = map[Key]string{ //nolint:gosec // catalog texts, not credentials
 	InvalidNotOffered:     "invalid {field}: was not offered by the server",
 	InvalidOfferedOther:   "invalid {field}: was offered by another server",
 	InvalidOwnClient:      "invalid {field}: set your own client ID in Advanced",
+	InvalidNoBuiltin:      "invalid {field}: this build has no built-in Google client: set your own client ID and secret in Advanced",
 	InvalidKeyTooLarge:    "invalid {field}: is too large for a private key",
 	InvalidKeyDSA:         "invalid {field}: is a DSA key, which is no longer secure; use Ed25519 or RSA of at least 2048 bits",
 	InvalidKeyRSA:         "invalid {field}: is an RSA key of {bits} bits; at least {min} are needed",

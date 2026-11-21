@@ -108,6 +108,21 @@ type CloudLogin interface {
 	Close() error
 }
 
+// noBuiltinGoogleReason refuses Google settings without an own client in a
+// build without the built-in Google client (spec §1, ред. 8).
+const noBuiltinGoogleReason = "this build has no built-in Google client: set your own client ID and secret in Advanced"
+
+// errNoClient refuses cloud settings of kind without an effective client:
+// the user sets an own client in Advanced. For Google this is a build
+// without the built-in client.
+func errNoClient(kind domain.StorageKind) error {
+	if kind == domain.KindGoogleDrive {
+		return &domain.ValidationError{Field: "google_client_id", Reason: noBuiltinGoogleReason}
+	}
+
+	return &domain.ValidationError{Field: "yandex_client_id", Reason: "set your own client ID in Advanced"}
+}
+
 // EffectiveClient returns the OAuth client of the kind of s: the own one of
 // s, or else the built-in one of builtin. It is false for a kind that is not
 // a cloud, without either client, and for an own Google client ID without

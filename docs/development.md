@@ -43,9 +43,12 @@ packages in [Packaging](packaging.md).
 - The clouds share `internal/adapter/cloudhttp` (transport, errors, progress) and
   `internal/adapter/cloudauth` (OAuth with PKCE, the loopback receiver, the browser pages); the
   providers are `yadisk` and `gdrive`, which do not import each other. `internal/archtest` checks
-  the directions of the imports. The built-in clients are in `internal/adapter/yadisk/clientid.go`
-  and `internal/adapter/gdrive/clientid.go`; the Google client secret goes only to the token
-  endpoint of Google and never into the log or a DTO.
+  the directions of the imports. The built-in Yandex client is in `internal/adapter/yadisk/clientid.go`.
+  The built-in Google client is not in the repository: `internal/adapter/gdrive/clientid.go` has
+  empty variables that the build sets with `-ldflags -X`
+  ([Building from source](building.md#built-in-google-client)); `cmd/smartnote` adds the Google
+  client only when both are set. Its secret goes only to the token endpoint of Google and never
+  into the log or a DTO.
 - The **How to register** links of Settings open `docs/yandex-disk.md` and `docs/google-drive.md` on
   `master` (`frontend/src/lib/external.ts`): keep these paths and the sections about your own
   client in them.

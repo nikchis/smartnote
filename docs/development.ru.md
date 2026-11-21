@@ -43,9 +43,12 @@
 - Облака используют общие `internal/adapter/cloudhttp` (транспорт, ошибки, прогресс) и
   `internal/adapter/cloudauth` (OAuth с PKCE, приёмник на loopback, страницы браузера); провайдеры -
   `yadisk` и `gdrive`, они не импортируют друг друга. Направления импортов проверяет
-  `internal/archtest`. Встроенные клиенты - в `internal/adapter/yadisk/clientid.go` и
-  `internal/adapter/gdrive/clientid.go`; client secret Google уходит только на адрес обмена токенов
-  Google и никогда не попадает в журнал и DTO.
+  `internal/archtest`. Встроенный клиент Яндекса - в `internal/adapter/yadisk/clientid.go`.
+  Встроенного клиента Google в репозитории нет: в `internal/adapter/gdrive/clientid.go` пустые
+  переменные, которые сборка задаёт через `-ldflags -X`
+  ([Сборка из исходников](building.ru.md#встроенный-клиент-google)); `cmd/smartnote` добавляет
+  клиент Google, только если заданы обе. Его secret уходит только на адрес обмена токенов Google и
+  никогда не попадает в журнал и DTO.
 - Ссылки **Как зарегистрировать** (**How to register**) в **Настройках** (**Settings**) открывают
   `docs/yandex-disk.md` и `docs/google-drive.md` в `master` (`frontend/src/lib/external.ts`):
   сохраняйте эти пути и разделы о своём клиенте в них.

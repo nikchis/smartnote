@@ -324,6 +324,21 @@ type remoteParts struct {
 	builtin   map[domain.StorageKind]usecase.CloudClient
 }
 
+// builtinClients are the built-in OAuth clients: the Yandex one always, the
+// Google one with googleID and googleSecret only when the build set both
+// (spec §1, ред. 8).
+func builtinClients(googleID, googleSecret string) map[domain.StorageKind]usecase.CloudClient {
+	builtin := map[domain.StorageKind]usecase.CloudClient{
+		domain.KindYandexDisk: {Provider: domain.KindYandexDisk, ID: yadisk.BuiltinClientID},
+	}
+
+	if googleID != "" && googleSecret != "" {
+		builtin[domain.KindGoogleDrive] = usecase.CloudClient{Provider: domain.KindGoogleDrive, ID: googleID, Secret: googleSecret}
+	}
+
+	return builtin
+}
+
 // newRemote wires the storages over store; their transfers report progress
 // to progress, nil reports nothing. Each cloud has one authorizer: the
 // Google one also refreshes the tokens of the Google Drive stores.
@@ -333,10 +348,7 @@ func newRemote(env wailsui.Env, store *sqlite.Store, progress usecase.ProgressFu
 		return remoteParts{}, err
 	}
 
-	builtin := map[domain.StorageKind]usecase.CloudClient{
-		domain.KindYandexDisk:  {Provider: domain.KindYandexDisk, ID: yadisk.BuiltinClientID},
-		domain.KindGoogleDrive: {Provider: domain.KindGoogleDrive, ID: gdrive.BuiltinClientID, Secret: gdrive.BuiltinClientSecret},
-	}
+	builtin := builtinClients(gdrive.BuiltinClientID, gdrive.BuiltinClientSecret)
 
 	authOpts := cloudauth.Options{Lang: env.Lang.Get}
 	yandexAuth := cloudauth.NewAuthorizer(yadisk.OAuthProvider(), authOpts)

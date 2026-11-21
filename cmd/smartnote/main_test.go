@@ -117,11 +117,58 @@ func TestNewServicesSharesLanguage(t *testing.T) {
 	}
 }
 
+// setBuiltinGoogle sets the built-in Google client as -ldflags -X does for
+// the test and restores the values of the build after it.
+func setBuiltinGoogle(t *testing.T, id, secret string) {
+	t.Helper()
+
+	oldID, oldSecret := gdrive.BuiltinClientID, gdrive.BuiltinClientSecret
+	gdrive.BuiltinClientID, gdrive.BuiltinClientSecret = id, secret
+
+	t.Cleanup(func() { gdrive.BuiltinClientID, gdrive.BuiltinClientSecret = oldID, oldSecret })
+}
+
+// TestMainWithoutBuiltinGoogle: a build without the built-in Google client
+// wires no Google client, and Google Drive still asks to sign in; Yandex
+// keeps its client.
+func TestMainWithoutBuiltinGoogle(t *testing.T) {
+	setBuiltinGoogle(t, "", "")
+
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = store.Close() })
+
+	env := wailsui.Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler), Lang: i18n.NewCurrent(i18n.EN)}
+
+	r, err := newRemote(env, store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := r.builtin[domain.KindGoogleDrive]; ok {
+		t.Error("a build without the Google client has a built-in Google client")
+	}
+
+	if r.builtin[domain.KindYandexDisk].ID != yadisk.BuiltinClientID {
+		t.Error("built-in Yandex client is missing")
+	}
+
+	_, err = r.connector.Open(t.Context(), usecase.RemoteTarget{Settings: domain.ConnectionSettings{StorageKind: domain.KindGoogleDrive}}, usecase.OpenCheck)
+	if re, ok := errors.AsType[*domain.ReauthRequiredError](err); !ok || re.Kind != domain.KindGoogleDrive {
+		t.Errorf("Open(google_drive) without a client = %v, want a sign-in to google_drive", err)
+	}
+}
+
 // TestMainWiresThreeConnectors: each storage kind reaches its own
 // connector, and both clouds have their authorizer and built-in client.
 // Without a token each cloud asks to sign in to itself; the SSH connector
 // never does.
 func TestMainWiresThreeConnectors(t *testing.T) {
+	setBuiltinGoogle(t, "1-test.apps.googleusercontent.com", "builtin-test-secret")
+
 	store, err := sqlite.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +217,8 @@ func TestMainWiresThreeConnectors(t *testing.T) {
 // neither the settings nor the account the form gets (spec §1.2, criterion
 // 3), even for Google Drive settings with the built-in client.
 func TestBuiltinSecretNeverInDTO(t *testing.T) {
+	setBuiltinGoogle(t, "1-test.apps.googleusercontent.com", "builtin-test-secret")
+
 	store, err := sqlite.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -229,5 +278,39 @@ func TestBuiltinSecretNeverInDTO(t *testing.T) {
 		if strings.Contains(string(b), gdrive.BuiltinClientSecret) {
 			t.Errorf("%T carries the built-in client secret", v)
 		}
+	}
+}
+
+// TestBuiltinClients: the Google client is built in only when the build set
+// both its ID and secret (spec §1, ред. 8); Yandex always has its client.
+func TestBuiltinClients(t *testing.T) {
+	tests := []struct {
+		name, id, secret string
+		google           bool
+	}{
+		{name: "both set", id: "1-x.apps.googleusercontent.com", secret: "s", google: true},
+		{name: "none", id: "", secret: ""},
+		{name: "no secret", id: "1-x.apps.googleusercontent.com", secret: ""},
+		{name: "no ID", id: "", secret: "s"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := builtinClients(tc.id, tc.secret)
+
+			if y := got[domain.KindYandexDisk]; y.Provider != domain.KindYandexDisk || y.ID != yadisk.BuiltinClientID || y.Secret != "" {
+				t.Error("built-in Yandex client is not the client of yadisk")
+			}
+
+			g, ok := got[domain.KindGoogleDrive]
+			if ok != tc.google {
+				t.Fatalf("Google built in = %v, want %v", ok, tc.google)
+			}
+
+			// Compared, never printed.
+			if ok && (g.Provider != domain.KindGoogleDrive || g.ID != tc.id || g.Secret != tc.secret) {
+				t.Error("built-in Google client is not the client of the build")
+			}
+		})
 	}
 }

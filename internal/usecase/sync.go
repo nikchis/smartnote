@@ -661,7 +661,8 @@ func (s *Sync) target(settings domain.ConnectionSettings) RemoteTarget {
 }
 
 // open loads the settings and opens a session; empty settings return
-// domain.ErrNotConnected.
+// domain.ErrNotConnected, cloud settings without an effective client the
+// ValidationError of Sign in.
 func (s *Sync) open(ctx context.Context, mode OpenMode) (RemoteSession, error) {
 	settings, err := s.d.Settings.LoadSettings(ctx)
 	if err != nil {
@@ -670,6 +671,12 @@ func (s *Sync) open(ctx context.Context, mode OpenMode) (RemoteSession, error) {
 
 	if settings.IsEmpty() {
 		return nil, domain.ErrNotConnected
+	}
+
+	if domain.IsCloud(settings.Kind()) {
+		if _, ok := EffectiveClient(settings, s.d.Builtin); !ok {
+			return nil, errNoClient(settings.Kind())
+		}
 	}
 
 	sess, err := s.d.Remote.Open(ctx, s.target(settings), mode)
