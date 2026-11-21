@@ -2,6 +2,7 @@ package wailsui
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/nikchis/smartnote/internal/adapter/prefs"
 	"github.com/nikchis/smartnote/internal/domain"
@@ -14,6 +15,8 @@ import (
 type PrefsService struct {
 	env Env
 	dir string
+
+	mu sync.Mutex // keeps each read or save of prefs.json with its switch of the language
 }
 
 // NewPrefsService returns a PrefsService that keeps prefs.json in dir and
@@ -30,6 +33,9 @@ var errUnknownLanguage = &domain.ValidationError{Field: "language", Reason: "mus
 // anything else English), and makes it current. The language from system is
 // not saved: it follows the system until the user switches it.
 func (s *PrefsService) Language(system string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	l := s.saved()
 	if l == "" {
 		l = fromSystem(system)
@@ -47,6 +53,9 @@ func (s *PrefsService) SetLanguage(lang string) error {
 	if !ok {
 		return s.env.fail("set language", errUnknownLanguage)
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if err := prefs.Save(s.dir, prefs.Prefs{Language: string(l)}); err != nil {
 		return s.env.fail("set language", err)

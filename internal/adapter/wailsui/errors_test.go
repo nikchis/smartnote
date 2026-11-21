@@ -452,8 +452,9 @@ func TestRussianTextsOfCloudAndReauth(t *testing.T) {
 	}
 }
 
-// domainValidationErrors are the validation errors the app forms, each from
-// the code that forms it where that is reachable from here.
+// domainValidationErrors are validation errors formed by the domain code
+// itself; TestEveryFormedValidationIsTranslated covers every literal of
+// internal/.
 func domainValidationErrors(t *testing.T) map[string]error {
 	t.Helper()
 
@@ -468,38 +469,24 @@ func domainValidationErrors(t *testing.T) map[string]error {
 	}
 
 	errs := map[string]error{
-		"name required":       domain.Note{Info: "x"}.Validate(),
-		"name too long":       domain.Note{Name: long, Info: "x"}.Validate(),
-		"name control":        domain.Note{Name: "a\x01", Info: "x"}.Validate(),
-		"info control":        domain.Note{Name: "a", Info: "x\x01"}.Validate(),
-		"password short":      domain.ValidatePassword("abc"),
-		"password long":       domain.ValidatePassword(strings.Repeat("a", domain.MaxPasswordLen+1)),
-		"kind unknown":        domain.ConnectionSettings{StorageKind: "ftp"}.Validate(),
-		"yandex client":       domain.ValidateYandexClientID("bad id!"),
-		"google client":       domain.ValidateGoogleClient("bad", "s"),
-		"google secret":       domain.ValidateGoogleClient("1-a.apps.googleusercontent.com", "\x01"),
-		"sync phrase":         with(func(s *domain.ConnectionSettings) { s.SyncPhrase = "short" }),
-		"db host":             with(func(s *domain.ConnectionSettings) { s.DBHost = "example.org" }),
-		"ssh host":            with(func(s *domain.ConnectionSettings) { s.SSHHost = "" }),
-		"ssh user":            with(func(s *domain.ConnectionSettings) { s.SSHUser = "" }),
-		"ssh port":            with(func(s *domain.ConnectionSettings) { s.SSHPort = 70000 }),
-		"db port":             with(func(s *domain.ConnectionSettings) { s.DBPort = -1 }),
-		"db name":             with(func(s *domain.ConnectionSettings) { s.DBName = "" }),
-		"db user":             with(func(s *domain.ConnectionSettings) { s.DBUser = "" }),
-		"note name taken":     &domain.ValidationError{Field: "name", Reason: "a note with this name already exists"},
-		"confirm":             &domain.ValidationError{Field: "confirm", Reason: "does not match the password"},
-		"id":                  &domain.ValidationError{Field: "id", Reason: "is not a UUID"},
-		"key file large":      &domain.ValidationError{Field: "key_file", Reason: "is too large for a private key"},
-		"key file dsa":        &domain.ValidationError{Field: "key_file", Reason: "is a DSA key, which is no longer secure; use Ed25519 or RSA of at least 2048 bits"},
-		"key file rsa":        &domain.ValidationError{Field: "key_file", Reason: "is an RSA key of 1024 bits; at least 2048 are needed"},
-		"code":                &domain.ValidationError{Field: "code", Reason: "required"},
-		"not a cloud":         &domain.ValidationError{Field: "kind", Reason: "is not a cloud storage"},
-		"own client yandex":   &domain.ValidationError{Field: "yandex_client_id", Reason: "set your own client ID in Advanced"},
-		"own client google":   &domain.ValidationError{Field: "google_client_id", Reason: "set your own client ID in Advanced"},
-		"host key not offer":  &domain.ValidationError{Field: "trusted_host_key", Reason: "was not offered by the server"},
-		"host key elsewhere":  &domain.ValidationError{Field: "trusted_host_key", Reason: "was offered by another server"},
-		"language":            &domain.ValidationError{Field: "language", Reason: "must be en or ru"},
-		"wailsui unknown key": errUnknownTrust,
+		"name required":  domain.Note{Info: "x"}.Validate(),
+		"name too long":  domain.Note{Name: long, Info: "x"}.Validate(),
+		"name control":   domain.Note{Name: "a\x01", Info: "x"}.Validate(),
+		"info control":   domain.Note{Name: "a", Info: "x\x01"}.Validate(),
+		"password short": domain.ValidatePassword("abc"),
+		"password long":  domain.ValidatePassword(strings.Repeat("a", domain.MaxPasswordLen+1)),
+		"kind unknown":   domain.ConnectionSettings{StorageKind: "ftp"}.Validate(),
+		"yandex client":  domain.ValidateYandexClientID("bad id!"),
+		"google client":  domain.ValidateGoogleClient("bad", "s"),
+		"google secret":  domain.ValidateGoogleClient("1-a.apps.googleusercontent.com", "\x01"),
+		"sync phrase":    with(func(s *domain.ConnectionSettings) { s.SyncPhrase = "short" }),
+		"db host":        with(func(s *domain.ConnectionSettings) { s.DBHost = "example.org" }),
+		"ssh host":       with(func(s *domain.ConnectionSettings) { s.SSHHost = "" }),
+		"ssh user":       with(func(s *domain.ConnectionSettings) { s.SSHUser = "" }),
+		"ssh port":       with(func(s *domain.ConnectionSettings) { s.SSHPort = 70000 }),
+		"db port":        with(func(s *domain.ConnectionSettings) { s.DBPort = -1 }),
+		"db name":        with(func(s *domain.ConnectionSettings) { s.DBName = "" }),
+		"db user":        with(func(s *domain.ConnectionSettings) { s.DBUser = "" }),
 	}
 
 	for name, err := range errs {

@@ -311,8 +311,10 @@ func validationTexts(ve *domain.ValidationError) map[i18n.Lang]string {
 	return technical(ve.Error())
 }
 
-// storageName is the name of the cloud in the texts for the user, the same in
-// every language; the kind itself for a cloud without a name here.
+// storageName is the name of the cloud in the texts for the user; the kind
+// itself for a cloud without a name here. The names are product names in
+// Latin script in every language, so the {provider} templates need no
+// declension.
 func storageName(k domain.StorageKind) string {
 	switch k {
 	case domain.KindYandexDisk:

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nikchis/smartnote/internal/adapter/prefs"
@@ -132,5 +133,33 @@ func TestSetLanguageSaveFailureKeepsLanguage(t *testing.T) {
 
 	if lang.Get() != i18n.EN {
 		t.Errorf("current = %q, want en kept", lang.Get())
+	}
+}
+
+// Concurrent switches leave the current language equal to the saved one.
+func TestSetLanguageConcurrentKeepsFileAndCurrentInStep(t *testing.T) {
+	dir := t.TempDir()
+	svc, lang := newTestPrefsService(t, dir)
+
+	var wg sync.WaitGroup
+
+	for i := range 16 {
+		wg.Go(func() {
+			l := "en"
+			if i%2 == 0 {
+				l = "ru"
+			}
+
+			if err := svc.SetLanguage(l); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	p, found, err := prefs.Load(dir)
+	if err != nil || !found || i18n.Lang(p.Language) != lang.Get() {
+		t.Errorf("saved %+v %v %v, current %q: want the same language", p, found, err, lang.Get())
 	}
 }
