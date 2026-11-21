@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nikchis/smartnote/internal/adapter/blobremote"
+	"github.com/nikchis/smartnote/internal/adapter/blobremote/storetest"
 	"github.com/nikchis/smartnote/internal/adapter/cloudhttp"
 	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/usecase"
@@ -211,6 +212,11 @@ func moveQueries(d *fakeDisk) []string {
 	}
 
 	return out
+}
+
+// TestStoreContract runs the ObjectStore contract over the emulator.
+func TestStoreContract(t *testing.T) {
+	storetest.Run(t, func(t *testing.T) blobremote.ObjectStore { return newHarness(t).store() })
 }
 
 func TestReadMissing(t *testing.T) {
