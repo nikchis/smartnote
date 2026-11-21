@@ -5,7 +5,8 @@
   // the dialog whether Test and OK must wait. account is undefined while the
   // form waits for Go to report it: the block then offers no sign-in or
   // sign-out. latest numbers the changes of account shared with the form, so
-  // that the end of an older one does not overwrite a newer answer.
+  // that the end of an older one does not overwrite a newer answer; onSignOut
+  // tells the form that a Sign out starts, which a phase does not show.
   import GoogleSignInButton from "./GoogleSignInButton.svelte";
   import { ConnectionService, type AccountDTO } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
@@ -21,6 +22,7 @@
     phase = $bindable("idle"),
     disabled = false,
     invalid = $bindable(""),
+    onSignOut = () => {},
   }: {
     kind: CloudKind;
     account: AccountDTO | undefined;
@@ -29,6 +31,7 @@
     phase?: SignInPhase;
     disabled?: boolean;
     invalid?: string;
+    onSignOut?: () => void;
   } = $props();
 
   /**
@@ -126,6 +129,7 @@
   async function signOut() {
     if (signingOut) return;
     signingOut = true;
+    onSignOut();
     const shown = latest.begin();
     try {
       await ConnectionService.SignOut(kind);

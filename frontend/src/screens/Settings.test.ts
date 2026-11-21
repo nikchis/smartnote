@@ -644,6 +644,21 @@ describe("Settings account of the draft", () => {
     expect(has("Signed in as tester@example.invalid")).toBe(true);
   });
 
+  // Where a click does not move the focus to the button, the field is not left.
+  it("drops the read of the pause once a sign-out starts", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn() });
+    const reads = go.account.mock.calls.length;
+    go.account.mockResolvedValue(signedIn());
+    await type(field("Own client secret"), "GOCSPX-o");
+
+    await press("Sign out");
+    expect(go.signOut).toHaveBeenCalledExactlyOnceWith("google_drive");
+    await pause();
+    expect(go.account).toHaveBeenCalledTimes(reads);
+    expect(has("Not signed in")).toBe(true);
+    expect(accountButtons()).toEqual(["Sign in with Google"]);
+  });
+
   it("drops the read of the pause when the kind changes", async () => {
     await open({ kind: "google_drive" });
     const reads = go.account.mock.calls.length;

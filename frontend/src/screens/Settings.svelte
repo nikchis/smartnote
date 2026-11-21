@@ -55,7 +55,8 @@
   });
   /** typing is the read of the account due when typing in an own client field pauses. */
   let typing: ReturnType<typeof setTimeout> | undefined;
-  // A read that starts after a sign-in would outdate the sign-in's answer.
+  // A read that starts after a sign-in or a Sign out would outdate its answer.
+  // A sign-in moves phase off "idle"; a Sign out calls onSignOut.
   $effect(() => {
     if (phase !== "idle") cancelTyping();
   });
@@ -252,7 +253,7 @@
         <span class="legend" id={google ? "settings-google" : "settings-yandex"}>{i18n.t(google ? "settings.googleAccount" : "settings.yandexAccount")}</span>
         <div class="fields">
           <div class="wide">
-            <CloudAccount kind={form.kind} bind:account latest={accountTurn} {form} bind:phase bind:invalid disabled={!!busy} />
+            <CloudAccount kind={form.kind} bind:account latest={accountTurn} {form} bind:phase bind:invalid disabled={!!busy} onSignOut={cancelTyping} />
           </div>
           {#if google}
             <details class="wide" bind:open={advancedOpen}>
