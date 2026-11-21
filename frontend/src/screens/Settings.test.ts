@@ -414,7 +414,10 @@ describe("Settings Google Drive", () => {
     const b = button("Sign in with Google")!;
     expect(b).toBeDefined();
     const logo = b.querySelector("img")!;
-    expect(logo.getAttribute("src")).toMatch(/google-g\.svg$/);
+    // The standard colour "G" as plain paths, which every WebView draws (no foreignObject).
+    const svg = decodeURIComponent(logo.getAttribute("src")!);
+    for (const colour of ["#EA4335", "#4285F4", "#FBBC05", "#34A853"]) expect(svg).toContain(colour);
+    expect(svg).not.toMatch(/foreignObject/i);
     expect(logo.getAttribute("alt")).toBe("");
     // The logo comes first, then the text (Sign in with Google Branding Guidelines).
     expect(logo.nextElementSibling?.textContent).toBe("Sign in with Google");
@@ -553,6 +556,49 @@ describe("Settings account of the draft", () => {
     expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
   });
 
+  // Leaving the field fires change on the mousedown of the button under the
+  // pointer: the button must still be there for the click that follows.
+  it("signs in with the first click after an own client field changes", async () => {
+    await open({ kind: "google_drive" });
+    const answer = pending<AccountDTO>();
+    go.account.mockReturnValueOnce(answer.promise);
+    go.signIn.mockResolvedValue("");
+    const input = field("Own client ID");
+    input.focus();
+    await edit(input, "1-abc.apps.googleusercontent.com");
+    input.blur();
+    await settle();
+
+    expect(accountButtons()).toEqual(["Sign in with Google"]);
+    await press("Sign in with Google");
+    expect(go.signIn).toHaveBeenCalledOnce();
+    expect(go.signIn).toHaveBeenCalledWith(expect.objectContaining({ googleClientId: "1-abc.apps.googleusercontent.com" }));
+
+    // The read began before the sign-in: its answer no longer counts.
+    answer.resolve(none);
+    await settle();
+    expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
+  });
+
+  it("keeps the focused button of the block while an own client field is re-read", async () => {
+    await open({ kind: "yandex_disk" }, { yandex_disk: signedIn("ivan") });
+    const answer = pending<AccountDTO>();
+    go.account.mockReturnValueOnce(answer.promise);
+    const input = field("Own client ID");
+    input.focus();
+    await edit(input, "my-id");
+    // The keyboard moves on from the field to a button of the block.
+    const signOut = button("Sign out")!;
+    signOut.focus();
+    await settle();
+    expect(document.activeElement).toBe(signOut);
+
+    answer.resolve(signedIn("ivan"));
+    await settle();
+    expect(signOut.isConnected).toBe(true);
+    expect(document.activeElement).toBe(signOut);
+  });
+
   it("does not ask for the account of a storage that is not a cloud", async () => {
     await open({ kind: "ssh_postgres" });
     await choose("None (local only)");
@@ -600,18 +646,16 @@ describe("Settings account of the draft", () => {
       expect(accountButtons()).toEqual(["Sign in with Google"]);
     });
 
-    it("after Sign out", async () => {
-      await open({ kind: "google_drive" }, { google_drive: signedIn(), yandex_disk: signedIn("ivan") });
+    it("after Sign out pressed while the read for a new own client ID runs", async () => {
+      await open({ kind: "google_drive" }, { google_drive: signedIn() });
       const late = pending<AccountDTO>();
       go.account.mockReturnValueOnce(late.promise);
-      await choose("Yandex Disk");
-      await choose("Google Drive");
+      await edit(field("Own client ID"), "1-abc.apps.googleusercontent.com");
       await press("Sign out");
       expect(go.signOut).toHaveBeenCalledExactlyOnceWith("google_drive");
 
-      late.resolve(signedIn("ivan"));
+      late.resolve(signedIn());
       await settle();
-      expect(has("ivan")).toBe(false);
       expect(has("Not signed in")).toBe(true);
       expect(accountButtons()).toEqual(["Sign in with Google"]);
     });

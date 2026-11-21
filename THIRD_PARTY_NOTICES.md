@@ -107,11 +107,9 @@ Branding Guidelines require, and the standard colour Google "G" logo.
   opsz 17, reduced to Basic Latin, U+00A0, the basic Cyrillic block U+0400-U+045F and U+2026
   (fontTools `varLib.instancer` and `subset`), in the WOFF2 format. "Google" and "Google Sans"
   are trademarks of Google LLC; no affiliation with or sponsorship by Google LLC is implied.
-- Logo: `frontend/src/assets/icons/google-g.svg`, the "G" of the official asset bundle
-  `signin-assets.zip` of <https://developers.google.com/identity/branding-guidelines>
-  (`Android + Web/SVG/Dark/Theme=Dark, Show text=No, Shape=Square, Platform=Android+Web.svg`)
-  with the button background and border removed and the view box set to the 20x20 logo; the
-  logo itself is unchanged. It is a trademark of Google LLC, used as the guidelines permit.
+- Logo: `frontend/src/assets/icons/google-g.svg`, the standard colour "G" as the plain SVG paths
+  of the HTML button generator on <https://developers.google.com/identity/branding-guidelines>,
+  unchanged. It is a trademark of Google LLC, used as the guidelines permit.
 
 ```text
 Copyright 2025 The Google Sans Project Authors (https://github.com/googlefonts/googlesans)

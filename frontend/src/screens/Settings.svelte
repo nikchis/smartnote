@@ -55,11 +55,15 @@
    * draft (spec §8), when the dialog opens, the kind changes or an own
    * client field is left changed. Go counts the pending sign-ins and the
    * Sign outs of this dialog; the saved settings say nothing about them. An
-   * answer for an older draft is dropped.
+   * answer for an older draft is dropped. Another kind shows its block
+   * without buttons until the answer comes; keep leaves the block of the
+   * same kind as it is, since leaving the field fires change on the mousedown
+   * of the button the click is for. A sign-in or Sign out started meanwhile
+   * outdates the answer, and SignIn sends the draft as it is then.
    */
-  async function readAccount() {
+  async function readAccount(keep = false) {
     const current = accountTurn.begin();
-    account = undefined;
+    if (!keep) account = undefined;
     if (!isCloud(form.kind)) return;
     try {
       const answer = await ConnectionService.Account(fromForm(form));
@@ -180,10 +184,10 @@
       <span class="legend" id="settings-storage">{i18n.t("settings.storage")}</span>
       <div class="fields">
         <div class="wide row">
-          <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} onchange={readAccount} disabled={phase !== "idle"} />{i18n.t("settings.none")}</label>
-          <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} onchange={readAccount} disabled={phase !== "idle"} />Yandex Disk</label>
-          <label class="choice"><input type="radio" name="kind" value="google_drive" bind:group={form.kind} onchange={readAccount} disabled={phase !== "idle"} />Google Drive</label>
-          <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} onchange={readAccount} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
+          <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} onchange={() => readAccount()} disabled={phase !== "idle"} />{i18n.t("settings.none")}</label>
+          <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} onchange={() => readAccount()} disabled={phase !== "idle"} />Yandex Disk</label>
+          <label class="choice"><input type="radio" name="kind" value="google_drive" bind:group={form.kind} onchange={() => readAccount()} disabled={phase !== "idle"} />Google Drive</label>
+          <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} onchange={() => readAccount()} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
         </div>
       </div>
     </section>
@@ -201,11 +205,11 @@
               <summary>{i18n.t("settings.advanced")}</summary>
               <label class="wide">
                 {i18n.t("settings.ownClientId")}
-                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.googleClientId} onchange={readAccount} autocomplete="off" aria-invalid={invalid === "google_client_id"} />
+                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.googleClientId} onchange={() => readAccount(true)} autocomplete="off" aria-invalid={invalid === "google_client_id"} />
               </label>
               <label class="wide">
                 {i18n.t("settings.ownClientSecret")}
-                <input type="password" aria-label={i18n.t("settings.ownClientSecretLabel")} bind:value={form.googleClientSecret} onchange={readAccount} autocomplete="off" aria-invalid={invalid === "google_client_secret"} />
+                <input type="password" aria-label={i18n.t("settings.ownClientSecretLabel")} bind:value={form.googleClientSecret} onchange={() => readAccount(true)} autocomplete="off" aria-invalid={invalid === "google_client_secret"} />
               </label>
               <a href={GOOGLE_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(GOOGLE_DOCS))}>{i18n.t("settings.howToRegister")}</a>
               <p class="muted">{i18n.t("settings.otherGoogleClient")}</p>
@@ -215,7 +219,7 @@
               <summary>{i18n.t("settings.advanced")}</summary>
               <label class="wide">
                 {i18n.t("settings.ownClientId")}
-                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.yandexClientId} onchange={readAccount} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
+                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.yandexClientId} onchange={() => readAccount(true)} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
               </label>
               <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>{i18n.t("settings.howToRegister")}</a>
               <p class="muted">{i18n.t("settings.otherClient")}</p>

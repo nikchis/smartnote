@@ -4,9 +4,9 @@
   // https://developers.google.com/identity/branding-guidelines, read on
   // 2026-11-21): fill #131314, stroke #8E918F 1px inside, text #E3E3E3 in
   // Google Sans Medium 14/20, 12px before the logo, 10px between the logo and
-  // the text, 12px after the text; the standard colour "G" of the official
-  // asset bundle at 20px, unchanged. The states follow the guidelines' HTML
-  // button generator for the dark theme. The font is bundled (a Latin and
+  // the text, 12px after the text; the standard colour "G" at 20px, the
+  // plain SVG paths of the guidelines' HTML button generator, unchanged. The
+  // states follow that generator for the dark theme. The font is bundled (a Latin and
   // Cyrillic subset under the SIL OFL 1.1, assets/fonts): the application
   // loads nothing from the network. The only colour icon of the interface.
   import googleG from "../assets/icons/google-g.svg";
@@ -65,6 +65,7 @@
     opacity: 0;
     transition: opacity 0.218s;
   }
+  /* The fill stays: the global button:enabled:hover (0,2,1) outranks .gsi (0,2,0) and would grey it. */
   .gsi:enabled:hover {
     background: #131314;
     box-shadow:
