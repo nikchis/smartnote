@@ -56,6 +56,20 @@ describe("PrivacyPolicy", () => {
     expect(opened).toEqual([a.getAttribute("href")]);
   });
 
+  it("middle click opens the link in the browser too", () => {
+    const a = target.querySelector<HTMLAnchorElement>('a[href^="https://developers.google.com/"]')!;
+    const aux = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+    a.dispatchEvent(aux);
+    expect(aux.defaultPrevented).toBe(true);
+    expect(opened).toEqual([a.getAttribute("href")]);
+  });
+
+  it("the policy text can be scrolled from the keyboard", () => {
+    const policy = target.querySelector<HTMLElement>(".policy")!;
+    expect(policy.tabIndex).toBe(0);
+    expect(policy.getAttribute("aria-labelledby")).toBe("privacy-title");
+  });
+
   it("every link is absolute https", () => {
     for (const html of [en, ru]) {
       expect(links(html).length).toBeGreaterThan(0);

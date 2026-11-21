@@ -22,6 +22,8 @@
   /** browserLinks: the policy is static text of the repository; a click on a link opens it in the browser. */
   function browserLinks(node: HTMLElement) {
     const onclick = (e: MouseEvent) => {
+      // A middle click fires auxclick, not click; its default would open a window.
+      if (e.type === "auxclick" && e.button !== 1) return;
       if (!(e.target instanceof Element)) return;
       const href = e.target.closest("a")?.getAttribute("href");
       if (!href) return;
@@ -29,7 +31,13 @@
       void openExternal(href).catch(() => {});
     };
     node.addEventListener("click", onclick);
-    return { destroy: () => node.removeEventListener("click", onclick) };
+    node.addEventListener("auxclick", onclick);
+    return {
+      destroy() {
+        node.removeEventListener("click", onclick);
+        node.removeEventListener("auxclick", onclick);
+      },
+    };
   }
 </script>
 
@@ -38,7 +46,9 @@
 <div class="backdrop" use:modal>
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
     <h2 id="privacy-title">{i18n.t("privacy.title")}</h2>
-    <div class="policy" use:browserLinks>
+    <!-- A scrollable region must take the focus to scroll from the keyboard. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div class="policy" role="region" tabindex="0" aria-labelledby="privacy-title" use:browserLinks>
       <!-- eslint-disable-next-line svelte/no-at-html-tags -->
       {@html policies[i18n.lang]}
     </div>
