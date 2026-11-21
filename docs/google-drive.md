@@ -50,7 +50,8 @@ needs no new sign-in, and **Sign out** in one of them leaves the other as it is.
 
 The package carries the client ID and the client secret of the author's Desktop OAuth client in
 Google Cloud, so normally you only press **Sign in with Google**. If you want the access to go
-through your own client, create one. The names below are those of the English Google Cloud console.
+through your own client, create one. The names below are those of the English Google Cloud console
+as of November 2026; Google may rename them.
 
 1. In the Google Cloud console (console.cloud.google.com) create a project or choose one of yours.
 2. In **APIs & Services → Library** enable the **Google Drive API**.
@@ -79,18 +80,20 @@ project. The notes under the old client stay where they are. Switching between t
 and your own one needs a new sign-in, because a sign-in is bound to the client ID.
 
 While the publishing status of your app is **Testing**, Google ends the sign-ins after 7 days, and
-Smartnote then asks you to sign in again. To keep the sign-in, press **Publish app** in
-**Audience**. If Google then warns that the app is not verified, it is your own app, and you can
-continue.
+Smartnote then asks you to sign in again (see [refresh token
+expiration](https://developers.google.com/identity/protocols/oauth2#expiration) in the Google
+documentation). To keep the sign-in, publish the app to production on the **Audience** page. If
+Google then warns that the app is not verified, it is your own app, and you can continue.
 
 ## How long the sign-in lasts
 
 Google gives an access that lasts an hour; Smartnote renews it by itself while you work, without a
 new sign-in. The sign-in itself lasts until you revoke the access or sign out. Google also ends a
-sign-in that has not been used for six months, and those of an app in the **Testing** status after
-7 days (see above). Then the next operation shows "Sign in to Google Drive again." and, after
-Connect, opens **Settings**. Press **Sign in again**, sign in once more and press **OK**; the notes
-are untouched.
+sign-in that has not been used for six months, and those of an app in the **Testing** status after 7
+days ([refresh token
+expiration](https://developers.google.com/identity/protocols/oauth2#expiration)). Then the next
+operation shows "Sign in to Google Drive again." and, after Connect, opens **Settings**. Press
+**Sign in again**, sign in once more and press **OK**; the notes are untouched.
 
 ## Large sets of notes, revisions and copies
 
@@ -101,7 +104,8 @@ connection. Do not close Smartnote.".
 
 Google Drive may keep earlier revisions of the file (up to 30 days or 100 revisions). They hold only
 ciphertext, and only the current version counts toward your storage quota. Smartnote does not
-delete them; **Delete hidden app data** (below) removes them with the file.
+delete them; deleting the hidden app data (below) removes the file, and Drive handles its revisions
+by its own rules.
 
 If two devices create the storage at the same moment, a second copy of the file may stay in the
 folder for a while. One of the next successful Backups removes it.
@@ -119,11 +123,11 @@ and press **OK**. The notes on Drive and on the device are untouched.
    **None (local only)**), or press **Sign out**, and press **OK**. Otherwise the next connection of
    such a device finds the storage empty and makes the first Backup again.
 2. Open the settings of Google Drive (drive.google.com, the gear button, **Settings**), choose
-   **Manage apps**, find Smartnote (or the name of your own app), open **Options** and choose
-   **Delete hidden app data**.
+   **Manage apps**, find Smartnote (or the name of your own app) and, in its menu, choose
+   **Delete hidden app data**. The names of the Drive menu are given as of November 2026.
 
-This deletes the file with all its revisions. The notes on your devices stay. Uninstalling
-Smartnote and deleting its data folder removes what it stored on a device.
+This deletes the hidden folder of Smartnote with the file. The notes on your devices stay.
+Uninstalling Smartnote and deleting its data folder removes what it stored on a device.
 
 ## When the storage is older than the device
 
