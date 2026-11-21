@@ -160,3 +160,19 @@ func TestConnectionServiceTestTimeoutByKind(t *testing.T) {
 		})
 	}
 }
+
+func TestTimeoutForCloudKinds(t *testing.T) {
+	cases := []struct {
+		kind domain.StorageKind
+		want time.Duration
+	}{
+		{domain.KindYandexDisk, 600 * time.Second},
+		{domain.KindGoogleDrive, 600 * time.Second},
+		{domain.KindSSHPostgres, 60 * time.Second},
+	}
+	for _, c := range cases {
+		if got := timeoutFor(c.kind); got != c.want {
+			t.Errorf("timeoutFor(%q) = %v, want %v", c.kind, got, c.want)
+		}
+	}
+}
