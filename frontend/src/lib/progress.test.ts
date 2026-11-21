@@ -6,6 +6,7 @@ import { progressView, type Progress, type ProgressView } from "./progress";
 i18n.use({ Language: async () => "en", SetLanguage: async () => {} });
 
 const yandex = (direction: string, done: number, total: number): Progress => ({ storage: "yandex_disk", direction, unit: "bytes", done, total });
+const google = (direction: string, done: number, total: number): Progress => ({ storage: "google_drive", direction, unit: "bytes", done, total });
 const server = (direction: string, done: number, total: number): Progress => ({ storage: "ssh_postgres", direction, unit: "notes", done, total });
 const slow = "This can take several minutes on a slow connection. Do not close Smartnote.";
 
@@ -22,6 +23,17 @@ describe("progressView", () => {
       name: "upload to Yandex Disk",
       p: yandex("upload", 2_400_000, 5_000_000),
       want: { title: "Uploading to Yandex Disk…", detail: "2.4 of 5.0 MB · 48%", warning: slow, value: 0.48 },
+    },
+    {
+      // Prototype П7 (spec §13): Google Drive is not noticeably faster, so it warns as well.
+      name: "upload to Google Drive",
+      p: google("upload", 2_400_000, 5_000_000),
+      want: { title: "Uploading to Google Drive…", detail: "2.4 of 5.0 MB · 48%", warning: slow, value: 0.48 },
+    },
+    {
+      name: "download from Google Drive",
+      p: google("download", 0, 1_250_000),
+      want: { title: "Synchronizing with Google Drive…", detail: "0.0 of 1.3 MB · 0%", warning: slow, value: 0 },
     },
     {
       name: "download from Yandex Disk",
@@ -133,6 +145,8 @@ describe("progressView in Russian", () => {
   it.each([
     { name: "Yandex Disk upload", p: yandex("upload", 1, 2), activity: "sync" as const, title: "Создание резервной копии на Yandex Disk…" },
     { name: "server upload", p: server("upload", 1, 2), activity: "backup" as const, title: "Создание резервной копии на сервере…" },
+    { name: "Google Drive upload", p: google("upload", 1, 2), activity: "backup" as const, title: "Создание резервной копии на Google Drive…" },
+    { name: "Google Drive Restore download", p: google("download", 0, 2), activity: "restore" as const, title: "Восстановление копии с Google Drive…" },
     { name: "Yandex Disk read of a Backup", p: yandex("download", 0, 2), activity: "backup" as const, title: "Создание резервной копии на Yandex Disk…" },
     { name: "server read of a Backup", p: server("download", 1, 2), activity: "backup" as const, title: "Создание резервной копии на сервере…" },
     { name: "Yandex Disk Restore download", p: yandex("download", 0, 2), activity: "restore" as const, title: "Восстановление копии с Yandex Disk…" },

@@ -12,16 +12,17 @@ const LABELS: Record<ProcessKind, Key> = { connect: "overlay.connecting", backup
 /**
  * TRANSFERS is how many transfers report their progress in a process, by
  * storage; each fills an equal share of the bar. They follow the Go side
- * (usecase/sync.go): a Yandex Disk Backup reads the container in
- * PrepareBackup, reads it again when CommitBackup opens its session and then
- * writes it (blobremote/session.go); a server Backup reads the notes, then
- * writes them (postgres/session.go). CommitRestore transfers nothing. A
- * storage not listed has one transfer; more than planned stay in the last
- * share, as in the first Connect that creates the storage.
+ * (usecase/sync.go): a cloud Backup (Yandex Disk, Google Drive) reads the
+ * container in PrepareBackup, reads it again when CommitBackup opens its
+ * session and then writes it (blobremote/session.go); a server Backup
+ * reads the notes, then writes them (postgres/session.go). CommitRestore
+ * transfers nothing. A storage not listed has one transfer; more than
+ * planned stay in the last share, as in the first Connect that creates the
+ * storage.
  */
-const TRANSFERS: Record<ProcessKind, Record<string, number>> = {
+export const TRANSFERS: Readonly<Record<ProcessKind, Readonly<Record<string, number>>>> = {
   connect: {},
-  backup: { yandex_disk: 3, ssh_postgres: 2 },
+  backup: { yandex_disk: 3, google_drive: 3, ssh_postgres: 2 },
   restore: {},
 };
 

@@ -32,13 +32,11 @@ type VersionDTO struct {
 // back it must name the saved key or the key trusted with TrustOfferedKey;
 // empty resets the trust. The own Google client secret crosses both ways,
 // as the passwords do (spec §7.2); tokens and the built-in client secret
-// never cross. YandexAccount and YandexSignedIn only report the sign-in and
-// are ignored on the way back.
+// never cross. The sign-in is not part of the settings: the form asks
+// ConnectionService.Account for the kind and client of its draft.
 type SettingsDTO struct {
 	Kind               string `json:"kind"`
 	YandexClientID     string `json:"yandexClientId"`
-	YandexAccount      string `json:"yandexAccount"`
-	YandexSignedIn     bool   `json:"yandexSignedIn"`
 	GoogleClientID     string `json:"googleClientId"`
 	GoogleClientSecret string `json:"googleClientSecret"`
 	SSHHost            string `json:"sshHost"`

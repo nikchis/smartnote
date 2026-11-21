@@ -321,33 +321,27 @@ func TestSettingsDTONeverHasTokens(t *testing.T) {
 	}
 
 	b, _ := json.Marshal(dto)
-	if s := string(b); strings.Contains(s, "SECRET") || !strings.Contains(s, `"yandexAccount":"ivan"`) || !strings.Contains(s, `"yandexSignedIn":true`) {
-		t.Errorf("Load JSON = %s", s)
+	if s := string(b); strings.Contains(s, "SECRET") || strings.Contains(s, "ivan") {
+		t.Errorf("Load JSON = %s, want neither the token nor the account", s)
 	}
 }
 
-// TestLoadShowsYandexAccountForOtherKind: until the form asks for the
-// account of its draft, Load reports the Yandex account whatever kind is
-// saved, so that switching the form to Yandex Disk shows it.
-func TestLoadShowsYandexAccountForOtherKind(t *testing.T) {
-	svc, store, _ := newTestConnectionService(t, filledSettings)
-	store.token = usecase.CloudToken{Provider: domain.KindYandexDisk, ClientID: "c", Account: "ivan"}
-	store.hasToken = true
-	store.s.YandexClientID = "c"
-
-	dto, err := svc.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !dto.YandexSignedIn || dto.YandexAccount != "ivan" {
-		t.Errorf("Load = %q, %v; want the Yandex account", dto.YandexAccount, dto.YandexSignedIn)
+// TestSettingsDTOHasNoAccountFields: the sign-in is not part of the
+// settings; the form asks Account for the kind and client of its draft
+// (spec §8), so a saved kind cannot leak the state of another cloud.
+func TestSettingsDTOHasNoAccountFields(t *testing.T) {
+	for f := range reflect.TypeFor[SettingsDTO]().Fields() {
+		name := strings.ToLower(f.Name)
+		if strings.Contains(name, "account") || strings.Contains(name, "signedin") {
+			t.Errorf("SettingsDTO has the sign-in field %s", f.Name)
+		}
 	}
 }
 
-// TestLoadWithUnreadableToken: a token that cannot be read still opens
-// Settings, as Not signed in, and only the error's code is logged.
-func TestLoadWithUnreadableToken(t *testing.T) {
+// TestLoadDoesNotReadToken: Load returns the saved settings without the
+// token store, so a token that cannot be read still opens Settings; Account
+// reports it (TestAccountWithUnreadableToken).
+func TestLoadDoesNotReadToken(t *testing.T) {
 	saved := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "c", SyncPhrase: "sixteen chars ok"}
 	svc, store, _ := newTestConnectionService(t, saved)
 	store.tokenErr = errors.New("cipher: message authentication failed SECRET-DETAIL")
@@ -358,15 +352,15 @@ func TestLoadWithUnreadableToken(t *testing.T) {
 
 	dto, err := svc.Load()
 	if err != nil {
-		t.Fatalf("Load: %v, want the settings without the account", err)
+		t.Fatalf("Load: %v, want the settings", err)
 	}
 
-	if dto.Kind != string(domain.KindYandexDisk) || dto.YandexClientID != "c" || dto.YandexSignedIn || dto.YandexAccount != "" {
-		t.Errorf("Load = %+v, want the saved settings, not signed in", dto)
+	if dto.Kind != string(domain.KindYandexDisk) || dto.YandexClientID != "c" {
+		t.Errorf("Load = %+v, want the saved settings", dto)
 	}
 
-	if out := logged.String(); !strings.Contains(out, "code=") || strings.Contains(out, "SECRET-DETAIL") {
-		t.Errorf("log = %q, want the code only", out)
+	if out := logged.String(); out != "" {
+		t.Errorf("log = %q, want nothing", out)
 	}
 }
 

@@ -117,10 +117,8 @@ func TestSettingsDTOYandex(t *testing.T) {
 		t.Errorf("dto = %+v, want kind and client ID", dto)
 	}
 
-	dto.YandexAccount, dto.YandexSignedIn = "ivan", true
-
 	if got := dto.settings(); got != s {
-		t.Errorf("settings() = %+v, want %+v: account and signed-in are output only", got, s)
+		t.Errorf("settings() = %+v, want %+v", got, s)
 	}
 }
 

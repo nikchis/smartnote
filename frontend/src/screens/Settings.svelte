@@ -8,13 +8,13 @@
   import gearIcon from "../assets/icons/gear.png";
   import importIcon from "../assets/icons/import.png";
   import StrengthMeter from "../components/StrengthMeter.svelte";
-  import YandexAccount from "../components/YandexAccount.svelte";
-  import { ConnectionService, KeyService } from "../lib/api";
+  import CloudAccount from "../components/CloudAccount.svelte";
+  import { ConnectionService, KeyService, type AccountDTO } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
   import { errorMsg, messageOf, parseError, type UIError } from "../lib/errors";
-  import { openExternal, YANDEX_DOCS } from "../lib/external";
+  import { GOOGLE_DOCS, openExternal, YANDEX_DOCS } from "../lib/external";
   import { i18n, msg, type Key } from "../lib/i18n.svelte";
-  import { emptySettings, fromForm, toForm, type SettingsForm, type SignInPhase } from "../lib/settings";
+  import { emptySettings, fromForm, isCloud, Latest, toForm, type SettingsForm, type SignInPhase } from "../lib/settings";
   import { modal } from "../lib/modal";
   import { settingsButtons } from "../lib/rules";
   import { LIMITS, secretLen } from "../lib/text";
@@ -34,16 +34,42 @@
   /** phraseShown reveals the sync phrase; every opening of the dialog starts hidden. */
   let phraseShown = $state(false);
   let passphrase: { value: string; retry: boolean } | undefined = $state();
+  /** account is the sign-in of the draft's cloud as Go reports it; undefined until it answers. */
+  let account: AccountDTO | undefined = $state();
+  /** accountTurn numbers the changes of account: the reads here, the sign-ins and Sign outs of the block. */
+  const accountTurn = new Latest();
 
   onMount(async () => {
     try {
       form = toForm(await ConnectionService.Load());
       loaded = true;
+      void readAccount();
       hasKey = await KeyService.HasKey();
     } catch (e) {
       await dialogs.error(errorMsg(e));
     }
   });
+
+  /**
+   * readAccount asks Go for the sign-in of the kind and the client of the
+   * draft (spec §8), when the dialog opens, the kind changes or an own
+   * client field is left changed. Go counts the pending sign-ins and the
+   * Sign outs of this dialog; the saved settings say nothing about them. An
+   * answer for an older draft is dropped.
+   */
+  async function readAccount() {
+    const current = accountTurn.begin();
+    account = undefined;
+    if (!isCloud(form.kind)) return;
+    try {
+      const answer = await ConnectionService.Account(fromForm(form));
+      if (current()) account = answer;
+    } catch (e) {
+      if (!current()) return;
+      account = { account: "", signedIn: false };
+      await dialogs.error(errorMsg(e));
+    }
+  }
 
   async function fail(e: unknown) {
     const err: UIError = parseError(e);
@@ -87,12 +113,6 @@
       await ConnectionService.Save(fromForm(form));
       onSaved();
     });
-  }
-
-  /** clientIdChanged shows the account as signed out: a token belongs to its client ID (spec §6.1). */
-  function clientIdChanged() {
-    form.yandexSignedIn = false;
-    form.yandexAccount = "";
   }
 
   function resetTrust() {
@@ -143,7 +163,7 @@
     void KeyService.CancelImport();
   }
 
-  /** close abandons a running Yandex sign-in before the dialog goes away; the account block may already be gone. */
+  /** close abandons a running sign-in before the dialog goes away; the account block may already be gone. */
   async function close() {
     if (phase !== "idle") await ConnectionService.CancelSignIn().catch(() => {});
     onClose();
@@ -160,29 +180,47 @@
       <span class="legend" id="settings-storage">{i18n.t("settings.storage")}</span>
       <div class="fields">
         <div class="wide row">
-          <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} disabled={phase !== "idle"} />{i18n.t("settings.none")}</label>
-          <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} disabled={phase !== "idle"} />Yandex Disk</label>
-          <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
+          <label class="choice"><input type="radio" name="kind" value="none" bind:group={form.kind} onchange={readAccount} disabled={phase !== "idle"} />{i18n.t("settings.none")}</label>
+          <label class="choice"><input type="radio" name="kind" value="yandex_disk" bind:group={form.kind} onchange={readAccount} disabled={phase !== "idle"} />Yandex Disk</label>
+          <label class="choice"><input type="radio" name="kind" value="google_drive" bind:group={form.kind} onchange={readAccount} disabled={phase !== "idle"} />Google Drive</label>
+          <label class="choice"><input type="radio" name="kind" value="ssh_postgres" bind:group={form.kind} onchange={readAccount} disabled={phase !== "idle"} />SSH + PostgreSQL</label>
         </div>
       </div>
     </section>
 
-    {#if form.kind === "yandex_disk"}
-      <section class="group yandex" role="group" aria-labelledby="settings-yandex">
-        <span class="legend" id="settings-yandex">{i18n.t("settings.yandexAccount")}</span>
+    {#if isCloud(form.kind)}
+      {@const google = form.kind === "google_drive"}
+      <section class="group cloud" role="group" aria-labelledby={google ? "settings-google" : "settings-yandex"}>
+        <span class="legend" id={google ? "settings-google" : "settings-yandex"}>{i18n.t(google ? "settings.googleAccount" : "settings.yandexAccount")}</span>
         <div class="fields">
           <div class="wide">
-            <YandexAccount bind:form bind:phase bind:invalid disabled={!!busy} />
+            <CloudAccount kind={form.kind} bind:account latest={accountTurn} {form} bind:phase bind:invalid disabled={!!busy} />
           </div>
-          <details class="wide" open={invalid === "yandex_client_id" || undefined}>
-            <summary>{i18n.t("settings.advanced")}</summary>
-            <label class="wide">
-              {i18n.t("settings.ownClientId")}
-              <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.yandexClientId} oninput={clientIdChanged} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
-            </label>
-            <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>{i18n.t("settings.howToRegister")}</a>
-            <p class="muted">{i18n.t("settings.otherClient")}</p>
-          </details>
+          {#if google}
+            <details class="wide" open={invalid === "google_client_id" || invalid === "google_client_secret" || undefined}>
+              <summary>{i18n.t("settings.advanced")}</summary>
+              <label class="wide">
+                {i18n.t("settings.ownClientId")}
+                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.googleClientId} onchange={readAccount} autocomplete="off" aria-invalid={invalid === "google_client_id"} />
+              </label>
+              <label class="wide">
+                {i18n.t("settings.ownClientSecret")}
+                <input type="password" aria-label={i18n.t("settings.ownClientSecretLabel")} bind:value={form.googleClientSecret} onchange={readAccount} autocomplete="off" aria-invalid={invalid === "google_client_secret"} />
+              </label>
+              <a href={GOOGLE_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(GOOGLE_DOCS))}>{i18n.t("settings.howToRegister")}</a>
+              <p class="muted">{i18n.t("settings.otherGoogleClient")}</p>
+            </details>
+          {:else}
+            <details class="wide" open={invalid === "yandex_client_id" || undefined}>
+              <summary>{i18n.t("settings.advanced")}</summary>
+              <label class="wide">
+                {i18n.t("settings.ownClientId")}
+                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.yandexClientId} onchange={readAccount} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
+              </label>
+              <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>{i18n.t("settings.howToRegister")}</a>
+              <p class="muted">{i18n.t("settings.otherClient")}</p>
+            </details>
+          {/if}
         </div>
       </section>
     {/if}

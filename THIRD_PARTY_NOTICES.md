@@ -92,3 +92,119 @@ Unicode-3.0), foldhash (Zlib) and, on Linux, seccompiler (Apache-2.0 OR BSD-3-Cl
 `smartnote` links the Go standard library (BSD-3-Clause) and the modules of `go.sum` that its
 target uses. `licenses/go-modules.txt` lists them, followed by their licence files, and is
 generated with every package by `tools/notices` from `go list`.
+
+## 5. Google Sans font and the Google "G" logo
+
+The "Sign in with Google" button of the settings uses Google Sans Medium, as the Sign in with Google
+Branding Guidelines require, and the standard colour Google "G" logo.
+
+- Font: `frontend/src/assets/fonts/GoogleSans-Medium-subset.woff2`, built into the application.
+  Source: `ofl/googlesans/GoogleSans[GRAD,opsz,wght].ttf` of <https://github.com/google/fonts>
+  (SHA-256 `d0a87d835a944b8b40d0e82a5651bb59ab97b936a2aeed5946eb57e7b2a3a90a`), Copyright 2025
+  The Google Sans Project Authors (<https://github.com/googlefonts/googlesans>), SIL Open Font
+  License 1.1 without Reserved Font Names: the text below and
+  `frontend/src/assets/fonts/GoogleSans-OFL.txt`. Changes: the static instance wght 500, GRAD 0,
+  opsz 17, reduced to Basic Latin, U+00A0, the basic Cyrillic block U+0400-U+045F and U+2026
+  (fontTools `varLib.instancer` and `subset`), in the WOFF2 format. "Google" and "Google Sans"
+  are trademarks of Google LLC; no affiliation with or sponsorship by Google LLC is implied.
+- Logo: `frontend/src/assets/icons/google-g.svg`, the "G" of the official asset bundle
+  `signin-assets.zip` of <https://developers.google.com/identity/branding-guidelines>
+  (`Android + Web/SVG/Dark/Theme=Dark, Show text=No, Shape=Square, Platform=Android+Web.svg`)
+  with the button background and border removed and the view box set to the 20x20 logo; the
+  logo itself is unchanged. It is a trademark of Google LLC, used as the guidelines permit.
+
+```text
+Copyright 2025 The Google Sans Project Authors (https://github.com/googlefonts/googlesans)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+https://openfontlicense.org
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded, 
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+```

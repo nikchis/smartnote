@@ -1,13 +1,16 @@
 // @vitest-environment happy-dom
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { SettingsDTO } from "../lib/api";
+import type { AccountDTO, SettingsDTO } from "../lib/api";
 import { i18n } from "../lib/i18n.svelte";
 
 // Settings talks to Go through the generated bindings; they are replaced by
 // fakes whose answers the test controls.
 const go = vi.hoisted(() => ({
   settings: {} as SettingsDTO,
+  /** accounts are what Account answers by kind, as Go keeps the sign-ins of the form. */
+  accounts: {} as Record<string, AccountDTO>,
+  account: vi.fn(),
   signIn: vi.fn(),
   signInManual: vi.fn(),
   submitCode: vi.fn(),
@@ -22,6 +25,7 @@ const go = vi.hoisted(() => ({
 vi.mock("../lib/api", () => ({
   ConnectionService: {
     Load: async () => go.settings,
+    Account: go.account,
     SignIn: go.signIn,
     SignInManual: go.signInManual,
     SubmitCode: go.submitCode,
@@ -52,7 +56,7 @@ const settle = async () => {
 const uiError = (code: string, message = code, field?: string) => new Error(JSON.stringify({ code, message, field }));
 
 const base: SettingsDTO = {
-  kind: "yandex_disk", yandexClientId: "", yandexAccount: "", yandexSignedIn: false,
+  kind: "yandex_disk", yandexClientId: "",
   googleClientId: "", googleClientSecret: "",
   sshHost: "", sshPort: 0, sshUser: "", sshPassword: "", dbHost: "", dbPort: 0, dbName: "", dbUser: "", dbPassword: "",
   syncPhrase: "", trustedFingerprint: "",
@@ -62,15 +66,23 @@ let target: HTMLElement;
 let screen: ReturnType<typeof mount>;
 let onClose: Mock<() => void>;
 
-async function open(settings: Partial<SettingsDTO> = {}) {
+const none: AccountDTO = { account: "", signedIn: false };
+const signedIn = (account = ""): AccountDTO => ({ account, signedIn: true });
+
+async function open(settings: Partial<SettingsDTO> = {}, accounts: Record<string, AccountDTO> = {}) {
   go.settings = { ...base, ...settings };
+  go.accounts = { ...accounts };
   onClose = vi.fn<() => void>();
   screen = mount(Settings, { target, props: { onSaved: () => {}, onClose } });
   await settle();
 }
 
 beforeEach(() => {
-  for (const f of [go.signIn, go.signInManual, go.submitCode, go.cancelSignIn, go.signOut, go.save, go.test, go.error, go.openURL]) f.mockReset();
+  for (const f of [go.account, go.signIn, go.signInManual, go.submitCode, go.cancelSignIn, go.signOut, go.save, go.test, go.error, go.openURL]) f.mockReset();
+  go.account.mockImplementation(async (s: SettingsDTO) => go.accounts[s.kind] ?? none);
+  go.signOut.mockImplementation(async (kind: string) => {
+    go.accounts[kind] = none;
+  });
   go.cancelSignIn.mockResolvedValue(undefined);
   go.signInManual.mockResolvedValue(undefined);
   go.error.mockResolvedValue(undefined);
@@ -94,6 +106,20 @@ const press = async (name: string) => {
 const radio = (label: string) => [...target.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find((r) => r.closest("label")?.textContent?.trim() === label)!;
 const has = (text: string) => target.textContent!.includes(text);
 const codeField = () => target.querySelector<HTMLInputElement>('input[aria-label="Code"]');
+const field = (label: string) => target.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+const accountButtons = () => [...target.querySelectorAll('[data-testid="account"] button')].map((b) => b.textContent?.trim());
+/** choose selects the storage labelled label, as a click does. */
+const choose = async (label: string) => {
+  radio(label).click();
+  await settle();
+};
+/** edit types value into input and leaves it, which fires change. */
+const edit = async (input: HTMLInputElement, value: string) => {
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  await settle();
+};
 
 /** pending returns a promise the test settles by hand. */
 function pending<T>() {
@@ -104,10 +130,10 @@ function pending<T>() {
 }
 
 describe("Settings storage choice", () => {
-  it("offers the three storages with the saved one chosen", async () => {
+  it("offers the four storages in the order of the spec with the saved one chosen", async () => {
     await open({ kind: "ssh_postgres" });
-    expect(radio("None (local only)")).toBeDefined();
-    expect(radio("Yandex Disk")).toBeDefined();
+    const labels = [...target.querySelectorAll('input[type="radio"]')].map((r) => r.closest("label")?.textContent?.trim());
+    expect(labels).toEqual(["None (local only)", "Yandex Disk", "Google Drive", "SSH + PostgreSQL"]);
     expect(radio("SSH + PostgreSQL").checked).toBe(true);
   });
 
@@ -158,13 +184,13 @@ describe("Settings groups", () => {
 
 describe("Settings Yandex account", () => {
   it("shows the login and Sign out when signed in", async () => {
-    await open({ yandexSignedIn: true, yandexAccount: "ivan.petrov" });
+    await open({}, { yandex_disk: signedIn("ivan.petrov") });
     expect(has("Signed in as ivan.petrov")).toBe(true);
     expect(button("Sign out")).toBeDefined();
   });
 
   it("signs in again over a saved account", async () => {
-    await open({ yandexSignedIn: true, yandexAccount: "ivan.petrov" });
+    await open({}, { yandex_disk: signedIn("ivan.petrov") });
     const signIn = pending<string>();
     go.signIn.mockReturnValue(signIn.promise);
     await press("Sign in again");
@@ -182,7 +208,7 @@ describe("Settings Yandex account", () => {
   });
 
   it("keeps the saved account when signing in again is canceled", async () => {
-    await open({ yandexSignedIn: true, yandexAccount: "ivan.petrov" });
+    await open({}, { yandex_disk: signedIn("ivan.petrov") });
     const signIn = pending<string>();
     go.signIn.mockReturnValue(signIn.promise);
     await press("Sign in again");
@@ -194,7 +220,7 @@ describe("Settings Yandex account", () => {
   });
 
   it("shows plain Signed in when the login is empty", async () => {
-    await open({ yandexSignedIn: true });
+    await open({}, { yandex_disk: signedIn() });
     expect(target.textContent).toContain("Signed in");
     expect(has("Signed in as")).toBe(false);
   });
@@ -248,11 +274,10 @@ describe("Settings Yandex account", () => {
   });
 
   it("shows Not signed in after the own client ID changes", async () => {
-    await open({ yandexSignedIn: true, yandexAccount: "ivan.petrov" });
-    const input = target.querySelector<HTMLInputElement>('input[aria-label="Own client ID"]')!;
-    input.value = "my-id";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    await settle();
+    await open({}, { yandex_disk: signedIn("ivan.petrov") });
+    go.account.mockImplementation(async (s: SettingsDTO) => (s.yandexClientId === "" ? signedIn("ivan.petrov") : none));
+    await edit(field("Own client ID"), "my-id");
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "yandex_disk", yandexClientId: "my-id" }));
     expect(has("Signed in as")).toBe(false);
     expect(has("Not signed in")).toBe(true);
     expect(button("Sign in with Yandex")).toBeDefined();
@@ -318,7 +343,7 @@ describe("Settings Yandex account", () => {
   });
 
   it("signs out", async () => {
-    await open({ yandexSignedIn: true, yandexAccount: "ivan" });
+    await open({}, { yandex_disk: signedIn("ivan") });
     go.signOut.mockResolvedValue(undefined);
     await press("Sign out");
     expect(go.signOut).toHaveBeenCalledExactlyOnceWith("yandex_disk");
@@ -340,7 +365,7 @@ describe("Settings Yandex account", () => {
     await open();
     go.signIn.mockReturnValue(pending<string>().promise);
     await press("Sign in with Yandex");
-    for (const l of ["None (local only)", "Yandex Disk", "SSH + PostgreSQL"]) expect(radio(l).disabled).toBe(true);
+    for (const l of ["None (local only)", "Yandex Disk", "Google Drive", "SSH + PostgreSQL"]) expect(radio(l).disabled).toBe(true);
   });
 
   it("ignores a late sign-in success after Enter code manually", async () => {
@@ -378,6 +403,263 @@ describe("Settings Yandex account", () => {
     await press("OK");
     expect(target.querySelector('[data-testid="account"]')!.getAttribute("aria-invalid")).toBe("true");
     expect(go.error).toHaveBeenCalledWith({ raw: "Sign in to Yandex Disk first, or choose None (local only)." });
+  });
+});
+
+describe("Settings Google Drive", () => {
+  it("shows the Google account block with Sign in with Google and its logo", async () => {
+    await open({ kind: "google_drive" });
+    expect(target.querySelector("#settings-google")?.textContent).toBe("Google account");
+    expect(has("Not signed in")).toBe(true);
+    const b = button("Sign in with Google")!;
+    expect(b).toBeDefined();
+    const logo = b.querySelector("img")!;
+    expect(logo.getAttribute("src")).toMatch(/google-g\.svg$/);
+    expect(logo.getAttribute("alt")).toBe("");
+    // The logo comes first, then the text (Sign in with Google Branding Guidelines).
+    expect(logo.nextElementSibling?.textContent).toBe("Sign in with Google");
+    expect(button("Sign in with Yandex")).toBeUndefined();
+    expect(go.account).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: "google_drive" }));
+  });
+
+  it("signs in to Google without Enter code manually", async () => {
+    await open({ kind: "google_drive" });
+    go.signIn.mockReturnValue(pending<string>().promise);
+    await press("Sign in with Google");
+    expect(go.signIn).toHaveBeenCalledWith(expect.objectContaining({ kind: "google_drive" }));
+    expect(has("Waiting for the browser…")).toBe(true);
+    expect(accountButtons()).toEqual(["Cancel"]);
+  });
+
+  it("shows plain Signed in for a Google token without an account", async () => {
+    await open({ kind: "google_drive" });
+    go.signIn.mockResolvedValue("");
+    await press("Sign in with Google");
+    expect(has("Signed in")).toBe(true);
+    expect(has("Signed in as")).toBe(false);
+    expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
+  });
+
+  it("shows the error instead of a code field when the loopback is unavailable", async () => {
+    await open({ kind: "google_drive" });
+    go.signIn.mockRejectedValue(uiError("loopback_unavailable", "The sign-in page could not be received."));
+    await press("Sign in with Google");
+    expect(go.signInManual).not.toHaveBeenCalled();
+    expect(codeField()).toBeNull();
+    expect(go.error).toHaveBeenCalledWith({ raw: "The sign-in page could not be received." });
+    expect(has("Not signed in")).toBe(true);
+  });
+
+  it("signs out of Google only", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn() });
+    await press("Sign out");
+    expect(go.signOut).toHaveBeenCalledExactlyOnceWith("google_drive");
+    expect(has("Not signed in")).toBe(true);
+  });
+
+  it("has the own client ID and secret in Advanced with the Google hint", async () => {
+    await open({ kind: "google_drive", googleClientId: "1-abc.apps.googleusercontent.com", googleClientSecret: "GOCSPX-own" });
+    expect(field("Own client ID").value).toBe("1-abc.apps.googleusercontent.com");
+    expect(field("Own client secret").value).toBe("GOCSPX-own");
+    expect(field("Own client secret").type).toBe("password");
+    expect(has("Own client secret:")).toBe(true);
+    expect(has("A client of another Google Cloud project has its own storage.")).toBe(true);
+    expect(has("Data of another client ID is a separate, empty storage.")).toBe(false);
+
+    const a = [...target.querySelectorAll("a")].find((l) => l.textContent?.trim() === "How to register")!;
+    expect(a.getAttribute("href")).toBe("https://github.com/nikchis/smartnote/blob/master/docs/google-drive.md");
+    a.click();
+    expect(go.openURL).toHaveBeenCalledWith("https://github.com/nikchis/smartnote/blob/master/docs/google-drive.md");
+
+    go.save.mockResolvedValue(undefined);
+    await press("OK");
+    expect(go.save).toHaveBeenCalledWith(expect.objectContaining({ kind: "google_drive", googleClientId: "1-abc.apps.googleusercontent.com", googleClientSecret: "GOCSPX-own" }));
+  });
+
+  it("names the Google block, button and fields in Russian", async () => {
+    await open({ kind: "google_drive" });
+    go.signIn.mockReturnValue(pending<string>().promise);
+    await i18n.set("ru");
+    await settle();
+    expect(target.querySelector("#settings-google")?.textContent).toBe("Аккаунт Google");
+    expect(button("Войти через Google")).toBeDefined();
+    expect(field("Свой client ID")).not.toBeNull();
+    expect(field("Свой client secret")).not.toBeNull();
+    expect(has("У клиента другого проекта Google Cloud своё хранилище.")).toBe(true);
+
+    await press("Войти через Google");
+    expect(has("Ожидание браузера…")).toBe(true);
+    expect(accountButtons()).toEqual(["Отмена"]);
+  });
+
+  it("marks the own client fields and opens Advanced for their validation errors", async () => {
+    await open({ kind: "google_drive" });
+    go.signIn.mockRejectedValue(uiError("validation", "Client ID is required.", "google_client_id"));
+    await press("Sign in with Google");
+    expect(has("Set your own client ID in Advanced")).toBe(true);
+    expect(field("Own client ID").getAttribute("aria-invalid")).toBe("true");
+    expect(target.querySelector("details")!.open).toBe(true);
+
+    go.save.mockRejectedValue(uiError("validation", "Client secret is invalid.", "google_client_secret"));
+    await press("OK");
+    expect(field("Own client secret").getAttribute("aria-invalid")).toBe("true");
+    expect(target.querySelector("details")!.open).toBe(true);
+  });
+
+  it("marks the account block for a google_account validation error", async () => {
+    await open({ kind: "google_drive" });
+    go.save.mockRejectedValue(uiError("validation", "Sign in to Google Drive first, or choose None (local only).", "google_account"));
+    await press("OK");
+    expect(target.querySelector('[data-testid="account"]')!.getAttribute("aria-invalid")).toBe("true");
+  });
+});
+
+describe("Settings account of the draft", () => {
+  it("account follows selected kind both ways without OK", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn() });
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "google_drive" }));
+    expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
+    expect(has("Signed in")).toBe(true);
+
+    await choose("Yandex Disk");
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "yandex_disk" }));
+    expect(has("Not signed in")).toBe(true);
+    expect(accountButtons()).toEqual(["Sign in with Yandex"]);
+
+    await choose("Google Drive");
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "google_drive" }));
+    expect(has("Not signed in")).toBe(false);
+    expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
+
+    expect(go.account).toHaveBeenCalledTimes(3);
+    expect(go.save).not.toHaveBeenCalled();
+  });
+
+  it("own client id change re-reads account", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn() });
+    go.account.mockResolvedValue(none);
+    await edit(field("Own client ID"), "1-abc.apps.googleusercontent.com");
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "google_drive", googleClientId: "1-abc.apps.googleusercontent.com" }));
+    expect(has("Not signed in")).toBe(true);
+    expect(accountButtons()).toEqual(["Sign in with Google"]);
+  });
+
+  // The effective Google client needs the ID and the secret together (usecase.EffectiveClient).
+  it("own client secret change re-reads account", async () => {
+    await open({ kind: "google_drive", googleClientId: "1-abc.apps.googleusercontent.com" });
+    go.account.mockResolvedValue(signedIn());
+    await edit(field("Own client secret"), "GOCSPX-own");
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ googleClientId: "1-abc.apps.googleusercontent.com", googleClientSecret: "GOCSPX-own" }));
+    expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
+  });
+
+  it("does not ask for the account of a storage that is not a cloud", async () => {
+    await open({ kind: "ssh_postgres" });
+    await choose("None (local only)");
+    expect(go.account).not.toHaveBeenCalled();
+  });
+
+  it("shows the selected kind without sign-in and sign-out buttons until the answer comes", async () => {
+    const answer = pending<AccountDTO>();
+    go.account.mockReturnValueOnce(answer.promise);
+    await open({ kind: "google_drive" });
+    expect(target.querySelector("#settings-google")?.textContent).toBe("Google account");
+    expect(accountButtons()).toEqual([]);
+    expect(has("Not signed in")).toBe(false);
+
+    answer.resolve(signedIn());
+    await settle();
+    expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
+  });
+
+  describe("late account answer for old draft is ignored", () => {
+    it("after a switch of the kind", async () => {
+      const late = pending<AccountDTO>();
+      go.account.mockReturnValueOnce(late.promise);
+      await open({ kind: "google_drive" }, { yandex_disk: signedIn("ivan") });
+      await choose("Yandex Disk");
+      expect(has("Signed in as ivan")).toBe(true);
+
+      late.resolve(none);
+      await settle();
+      expect(has("Signed in as ivan")).toBe(true);
+      expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
+      expect(target.querySelector("#settings-yandex")).not.toBeNull();
+    });
+
+    it("after a change of the own client ID", async () => {
+      const late = pending<AccountDTO>();
+      go.account.mockReturnValueOnce(late.promise);
+      await open({ kind: "google_drive" });
+      await edit(field("Own client ID"), "1-abc.apps.googleusercontent.com");
+      expect(has("Not signed in")).toBe(true);
+
+      late.resolve(signedIn());
+      await settle();
+      expect(has("Not signed in")).toBe(true);
+      expect(accountButtons()).toEqual(["Sign in with Google"]);
+    });
+
+    it("after Sign out", async () => {
+      await open({ kind: "google_drive" }, { google_drive: signedIn(), yandex_disk: signedIn("ivan") });
+      const late = pending<AccountDTO>();
+      go.account.mockReturnValueOnce(late.promise);
+      await choose("Yandex Disk");
+      await choose("Google Drive");
+      await press("Sign out");
+      expect(go.signOut).toHaveBeenCalledExactlyOnceWith("google_drive");
+
+      late.resolve(signedIn("ivan"));
+      await settle();
+      expect(has("ivan")).toBe(false);
+      expect(has("Not signed in")).toBe(true);
+      expect(accountButtons()).toEqual(["Sign in with Google"]);
+    });
+
+    it("after a sign-out that ends once another kind is chosen", async () => {
+      await open({ kind: "google_drive" }, { google_drive: signedIn(), yandex_disk: signedIn("ivan") });
+      const out = pending<void>();
+      go.signOut.mockReturnValueOnce(out.promise);
+      await press("Sign out");
+      await choose("Yandex Disk");
+      expect(has("Signed in as ivan")).toBe(true);
+
+      out.resolve();
+      await settle();
+      expect(has("Signed in as ivan")).toBe(true);
+      expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
+    });
+  });
+
+  it("sign out then switch kind shows other account", async () => {
+    await open({ kind: "google_drive" }, { google_drive: signedIn(), yandex_disk: signedIn("ivan") });
+    await press("Sign out");
+    expect(has("Not signed in")).toBe(true);
+
+    await choose("Yandex Disk");
+    expect(has("Signed in as ivan")).toBe(true);
+    expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
+
+    go.save.mockResolvedValue(undefined);
+    await press("OK");
+    expect(go.signOut).toHaveBeenCalledExactlyOnceWith("google_drive");
+    expect(go.save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: "yandex_disk" }));
+  });
+
+  it("pending sign-in survives kind switch", async () => {
+    await open({ kind: "yandex_disk" });
+    go.signIn.mockImplementation(async (s: SettingsDTO) => {
+      go.accounts[s.kind] = signedIn("ivan");
+      return "ivan";
+    });
+    await press("Sign in with Yandex");
+    expect(has("Signed in as ivan")).toBe(true);
+
+    await choose("Google Drive");
+    expect(has("Not signed in")).toBe(true);
+    await choose("Yandex Disk");
+    expect(has("Signed in as ivan")).toBe(true);
+    expect(go.save).not.toHaveBeenCalled();
   });
 });
 

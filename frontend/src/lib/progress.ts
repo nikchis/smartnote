@@ -15,7 +15,7 @@ export type ProgressView = {
    * "Step 2 of 3 · " and its percent is of the whole process.
    */
   detail: string;
-  /** warning is shown under the bar for Yandex Disk, "" otherwise. */
+  /** warning is shown under the bar for a cloud storage, "" otherwise. */
   warning: string;
   /** value is the share of the whole process done, from 0 to 1. */
   value: number;
@@ -37,10 +37,12 @@ const ONLY: Step = { index: 0, count: 1 };
  */
 export type Activity = "sync" | "backup" | "restore";
 
-const YANDEX_DISK = "yandex_disk";
-
-/** CLOUDS name the cloud storages; the names are the same in every language. */
-const CLOUDS: Record<string, string> = { [YANDEX_DISK]: "Yandex Disk" };
+/**
+ * CLOUDS name the cloud storages; the names are the same in every language.
+ * A transfer with a cloud can take minutes: the prototype found Google Drive
+ * no faster than Yandex Disk (spec §13, П7), so both warn about it.
+ */
+const CLOUDS: Record<string, string> = { yandex_disk: "Yandex Disk", google_drive: "Google Drive" };
 
 /** megabytes are 10^6 bytes with one decimal, written as the language writes it. */
 function megabytes(bytes: number): string {
@@ -90,7 +92,7 @@ export function progressView(p: Progress | undefined, activity: Activity = "sync
   return {
     title: title(p, activity),
     detail: count > 1 ? i18n.t("progress.step", { index: index + 1, count, text }) : text,
-    warning: p.storage === YANDEX_DISK ? i18n.t("progress.slow") : "",
+    warning: Object.hasOwn(CLOUDS, p.storage) ? i18n.t("progress.slow") : "",
     value: num / den,
   };
 }

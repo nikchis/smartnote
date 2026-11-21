@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { backupFlow, closeFlow, restoreFlow, type SyncApi } from "../flows/sync";
 import type { Dialogs } from "./dialogs.svelte";
 import { i18n, type Msg } from "./i18n.svelte";
-import { SyncOverlay } from "./overlay.svelte";
+import { SyncOverlay, TRANSFERS } from "./overlay.svelte";
 import type { Progress } from "./progress";
 
 // The language switches in place of Go.
@@ -211,6 +211,18 @@ describe("SyncOverlay", () => {
       "Step 3 of 3 · Finishing… = 1.000",
       "Step 3 of 3 · Finishing… = 1.000",
     ]);
+  });
+
+  // A Google Drive Backup transfers as a Yandex Disk one does (spec §5.8).
+  it("counts three transfers in a Google Drive Backup", async () => {
+    expect(TRANSFERS.backup.google_drive).toBe(3);
+
+    await overlay.process("backup", async () => {
+      await overlay.call(async () => {
+        overlay.follow({ storage: "google_drive", direction: "download", unit: "bytes", done: 500_000, total: 1_000_000 });
+        expect(overlay.view()).toMatchObject({ title: "Synchronizing with Google Drive…", detail: "Step 1 of 3 · 0.5 of 1.0 MB · 16%" });
+      });
+    });
   });
 
   it("splits the bar of a server Backup into its two transfers", async () => {

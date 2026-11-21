@@ -4,7 +4,7 @@
 import type { SettingsDTO } from "./api";
 
 export const emptySettings: SettingsDTO = {
-  kind: "none", yandexClientId: "", yandexAccount: "", yandexSignedIn: false,
+  kind: "none", yandexClientId: "",
   googleClientId: "", googleClientSecret: "",
   sshHost: "", sshPort: 0, sshUser: "", sshPassword: "",
   dbHost: "", dbPort: 0, dbName: "", dbUser: "", dbPassword: "",
@@ -12,7 +12,28 @@ export const emptySettings: SettingsDTO = {
 };
 
 /** StorageKind is the value of SettingsDTO.kind: where the notes are synchronized. */
-export type StorageKind = "none" | "yandex_disk" | "ssh_postgres";
+export type StorageKind = "none" | "yandex_disk" | "google_drive" | "ssh_postgres";
+
+/** CloudKind is a storage the user signs in to. */
+export type CloudKind = "yandex_disk" | "google_drive";
+
+export function isCloud(kind: string): kind is CloudKind {
+  return kind === "yandex_disk" || kind === "google_drive";
+}
+
+/**
+ * Latest numbers the requests that change one shown value, such as the
+ * account of the settings draft: begin returns a check that stays true only
+ * until the next request begins, so a late answer to an older one is dropped.
+ */
+export class Latest {
+  private last = 0;
+
+  begin(): () => boolean {
+    const mine = ++this.last;
+    return () => mine === this.last;
+  }
+}
 
 /** SignInPhase: idle, no sign-in; browser, waiting for the browser; manual, waiting for the code. */
 export type SignInPhase = "idle" | "browser" | "manual";

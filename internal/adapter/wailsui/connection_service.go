@@ -45,8 +45,8 @@ type AccountDTO struct {
 
 // Load returns the saved settings for the settings dialog; a key trusted in
 // a dialog closed without OK, the pending sign-ins and the Sign outs are
-// forgotten. Until the form asks Account, it also reports the Yandex
-// account whatever kind is saved.
+// forgotten. The sign-in is not part of the settings: the form asks Account
+// for the kind and client of its draft.
 func (s *ConnectionService) Load() (SettingsDTO, error) {
 	s.setPending(trustedKey{})
 
@@ -57,14 +57,7 @@ func (s *ConnectionService) Load() (SettingsDTO, error) {
 		return SettingsDTO{}, s.env.fail("load settings", err)
 	}
 
-	dto := toSettingsDTO(settings)
-
-	yandex := settings
-	yandex.StorageKind = domain.KindYandexDisk
-	acc := s.account(yandex)
-	dto.YandexAccount, dto.YandexSignedIn = acc.Account, acc.SignedIn
-
-	return dto, nil
+	return toSettingsDTO(settings), nil
 }
 
 // Account returns the sign-in for the kind and the effective client of the

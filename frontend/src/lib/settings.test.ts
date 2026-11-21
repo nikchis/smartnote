@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SettingsDTO } from "./api";
-import { emptySettings, fromForm, portValue, toForm } from "./settings";
+import { emptySettings, fromForm, isCloud, Latest, portValue, toForm } from "./settings";
 
 describe("portValue", () => {
   it.each([
@@ -55,17 +55,40 @@ describe("settings form", () => {
   });
 
   it("keeps the kind and the client ID both ways", () => {
-    const y: SettingsDTO = { ...emptySettings, kind: "yandex_disk", yandexClientId: "my-id_1", yandexAccount: "ivan", yandexSignedIn: true };
+    const y: SettingsDTO = { ...emptySettings, kind: "yandex_disk", yandexClientId: "my-id_1" };
     expect(toForm(y)).toMatchObject({ kind: "yandex_disk", yandexClientId: "my-id_1" });
     expect(fromForm(toForm(y))).toMatchObject({ kind: "yandex_disk", yandexClientId: "my-id_1" });
+  });
+
+  it("keeps the own Google client both ways", () => {
+    const g: SettingsDTO = { ...emptySettings, kind: "google_drive", googleClientId: "1-abc.apps.googleusercontent.com", googleClientSecret: "GOCSPX-own" };
+    expect(fromForm(toForm(g))).toEqual(g);
   });
 
   it("reads a kind that Go left empty as no storage", () => {
     expect(toForm({ ...emptySettings, kind: "" }).kind).toBe("none");
   });
+});
 
-  it("does not turn the sign-in state into something the form can change on its own", () => {
-    const f = toForm({ ...emptySettings, kind: "yandex_disk", yandexAccount: "ivan", yandexSignedIn: true });
-    expect(fromForm(f)).toMatchObject({ yandexAccount: "ivan", yandexSignedIn: true });
+describe("isCloud", () => {
+  it.each([
+    { kind: "yandex_disk", want: true },
+    { kind: "google_drive", want: true },
+    { kind: "ssh_postgres", want: false },
+    { kind: "none", want: false },
+    { kind: "", want: false },
+  ])("$kind → $want", ({ kind, want }) => {
+    expect(isCloud(kind)).toBe(want);
+  });
+});
+
+describe("Latest", () => {
+  it("counts only the answer to the latest request", () => {
+    const latest = new Latest();
+    const first = latest.begin();
+    expect(first()).toBe(true);
+    const second = latest.begin();
+    expect(first()).toBe(false);
+    expect(second()).toBe(true);
   });
 });
