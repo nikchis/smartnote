@@ -30,6 +30,25 @@ packages in [Packaging](packaging.md).
   same release. The relative links of the site become absolute: `privacy.html` turns into
   `https://nikchis.github.io/smartnote/privacy.html`; a test checks that every link starts with
   `https://`.
+- The interface has two languages. The frontend texts are in `frontend/src/lib/i18n/en.ts` and
+  `ru.ts`; the texts that Go makes (error messages, the browser pages of a sign-in, the titles of
+  file dialogs) are in `internal/i18n` (`en.go`, `ru.go`). Tests require both translations of every
+  key, so a new text goes into both catalogs at once. An error from Go carries both texts
+  (`UIError.messages`), and the frontend shows the one of the current language. Go keeps the choice
+  (`PrefsService`, `prefs.json` through `internal/adapter/prefs`). The Russian documents name the
+  elements by their Russian labels, with the English one in parentheses at the first mention.
+- Texts use only the hyphen `-`: tests forbid the en dash (U+2013) and the em dash (U+2014) in the
+  sources of `frontend/src` except tests (`frontend/src/lib/dashes.test.ts`), in the Go catalogs
+  (`internal/i18n`) and in the sign-in pages (`internal/adapter/cloudauth`).
+- The clouds share `internal/adapter/cloudhttp` (transport, errors, progress) and
+  `internal/adapter/cloudauth` (OAuth with PKCE, the loopback receiver, the browser pages); the
+  providers are `yadisk` and `gdrive`, which do not import each other. `internal/archtest` checks
+  the directions of the imports. The built-in clients are in `internal/adapter/yadisk/clientid.go`
+  and `internal/adapter/gdrive/clientid.go`; the Google client secret goes only to the token
+  endpoint of Google and never into the log or a DTO.
+- The **How to register** links of Settings open `docs/yandex-disk.md` and `docs/google-drive.md` on
+  `master` (`frontend/src/lib/external.ts`): keep these paths and the sections about your own
+  client in them.
 
 ## Check 1: bindings and errors
 

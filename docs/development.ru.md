@@ -30,6 +30,25 @@
   же выпуске. Относительные ссылки сайта становятся абсолютными: `privacy.html` превращается в
   `https://nikchis.github.io/smartnote/privacy.html`; тест проверяет, что каждая ссылка начинается с
   `https://`.
+- У интерфейса два языка. Тексты фронтенда - в `frontend/src/lib/i18n/en.ts` и `ru.ts`; тексты,
+  которые формирует Go (сообщения об ошибках, страницы браузера при входе, заголовки файловых
+  диалогов), - в `internal/i18n` (`en.go`, `ru.go`). Тесты требуют оба перевода каждого ключа,
+  поэтому новый текст сразу добавляется в оба каталога. Ошибка из Go несёт оба текста
+  (`UIError.messages`), а фронтенд показывает текст текущего языка. Выбор хранит Go (`PrefsService`,
+  `prefs.json` через `internal/adapter/prefs`). Русская документация называет элементы по русским
+  надписям, при первом упоминании - с английскими в скобках.
+- В текстах только дефис `-`: тесты запрещают короткое (U+2013) и длинное (U+2014) тире в исходниках
+  `frontend/src`, кроме тестов (`frontend/src/lib/dashes.test.ts`), в каталогах Go (`internal/i18n`)
+  и на страницах входа (`internal/adapter/cloudauth`).
+- Облака используют общие `internal/adapter/cloudhttp` (транспорт, ошибки, прогресс) и
+  `internal/adapter/cloudauth` (OAuth с PKCE, приёмник на loopback, страницы браузера); провайдеры -
+  `yadisk` и `gdrive`, они не импортируют друг друга. Направления импортов проверяет
+  `internal/archtest`. Встроенные клиенты - в `internal/adapter/yadisk/clientid.go` и
+  `internal/adapter/gdrive/clientid.go`; client secret Google уходит только на адрес обмена токенов
+  Google и никогда не попадает в журнал и DTO.
+- Ссылки **Как зарегистрировать** (**How to register**) в **Настройках** (**Settings**) открывают
+  `docs/yandex-disk.md` и `docs/google-drive.md` в `master` (`frontend/src/lib/external.ts`):
+  сохраняйте эти пути и разделы о своём клиенте в них.
 
 ## Проверка 1: привязки и ошибки
 
