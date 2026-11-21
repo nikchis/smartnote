@@ -42,6 +42,7 @@ const (
 	ErrRemoteOutcomeUnknown Key = "error.remote_outcome_unknown"
 	ErrLoopbackUnavailable  Key = "error.loopback_unavailable"
 	ErrLoopbackNoCode       Key = "error.loopback_unavailable_no_code"
+	ErrBrowserUnavailable   Key = "error.browser_unavailable"
 	ErrSearchUnavailable    Key = "error.search_unavailable"
 	ErrTimeout              Key = "error.timeout"
 	ErrCanceled             Key = "error.canceled"
@@ -142,6 +143,7 @@ var en = map[Key]string{ //nolint:gosec // catalog texts, not credentials
 	ErrRemoteOutcomeUnknown: "The result of the backup is unknown. Connect again to check the remote storage.",
 	ErrLoopbackUnavailable:  "The local sign-in address is unavailable. Enter the code manually.",
 	ErrLoopbackNoCode:       "Could not start sign-in on this computer. Try again.",
+	ErrBrowserUnavailable:   "Could not open the web browser. Make sure a default browser is set up and try again.",
 	ErrSearchUnavailable:    "Search unavailable",
 	ErrTimeout:              "The operation timed out.",
 	ErrCanceled:             "The operation was canceled.",

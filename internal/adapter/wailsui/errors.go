@@ -74,6 +74,7 @@ const (
 	codeRemoteTooLarge        = "remote_too_large"
 	codeRemoteOutcomeUnknown  = "remote_outcome_unknown"
 	codeLoopbackUnavailable   = "loopback_unavailable"
+	codeBrowserUnavailable    = "browser_unavailable"
 	// codeSearchUnavailable is a search the engine could not run (search
 	// spec §9.1, §11); the interface shows its message in the status line.
 	codeSearchUnavailable = "search_unavailable"
@@ -113,6 +114,7 @@ var sentinels = []struct {
 	{err: domain.ErrRemoteTooLarge, code: codeRemoteTooLarge, key: i18n.ErrRemoteTooLarge},
 	{err: domain.ErrRemoteOutcomeUnknown, code: codeRemoteOutcomeUnknown, key: i18n.ErrRemoteOutcomeUnknown},
 	{err: domain.ErrLoopbackUnavailable, code: codeLoopbackUnavailable, key: i18n.ErrLoopbackUnavailable},
+	{err: domain.ErrBrowserUnavailable, code: codeBrowserUnavailable, key: i18n.ErrBrowserUnavailable},
 	{err: usecase.ErrSearchUnavailable, code: codeSearchUnavailable, key: i18n.ErrSearchUnavailable},
 }
 

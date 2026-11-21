@@ -1,8 +1,13 @@
+<script lang="ts" module>
+  /** CLIENT_FIELDS are the own client fields of Advanced as Go names them in its validation errors. */
+  const CLIENT_FIELDS = ["yandex_client_id", "google_client_id", "google_client_secret"];
+</script>
+
 <script lang="ts">
   // Settings edits the connection, the client SSH key and the trusted server
   // key (v1 UDlgConnection). The form holds the server key's fingerprint only;
   // a key trusted during Test, like a reset, is saved only with OK (spec §6.1).
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import exportIcon from "../assets/icons/export.png";
   import eyeIcon from "../assets/icons/eye.png";
   import gearIcon from "../assets/icons/gear.png";
@@ -14,7 +19,7 @@
   import { errorMsg, messageOf, parseError, type UIError } from "../lib/errors";
   import { GOOGLE_DOCS, openExternal, YANDEX_DOCS } from "../lib/external";
   import { i18n, msg, type Key } from "../lib/i18n.svelte";
-  import { emptySettings, fromForm, isCloud, Latest, toForm, type SettingsForm, type SignInPhase } from "../lib/settings";
+  import { emptySettings, fromForm, isCloud, Latest, toForm, TYPING_PAUSE_MS, type SettingsForm, type SignInPhase } from "../lib/settings";
   import { modal } from "../lib/modal";
   import { settingsButtons } from "../lib/rules";
   import { LIMITS, secretLen } from "../lib/text";
@@ -38,6 +43,18 @@
   let account: AccountDTO | undefined = $state();
   /** accountTurn numbers the changes of account: the reads here, the sign-ins and Sign outs of the block. */
   const accountTurn = new Latest();
+  /**
+   * advancedOpen is the user's choice to show Advanced, one for both clouds:
+   * it outlives the errors and the changes of the kind, which recreate the
+   * block, until the dialog closes. A validation error of an own client field
+   * opens it, since the field to fix is there.
+   */
+  let advancedOpen = $state(false);
+  $effect(() => {
+    if (CLIENT_FIELDS.includes(invalid)) advancedOpen = true;
+  });
+  /** typing is the read of the account due when typing in an own client field pauses. */
+  let typing: ReturnType<typeof setTimeout> | undefined;
 
   onMount(async () => {
     try {
@@ -52,13 +69,13 @@
 
   /**
    * readAccount asks Go for the sign-in of the kind and the client of the
-   * draft (spec §8), when the dialog opens, the kind changes or an own
-   * client field is left changed. Go counts the pending sign-ins and the
-   * Sign outs of this dialog; the saved settings say nothing about them. An
-   * answer for an older draft is dropped. Another kind shows its block
-   * without buttons until the answer comes; keep leaves the block of the
-   * same kind as it is, since leaving the field fires change on the mousedown
-   * of the button the click is for. A sign-in or Sign out started meanwhile
+   * draft (spec §8), when the dialog opens, the kind changes, an own client
+   * field is left changed or typing in it pauses. Go counts the pending
+   * sign-ins and the Sign outs of this dialog; the saved settings say nothing
+   * about them. An answer for an older draft is dropped. Another kind shows
+   * its block without buttons until the answer comes; keep leaves the block
+   * of the same kind as it is, since leaving the field fires change on the
+   * mousedown of the button the click is for. A sign-in or Sign out started meanwhile
    * outdates the answer, and SignIn sends the draft as it is then.
    */
   async function readAccount(keep = false) {
@@ -74,6 +91,24 @@
       await dialogs.error(errorMsg(e));
     }
   }
+
+  /** clientTyped reads the account once typing in an own client field pauses; change fires only when the field is left. */
+  function clientTyped() {
+    clearTimeout(typing);
+    typing = setTimeout(() => {
+      typing = undefined;
+      void readAccount(true);
+    }, TYPING_PAUSE_MS);
+  }
+
+  /** clientLeft reads the account at once, so that no read starts after a sign-in the click that left the field begins. */
+  function clientLeft() {
+    clearTimeout(typing);
+    typing = undefined;
+    void readAccount(true);
+  }
+
+  onDestroy(() => clearTimeout(typing));
 
   async function fail(e: unknown) {
     const err: UIError = parseError(e);
@@ -201,25 +236,25 @@
             <CloudAccount kind={form.kind} bind:account latest={accountTurn} {form} bind:phase bind:invalid disabled={!!busy} />
           </div>
           {#if google}
-            <details class="wide" open={invalid === "google_client_id" || invalid === "google_client_secret" || undefined}>
+            <details class="wide" bind:open={advancedOpen}>
               <summary>{i18n.t("settings.advanced")}</summary>
               <label class="wide">
                 {i18n.t("settings.ownClientId")}
-                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.googleClientId} onchange={() => readAccount(true)} autocomplete="off" aria-invalid={invalid === "google_client_id"} />
+                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.googleClientId} oninput={clientTyped} onchange={clientLeft} autocomplete="off" aria-invalid={invalid === "google_client_id"} />
               </label>
               <label class="wide">
                 {i18n.t("settings.ownClientSecret")}
-                <input type="password" aria-label={i18n.t("settings.ownClientSecretLabel")} bind:value={form.googleClientSecret} onchange={() => readAccount(true)} autocomplete="off" aria-invalid={invalid === "google_client_secret"} />
+                <input type="password" aria-label={i18n.t("settings.ownClientSecretLabel")} bind:value={form.googleClientSecret} oninput={clientTyped} onchange={clientLeft} autocomplete="off" aria-invalid={invalid === "google_client_secret"} />
               </label>
               <a href={GOOGLE_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(GOOGLE_DOCS))}>{i18n.t("settings.howToRegister")}</a>
               <p class="muted">{i18n.t("settings.otherGoogleClient")}</p>
             </details>
           {:else}
-            <details class="wide" open={invalid === "yandex_client_id" || undefined}>
+            <details class="wide" bind:open={advancedOpen}>
               <summary>{i18n.t("settings.advanced")}</summary>
               <label class="wide">
                 {i18n.t("settings.ownClientId")}
-                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.yandexClientId} onchange={() => readAccount(true)} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
+                <input aria-label={i18n.t("settings.ownClientIdLabel")} bind:value={form.yandexClientId} oninput={clientTyped} onchange={clientLeft} autocomplete="off" aria-invalid={invalid === "yandex_client_id"} />
               </label>
               <a href={YANDEX_DOCS} onclick={(e) => (e.preventDefault(), void openExternal(YANDEX_DOCS))}>{i18n.t("settings.howToRegister")}</a>
               <p class="muted">{i18n.t("settings.otherClient")}</p>

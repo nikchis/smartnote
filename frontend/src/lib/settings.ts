@@ -35,6 +35,9 @@ export class Latest {
   }
 }
 
+/** TYPING_PAUSE_MS is how long typing in a field stops before the form acts on its value. */
+export const TYPING_PAUSE_MS = 400;
+
 /** SignInPhase: idle, no sign-in; browser, waiting for the browser; manual, waiting for the code. */
 export type SignInPhase = "idle" | "browser" | "manual";
 

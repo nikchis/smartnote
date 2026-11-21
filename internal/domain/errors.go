@@ -29,6 +29,7 @@ var (
 	ErrRemoteOutcomeUnknown  = errors.New("outcome of the remote operation is unknown")
 	ErrLoopbackUnavailable   = errors.New("local sign-in address is unavailable")
 	ErrManualUnsupported     = errors.New("sign-in with a code is not available for this storage")
+	ErrBrowserUnavailable    = errors.New("the web browser could not be opened")
 )
 
 // ValidationError reports an invalid field. It matches ErrValidation.

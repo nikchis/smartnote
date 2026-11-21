@@ -3,6 +3,7 @@ import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AccountDTO, SettingsDTO } from "../lib/api";
 import { i18n } from "../lib/i18n.svelte";
+import { TYPING_PAUSE_MS } from "../lib/settings";
 
 // Settings talks to Go through the generated bindings; they are replaced by
 // fakes whose answers the test controls.
@@ -118,6 +119,17 @@ const edit = async (input: HTMLInputElement, value: string) => {
   input.value = value;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
+  await settle();
+};
+/** type types value into input without leaving it: input fires, change does not. */
+const type = async (input: HTMLInputElement, value: string) => {
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await settle();
+};
+/** pause waits until typing counts as paused. */
+const pause = async () => {
+  await new Promise((r) => setTimeout(r, TYPING_PAUSE_MS + 20));
   await settle();
 };
 
@@ -556,6 +568,42 @@ describe("Settings account of the draft", () => {
     expect(accountButtons()).toEqual(["Sign in again", "Sign out"]);
   });
 
+  // The browser fires change only when the field is left: the secret that
+  // completes the pair must show the sign-in while the field keeps the focus.
+  it("re-reads the account once typing in an own client field pauses", async () => {
+    await open({ kind: "google_drive" });
+    await edit(field("Own client ID"), "1-abc.apps.googleusercontent.com");
+    expect(has("Not signed in")).toBe(true);
+    const reads = go.account.mock.calls.length;
+
+    go.account.mockResolvedValue(signedIn("tester@example.invalid"));
+    await type(field("Own client secret"), "GOCSPX-o");
+    await type(field("Own client secret"), "GOCSPX-own");
+    expect(go.account).toHaveBeenCalledTimes(reads);
+    await pause();
+
+    expect(go.account).toHaveBeenCalledTimes(reads + 1);
+    expect(go.account).toHaveBeenLastCalledWith(expect.objectContaining({ googleClientId: "1-abc.apps.googleusercontent.com", googleClientSecret: "GOCSPX-own" }));
+    expect(has("Signed in as tester@example.invalid")).toBe(true);
+  });
+
+  // A read that starts after the sign-in would outdate the sign-in's answer.
+  it("leaving the field reads at once and drops the read of the pause", async () => {
+    await open({ kind: "google_drive" });
+    const reads = go.account.mock.calls.length;
+    const login = pending<string>();
+    go.signIn.mockReturnValue(login.promise);
+    await edit(field("Own client secret"), "GOCSPX-own");
+    expect(go.account).toHaveBeenCalledTimes(reads + 1);
+
+    await press("Sign in with Google");
+    await pause();
+    expect(go.account).toHaveBeenCalledTimes(reads + 1);
+    login.resolve("tester@example.invalid");
+    await settle();
+    expect(has("Signed in as tester@example.invalid")).toBe(true);
+  });
+
   // Leaving the field fires change on the mousedown of the button under the
   // pointer: the button must still be there for the click that follows.
   it("signs in with the first click after an own client field changes", async () => {
@@ -720,6 +768,57 @@ describe("Settings Advanced", () => {
     expect(a.getAttribute("href")).toBe("https://github.com/nikchis/smartnote/blob/master/docs/yandex-disk.md");
     a.click();
     expect(go.openURL).toHaveBeenCalledWith("https://github.com/nikchis/smartnote/blob/master/docs/yandex-disk.md");
+  });
+
+  const advanced = () => target.querySelector("details")!;
+  /** toggleAdvanced opens or closes Advanced as a click on its summary does. */
+  const toggleAdvanced = async () => {
+    advanced().querySelector("summary")!.click();
+    await settle();
+  };
+
+  it("stays open after an error that is not about the own client", async () => {
+    await open({ kind: "google_drive" });
+    expect(advanced().open).toBe(false);
+    await toggleAdvanced();
+    expect(advanced().open).toBe(true);
+
+    go.test.mockRejectedValue(uiError("validation", "Sign in to Google Drive first, or choose None (local only).", "google_account"));
+    await press("Test connection");
+    expect(go.error).toHaveBeenCalledOnce();
+    expect(advanced().open).toBe(true);
+
+    go.test.mockRejectedValue(uiError("internal", "boom"));
+    await press("Test connection");
+    expect(advanced().open).toBe(true);
+  });
+
+  it("keeps the user's choice when the storage kind changes", async () => {
+    await open({ kind: "google_drive" });
+    await toggleAdvanced();
+
+    await choose("Yandex Disk");
+    expect(advanced().open).toBe(true);
+    await choose("None (local only)");
+    await choose("Google Drive");
+    expect(advanced().open).toBe(true);
+
+    await toggleAdvanced();
+    await choose("Yandex Disk");
+    expect(advanced().open).toBe(false);
+  });
+
+  it("stays closed after an error once the user closed it", async () => {
+    await open({ kind: "google_drive" });
+    go.signIn.mockRejectedValue(uiError("validation", "Client ID is required.", "google_client_id"));
+    await press("Sign in with Google");
+    expect(advanced().open).toBe(true);
+    await toggleAdvanced();
+    expect(advanced().open).toBe(false);
+
+    go.test.mockRejectedValue(uiError("validation", "Sign in to Google Drive first, or choose None (local only).", "google_account"));
+    await press("Test connection");
+    expect(advanced().open).toBe(false);
   });
 });
 

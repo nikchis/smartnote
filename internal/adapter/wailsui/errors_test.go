@@ -272,6 +272,41 @@ func TestLoopbackUnavailableTextByProvider(t *testing.T) {
 	}
 }
 
+// TestBrowserUnavailable: a browser that does not open at the start of a
+// sign-in, Yandex or Google, has its own code and a text that tells what to
+// do. Its cause, which may name the sign-in URL, is neither shown nor logged.
+func TestBrowserUnavailable(t *testing.T) {
+	const url = "https://accounts.google.com/o/oauth2/v2/auth?state=STATE-MARKER"
+
+	err := fmt.Errorf("open browser: %w", fmt.Errorf("%w: exec xdg-open %s", domain.ErrBrowserUnavailable, url))
+
+	ui := classify(err)
+	if ui.Code != "browser_unavailable" {
+		t.Errorf("code = %q, want browser_unavailable", ui.Code)
+	}
+
+	const (
+		en = "Could not open the web browser. Make sure a default browser is set up and try again."
+		ru = "Не удалось открыть браузер. Проверьте, что в системе выбран браузер по умолчанию, и повторите попытку."
+	)
+
+	if ui.Message != en || ui.Messages[i18n.EN] != en || ui.Messages[i18n.RU] != ru {
+		t.Errorf("texts = %q %q, want %q %q", ui.Messages[i18n.EN], ui.Messages[i18n.RU], en, ru)
+	}
+
+	if strings.Contains(ui.Error(), "STATE-MARKER") || strings.Contains(ui.Error(), "accounts.google.com") {
+		t.Errorf("UIError %s carries the sign-in URL", ui.Error())
+	}
+
+	var buf bytes.Buffer
+
+	LogError(slog.New(slog.NewTextHandler(&buf, nil)), "sign in", err)
+
+	if buf.Len() != 0 {
+		t.Errorf("log = %q, want nothing for an error the interface explains", buf.String())
+	}
+}
+
 func TestToUIErrorNewSentinels(t *testing.T) {
 	tests := []struct {
 		err        error

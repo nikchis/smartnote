@@ -1177,12 +1177,13 @@ func TestSignInOpenURLFails(t *testing.T) {
 	noBrowser := errors.New("no browser")
 	f.browser.err = noBrowser
 
-	if _, err := f.c.SignIn(context.Background(), yandexSettings("a")); !errors.Is(err, noBrowser) {
-		t.Errorf("SignIn = %v, want %v", err, noBrowser)
+	// Any failure to open the URL is a browser that is unavailable; the cause stays for errors.Is.
+	if _, err := f.c.SignIn(context.Background(), yandexSettings("a")); !errors.Is(err, domain.ErrBrowserUnavailable) || !errors.Is(err, noBrowser) {
+		t.Errorf("SignIn = %v, want ErrBrowserUnavailable wrapping %v", err, noBrowser)
 	}
 
-	if err := f.c.SignInManual(context.Background(), yandexSettings("a")); !errors.Is(err, noBrowser) {
-		t.Errorf("SignInManual = %v, want %v", err, noBrowser)
+	if err := f.c.SignInManual(context.Background(), yandexSettings("a")); !errors.Is(err, domain.ErrBrowserUnavailable) || !errors.Is(err, noBrowser) {
+		t.Errorf("SignInManual = %v, want ErrBrowserUnavailable wrapping %v", err, noBrowser)
 	}
 
 	for i, l := range f.auth.logins {

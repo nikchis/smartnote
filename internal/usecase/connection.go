@@ -450,8 +450,9 @@ func (c *Connection) Account(ctx context.Context, s domain.ConnectionSettings) (
 }
 
 // beginSignIn ends the previous sign-in, starts a new one with the
-// authorizer of s's kind for the effective client of s and opens its URL. It
-// returns the sign-in and its context, which CancelSignIn cancels.
+// authorizer of s's kind for the effective client of s and opens its URL; a
+// URL that does not open is domain.ErrBrowserUnavailable. It returns the
+// sign-in and its context, which CancelSignIn cancels.
 func (c *Connection) beginSignIn(ctx context.Context, s domain.ConnectionSettings, manual bool) (*signIn, context.Context, error) {
 	auth := c.auth[s.Kind()]
 	if auth == nil {
@@ -476,7 +477,7 @@ func (c *Connection) beginSignIn(ctx context.Context, s domain.ConnectionSetting
 	if c.openURL != nil {
 		if err := c.openURL(sess.login.URL()); err != nil {
 			c.endSignIn(sess)
-			return nil, nil, fmt.Errorf("open browser: %w", err)
+			return nil, nil, fmt.Errorf("open browser: %w: %w", domain.ErrBrowserUnavailable, err)
 		}
 	}
 

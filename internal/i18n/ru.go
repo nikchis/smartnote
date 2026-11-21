@@ -40,6 +40,7 @@ var ru = map[Key]string{ //nolint:gosec // catalog texts, not credentials
 	ErrRemoteOutcomeUnknown: "Неизвестно, создана ли резервная копия. Подключитесь снова, чтобы проверить удалённое хранилище.",
 	ErrLoopbackUnavailable:  "Локальный адрес для входа недоступен. Введите код вручную.",
 	ErrLoopbackNoCode:       "Не удалось начать вход на этом компьютере. Повторите попытку.",
+	ErrBrowserUnavailable:   "Не удалось открыть браузер. Проверьте, что в системе выбран браузер по умолчанию, и повторите попытку.",
 	ErrSearchUnavailable:    "Поиск недоступен",
 	ErrTimeout:              "Время ожидания операции истекло.",
 	ErrCanceled:             "Операция отменена.",

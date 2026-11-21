@@ -52,6 +52,7 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 		ErrNotConnected, ErrRemoteChanged, ErrLocalChanged, ErrBusy, ErrStorageExists, ErrStorageMissing,
 		ErrKeyPassphraseRequired, ErrKeyMissing, ErrNoPendingOperation,
 		ErrReauthRequired, ErrRemoteDamaged, ErrRemoteTooLarge, ErrRemoteOutcomeUnknown, ErrLoopbackUnavailable,
+		ErrBrowserUnavailable,
 	}
 	for i, a := range all {
 		for j, b := range all {
