@@ -40,7 +40,7 @@ func TestGoogleReasons(t *testing.T) {
 			d := newFakeDrive(t)
 			d.set(func(d *fakeDrive) { d.fail[epList] = tc.fail })
 
-			err := readErr(t, newTestStore(d))
+			err := readErr(t, newTestStore(t, d))
 
 			ce := cloudError(t, err)
 			if ce.Provider != domain.KindGoogleDrive || ce.Status != tc.fail.status || ce.Code != tc.code ||
@@ -96,7 +96,7 @@ func TestAuthorizationOnlyToGoogleHosts(t *testing.T) {
 		opts := testOptions(d)
 		opts.allowHost = nil
 
-		err := readErr(t, newStore(d.endpoints(), testTokens(), opts))
+		err := readErr(t, newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), opts))
 		if !errors.Is(err, errForeignHost) {
 			t.Errorf("Read: err = %v, want errForeignHost", err)
 		}
@@ -111,7 +111,7 @@ func TestAuthorizationOnlyToGoogleHosts(t *testing.T) {
 		e := d.endpoints()
 		e.API = strings.Replace(e.API, "https://", "http://", 1)
 
-		if err := readErr(t, newStore(e, testTokens(), testOptions(d))); !errors.Is(err, errForeignHost) {
+		if err := readErr(t, newStore(e, testTokens(), fakeClient, testRefresher(t, d), testOptions(d))); !errors.Is(err, errForeignHost) {
 			t.Errorf("Read: err = %v, want errForeignHost", err)
 		}
 	})
@@ -125,7 +125,7 @@ func TestAuthorizationOnlyToGoogleHosts(t *testing.T) {
 		d := newFakeDrive(t)
 		d.set(func(d *fakeDrive) { d.redirectTo = other.URL + "/elsewhere" })
 
-		err := readErr(t, newTestStore(d))
+		err := readErr(t, newTestStore(t, d))
 		if ce := cloudError(t, err); ce.Status != http.StatusFound {
 			t.Errorf("CloudError = %+v, want the redirect status", ce)
 		}

@@ -37,7 +37,7 @@ var rules = []rule{
 	{pkg: internal + "usecase", onlyProject: []string{internal + "domain"}},
 	{pkg: internal + "i18n", onlyProject: []string{}},
 	{pkg: adapter + "yadisk", forbidden: []string{adapter + "gdrive", adapter + "wailsui"}},
-	{pkg: adapter + "gdrive", optional: true, forbidden: []string{adapter + "yadisk", adapter + "wailsui"}},
+	{pkg: adapter + "gdrive", forbidden: []string{adapter + "yadisk", adapter + "wailsui"}},
 	{pkg: adapter + "wailsui", forbidden: []string{adapter + "yadisk", adapter + "gdrive", adapter + "cloudauth"}},
 }
 

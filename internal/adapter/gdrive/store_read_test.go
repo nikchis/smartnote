@@ -45,8 +45,18 @@ func testOptions(d *fakeDrive) storeOptions {
 	}
 }
 
-func newTestStore(d *fakeDrive) *Store {
-	return newStore(d.endpoints(), testTokens(), testOptions(d))
+func newTestStore(t *testing.T, d *fakeDrive) *Store {
+	t.Helper()
+
+	return newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), testOptions(d))
+}
+
+// testRefresher is the real refresh of the Google sign-in against the
+// emulator's token endpoint.
+func testRefresher(t *testing.T, d *fakeDrive) Refresher {
+	t.Helper()
+
+	return googleAuthorizer(t, oauthProvider(d.endpoints()), d.oauth.Client(), new([]string))
 }
 
 // readErr reads the container with s and returns only the error.
@@ -106,7 +116,7 @@ func TestReadMissing(t *testing.T) {
 	d := newFakeDrive(t)
 	d.put("other.bin", []byte("not ours"), testNow)
 
-	data, version, found := mustRead(t, newTestStore(d))
+	data, version, found := mustRead(t, newTestStore(t, d))
 	if found || data != nil || version != "" {
 		t.Errorf("Read = %q, %q, %v; want nothing", data, version, found)
 	}
@@ -117,7 +127,7 @@ func TestReadSkipsTrashed(t *testing.T) {
 	id := d.put(container, []byte("trashed"), testNow)
 	d.set(func(d *fakeDrive) { d.file(id).trashed = true })
 
-	if _, _, found := mustRead(t, newTestStore(d)); found {
+	if _, _, found := mustRead(t, newTestStore(t, d)); found {
 		t.Error("a trashed file was read")
 	}
 }
@@ -130,7 +140,7 @@ func TestReadVersionIsFileIDAndMD5(t *testing.T) {
 		d := newFakeDrive(t)
 		id := d.put(container, []byte("sealed container"), testNow)
 
-		data, version, found := mustRead(t, newTestStore(d))
+		data, version, found := mustRead(t, newTestStore(t, d))
 		if !found || string(data) != "sealed container" || version != id+":"+md5Of([]byte("sealed container")) {
 			t.Errorf("Read = %q, %q, %v; want the container with version <id>:<md5>", data, version, found)
 		}
@@ -142,7 +152,7 @@ func TestReadVersionIsFileIDAndMD5(t *testing.T) {
 			id := d.put(container, []byte("sealed container"), testNow)
 			d.set(func(d *fakeDrive) { d.file(id).md5 = sum })
 
-			if err := readErr(t, newTestStore(d)); !errors.Is(err, blobremote.ErrVersionMismatch) {
+			if err := readErr(t, newTestStore(t, d)); !errors.Is(err, blobremote.ErrVersionMismatch) {
 				t.Fatalf("Read: err = %v, want ErrVersionMismatch", err)
 			}
 
@@ -176,7 +186,7 @@ func TestReadVersionBoundToBytes(t *testing.T) {
 			}
 		})
 
-		data, version, found := mustRead(t, newTestStore(d))
+		data, version, found := mustRead(t, newTestStore(t, d))
 		if !found || string(data) != "new" || version != id+":"+md5Of([]byte("new")) {
 			t.Errorf("Read = %q, %q, %v; want the new bytes with their version", data, version, found)
 		}
@@ -198,7 +208,7 @@ func TestReadVersionBoundToBytes(t *testing.T) {
 			}
 		})
 
-		if err := readErr(t, newTestStore(d)); !errors.Is(err, blobremote.ErrVersionMismatch) {
+		if err := readErr(t, newTestStore(t, d)); !errors.Is(err, blobremote.ErrVersionMismatch) {
 			t.Fatalf("Read: err = %v, want ErrVersionMismatch", err)
 		}
 
@@ -220,7 +230,7 @@ func TestReadFileDeletedAfterList(t *testing.T) {
 		}
 	})
 
-	data, version, found := mustRead(t, newTestStore(d))
+	data, version, found := mustRead(t, newTestStore(t, d))
 	if found || data != nil || version != "" {
 		t.Errorf("Read = %q, %q, %v; want nothing", data, version, found)
 	}
@@ -232,7 +242,7 @@ func TestReadTooLarge(t *testing.T) {
 		id := d.put(container, []byte("small"), testNow)
 		d.set(func(d *fakeDrive) { d.file(id).size = 64<<20 + 1 })
 
-		if err := readErr(t, newTestStore(d)); !errors.Is(err, domain.ErrRemoteDamaged) {
+		if err := readErr(t, newTestStore(t, d)); !errors.Is(err, domain.ErrRemoteDamaged) {
 			t.Fatalf("Read: err = %v, want ErrRemoteDamaged", err)
 		}
 
@@ -246,7 +256,7 @@ func TestReadTooLarge(t *testing.T) {
 		id := d.put(container, make([]byte, 64<<20+1), testNow)
 		d.set(func(d *fakeDrive) { d.file(id).size = 10 })
 
-		if err := readErr(t, newTestStore(d)); !errors.Is(err, domain.ErrRemoteDamaged) {
+		if err := readErr(t, newTestStore(t, d)); !errors.Is(err, domain.ErrRemoteDamaged) {
 			t.Fatalf("Read: err = %v, want ErrRemoteDamaged", err)
 		}
 	})
@@ -274,7 +284,7 @@ func TestListPicksEarliestAcrossPages(t *testing.T) {
 		opts := testOptions(d)
 		opts.log = slog.New(slog.NewTextHandler(&log, nil))
 
-		data, version, found := mustRead(t, newStore(d.endpoints(), testTokens(), opts))
+		data, version, found := mustRead(t, newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), opts))
 		if !found || string(data) != "a" || version != ids[4]+":"+md5Of([]byte("a")) {
 			t.Errorf("Read = %q, %q, %v; want the earliest file a", data, version, found)
 		}
@@ -301,7 +311,7 @@ func TestListPicksEarliestAcrossPages(t *testing.T) {
 		d.putID("c-file", container, []byte("c"), testNow.Add(time.Second))
 		d.putID("a-file", container, []byte("a"), testNow)
 
-		data, version, _ := mustRead(t, newTestStore(d))
+		data, version, _ := mustRead(t, newTestStore(t, d))
 		if string(data) != "a" || !strings.HasPrefix(version, "a-file:") {
 			t.Errorf("Read = %q, %q; want a-file", data, version)
 		}
@@ -325,7 +335,7 @@ func TestListMoreThanTenPagesIsDamaged(t *testing.T) {
 			d.put(container, []byte("x"), testNow.Add(time.Duration(i)*time.Second))
 		}
 
-		err := readErr(t, newTestStore(d))
+		err := readErr(t, newTestStore(t, d))
 		if !errors.Is(err, tc.err) {
 			t.Errorf("%d pages: err = %v, want %v", tc.files, err, tc.err)
 		}
@@ -344,7 +354,7 @@ func TestRequestsUseFieldMasks(t *testing.T) {
 	d.put(container, []byte("first"), testNow)
 	d.put(container, []byte("second"), testNow.Add(time.Second))
 
-	mustRead(t, newTestStore(d))
+	mustRead(t, newTestStore(t, d))
 
 	reqs := d.reqs()
 	if len(reqs) != 3 {
@@ -381,7 +391,7 @@ func TestListQueryEscapesName(t *testing.T) {
 	name := `it's\odd.bin`
 	d.put(name, []byte("odd"), testNow)
 
-	data, _, found, err := newTestStore(d).Read(t.Context(), name)
+	data, _, found, err := newTestStore(t, d).Read(t.Context(), name)
 	if err != nil || !found || string(data) != "odd" {
 		t.Errorf("Read = %q, %v, %v; want the file", data, found, err)
 	}
@@ -404,7 +414,7 @@ func TestReadReportsDownloadProgress(t *testing.T) {
 		reports = append(reports, p)
 	}
 
-	mustRead(t, newStore(d.endpoints(), testTokens(), opts))
+	mustRead(t, newStore(d.endpoints(), testTokens(), fakeClient, testRefresher(t, d), opts))
 
 	mu.Lock()
 	defer mu.Unlock()

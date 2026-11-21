@@ -94,6 +94,7 @@ type fakeDrive struct {
 	// Modes.
 	pageLimit   int    // the largest page the list gives, below the asked pageSize; 0 the asked size
 	ignoreOrder bool   // the list keeps the creation order, whatever orderBy asks
+	denyAll     bool   // the API answers 401 to every token, as for a revoked grant
 	redirectTo  string // the API redirects every request to this URL
 	fail        map[string]fakeFailure
 	beforeMedia func(d *fakeDrive) // called under the lock before alt=media is served
@@ -221,7 +222,7 @@ func (d *fakeDrive) serveAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Header.Get("Authorization") != "Bearer "+d.access {
+	if d.denyAll || r.Header.Get("Authorization") != "Bearer "+d.access {
 		writeError(w, http.StatusUnauthorized, "authError")
 		return
 	}

@@ -44,11 +44,6 @@ type driveFile struct {
 // The rest are duplicates nobody reads; their number is logged, without
 // IDs. More than listMaxPages pages is domain.ErrRemoteDamaged.
 func (s *Store) list(ctx context.Context, name string) ([]driveFile, error) {
-	tok, err := s.token(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	q := url.Values{
 		"spaces":   {appDataFolder},
 		"q":        {"name='" + escapeQuery(name) + "' and trashed=false"},
@@ -70,7 +65,10 @@ func (s *Store) list(ctx context.Context, name string) ([]driveFile, error) {
 			NextPageToken string      `json:"nextPageToken"`
 		}
 
-		if err := s.api.getJSON(ctx, stepList, u, tok.Access, &page); err != nil {
+		err = s.authorized(ctx, func(access string) error {
+			return s.api.getJSON(ctx, stepList, u, access, &page)
+		})
+		if err != nil {
 			return nil, fmt.Errorf("list %s: %w", name, err)
 		}
 

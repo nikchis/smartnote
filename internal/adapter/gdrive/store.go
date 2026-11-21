@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nikchis/smartnote/internal/adapter/blobremote"
@@ -52,25 +53,36 @@ type storeOptions struct {
 
 // Store is the object store over appDataFolder of Google Drive (spec §5):
 // an object is the effective file of its name, its version is
-// "<fileId>:<md5Checksum>" (spec §5.1). A Store serves one operation and is
-// not safe for concurrent use.
+// "<fileId>:<md5Checksum>" (spec §5.1). A Store serves one operation; if its
+// requests run concurrently they share the token and refresh it once
+// (spec §5.6).
 type Store struct {
-	api      apiClient
-	tokens   usecase.CloudTokenSource
+	api       apiClient
+	tokens    usecase.CloudTokenSource
+	client    usecase.CloudClient // sent with the refresh
+	refresher Refresher
+
+	// refreshMu serializes the refresh, so requests that share a token do
+	// not refresh it twice.
+	refreshMu sync.Mutex
+
 	log      *slog.Logger
 	progress usecase.ProgressFunc
 	now      func() time.Time
 }
 
 // newStore returns a store over the API of e that signs the requests with
-// the token of tokens.
-func newStore(e Endpoints, tokens usecase.CloudTokenSource, opts storeOptions) *Store {
+// the token of tokens and renews it with refresher as the OAuth client
+// client (usecase.EffectiveClient of the target).
+func newStore(e Endpoints, tokens usecase.CloudTokenSource, client usecase.CloudClient, refresher Refresher, opts storeOptions) *Store {
 	s := &Store{
-		api:      newAPIClient(opts.http, e.API, opts.allowHost),
-		tokens:   tokens,
-		log:      cmp.Or(opts.log, slog.New(slog.DiscardHandler)),
-		progress: opts.progress,
-		now:      opts.now,
+		api:       newAPIClient(opts.http, e.API, opts.allowHost),
+		tokens:    tokens,
+		client:    client,
+		refresher: refresher,
+		log:       cmp.Or(opts.log, slog.New(slog.DiscardHandler)),
+		progress:  opts.progress,
+		now:       opts.now,
 	}
 
 	if s.now == nil {
@@ -115,17 +127,15 @@ func (s *Store) download(ctx context.Context, name string) (data []byte, f drive
 		return nil, driveFile{}, false, fmt.Errorf("remote object of %d bytes: %w", f.Size, domain.ErrRemoteDamaged)
 	}
 
-	tok, err := s.token(ctx)
-	if err != nil {
-		return nil, driveFile{}, false, err
-	}
-
 	u, err := s.api.url("/files/"+f.ID, url.Values{"alt": {"media"}})
 	if err != nil {
 		return nil, driveFile{}, false, err
 	}
 
-	data, err = s.api.getMedia(ctx, stepDownload, u, tok.Access, maxObject, s.meter(f.Size))
+	err = s.authorized(ctx, func(access string) (err error) {
+		data, err = s.api.getMedia(ctx, stepDownload, u, access, maxObject, s.meter(f.Size))
+		return err
+	})
 
 	switch {
 	case errors.Is(err, errTooLarge):
@@ -139,14 +149,83 @@ func (s *Store) download(ctx context.Context, name string) (data []byte, f drive
 	return data, f, true, nil
 }
 
-// token returns the token for the next request.
-func (s *Store) token(ctx context.Context) (usecase.CloudToken, error) {
-	t, err := s.tokens.Token(ctx)
+// tokenMargin is the time before the expiry of the access token at which
+// it is refreshed (spec §5.6).
+const tokenMargin = time.Minute
+
+// authorized runs call with an access token that is valid for the next
+// request (spec §5.6): a token that expires within a minute is refreshed
+// first; a 401 answer to call is followed by one refresh and one repeat;
+// a second 401 asks for a new sign-in. call must not be the final upload
+// request, which is never repeated on the same URI.
+func (s *Store) authorized(ctx context.Context, call func(access string) error) error {
+	tok, err := s.tokens.Token(ctx)
+	if err != nil {
+		return fmt.Errorf("cloud token: %w", err)
+	}
+
+	if tok.Expiry.Sub(s.now()) < tokenMargin {
+		if tok, err = s.renew(ctx, tok.Access); err != nil {
+			return err
+		}
+	}
+
+	err = call(tok.Access)
+	if !cloudhttp.IsStatus(err, http.StatusUnauthorized) {
+		return err
+	}
+
+	if tok, err = s.renew(ctx, tok.Access); err != nil {
+		return err
+	}
+
+	err = call(tok.Access)
+	if cloudhttp.IsStatus(err, http.StatusUnauthorized) {
+		return fmt.Errorf("access token refused after a refresh: %w", domain.ReauthRequired(domain.KindGoogleDrive))
+	}
+
+	return err
+}
+
+// renew returns a new token for the one whose access token is stale and
+// keeps it in the token source. When another request has already replaced
+// the stale token, that one is returned and nothing is refreshed.
+func (s *Store) renew(ctx context.Context, stale string) (usecase.CloudToken, error) {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	cur, err := s.tokens.Token(ctx)
 	if err != nil {
 		return usecase.CloudToken{}, fmt.Errorf("cloud token: %w", err)
 	}
 
-	return t, nil
+	if cur.Access != stale {
+		return cur, nil
+	}
+
+	if cur.Refresh == "" {
+		return usecase.CloudToken{}, domain.ReauthRequired(domain.KindGoogleDrive)
+	}
+
+	next, err := s.refresher.Refresh(ctx, s.client, cur.Refresh)
+	if err != nil {
+		return usecase.CloudToken{}, err
+	}
+
+	// Update keeps the token as given: what the answer lacks stays as it was.
+	next.Provider, next.ClientID = cur.Provider, cur.ClientID
+	next.Refresh = cmp.Or(next.Refresh, cur.Refresh)
+	next.Account = cmp.Or(next.Account, cur.Account)
+
+	if err := s.tokens.Update(ctx, next); err != nil {
+		if _, ok := errors.AsType[usecase.LocalError](err); !ok {
+			err = usecase.LocalError{Err: err}
+		}
+
+		return usecase.CloudToken{}, fmt.Errorf("save refreshed token: %w", err)
+	}
+
+	return next, nil
 }
 
 // meter starts the count of the bytes of a download of total bytes; nil
