@@ -19,6 +19,9 @@ import (
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
+// fakeClient is the Yandex client of the tests.
+var fakeClient = usecase.CloudClient{Provider: domain.KindYandexDisk, ID: fakeClientID}
+
 const (
 	verificationRedirect = "https://oauth.yandex.ru/verification_code"
 	waitLimit            = 10 * time.Second // a Wait that takes longer fails the test
@@ -78,7 +81,7 @@ func (h *authHarness) begin(a *Authorizer, manual bool) *loginURL {
 		begin = a.BeginManual
 	}
 
-	l, err := begin(h.t.Context(), fakeClientID)
+	l, err := begin(h.t.Context(), fakeClient)
 	if err != nil {
 		h.t.Fatalf("begin: %v", err)
 	}
@@ -313,7 +316,7 @@ func TestLoopbackURL(t *testing.T) {
 	t.Run("client ID is escaped", func(t *testing.T) {
 		a := h.authorizer(h.options())
 
-		l, err := a.BeginManual(t.Context(), "a&b=c d")
+		l, err := a.BeginManual(t.Context(), usecase.CloudClient{Provider: domain.KindYandexDisk, ID: "a&b=c d"})
 		if err != nil {
 			t.Fatalf("BeginManual: %v", err)
 		}
@@ -339,7 +342,7 @@ func TestLoopbackRandFailure(t *testing.T) {
 			begin = a.BeginManual
 		}
 
-		if l, err := begin(t.Context(), fakeClientID); err == nil {
+		if l, err := begin(t.Context(), fakeClient); err == nil {
 			_ = l.Close()
 
 			t.Errorf("manual %v: begin with a failing Rand succeeded", manual)
@@ -602,7 +605,7 @@ func TestLoopbackPortBusy(t *testing.T) {
 	opts := h.options()
 	opts.Listen = func(string, string) (net.Listener, error) { return listenLocal(t, busy.Addr().String()) }
 
-	l, err := h.authorizer(opts).BeginLoopback(t.Context(), fakeClientID)
+	l, err := h.authorizer(opts).BeginLoopback(t.Context(), fakeClient)
 	if err == nil {
 		_ = l.Close()
 	}
@@ -617,7 +620,7 @@ func TestLoopbackNotLoopback(t *testing.T) {
 	opts := h.options()
 	opts.Listen = func(string, string) (net.Listener, error) { return listenLocal(t, "[::]:0") }
 
-	l, err := h.authorizer(opts).BeginLoopback(t.Context(), fakeClientID)
+	l, err := h.authorizer(opts).BeginLoopback(t.Context(), fakeClient)
 	if err == nil {
 		_ = l.Close()
 	}

@@ -21,7 +21,7 @@ var (
 
 func testToken() usecase.CloudToken {
 	return usecase.CloudToken{
-		Provider: "yandex", ClientID: "cid", Access: "ACCESS-SECRET-1", Refresh: "REFRESH-SECRET-2",
+		Provider: domain.KindYandexDisk, ClientID: "cid", Access: "ACCESS-SECRET-1", Refresh: "REFRESH-SECRET-2",
 		Account: "user", Expiry: time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC),
 	}
 }
@@ -134,7 +134,7 @@ func TestCloudTokenRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s, dir := createTest(t)
 
-	if _, ok, err := s.LoadCloudToken(ctx); err != nil || ok {
+	if _, ok, err := s.LoadCloudToken(ctx, domain.KindYandexDisk); err != nil || ok {
 		t.Fatalf("LoadCloudToken on empty = %v, %v", ok, err)
 	}
 
@@ -159,7 +159,7 @@ func TestCloudTokenRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, ok, err := s2.LoadCloudToken(ctx)
+	got, ok, err := s2.LoadCloudToken(ctx, domain.KindYandexDisk)
 	if err != nil || !ok || !got.Expiry.Equal(next.Expiry) || got.Access != "ACCESS-NEW" || got.Refresh != want.Refresh ||
 		got.Account != want.Account || got.ClientID != want.ClientID || got.Provider != want.Provider {
 		t.Errorf("LoadCloudToken = %+v, %v, %v", got, ok, err)
@@ -199,7 +199,7 @@ func TestCloudTokenSealed(t *testing.T) {
 
 	rawExec(t, dir, "UPDATE cloud_auth SET data = ? WHERE cloud_auth_id = 1", wrong)
 
-	if _, _, err := s.LoadCloudToken(ctx); !errors.Is(err, domain.ErrCorruptStorage) {
+	if _, _, err := s.LoadCloudToken(ctx, domain.KindYandexDisk); !errors.Is(err, domain.ErrCorruptStorage) {
 		t.Errorf("LoadCloudToken with a foreign AAD = %v, want ErrCorruptStorage", err)
 	}
 }
@@ -207,17 +207,17 @@ func TestCloudTokenSealed(t *testing.T) {
 func TestSaveConnectionTokenChanges(t *testing.T) {
 	ctx := context.Background()
 	old := testToken()
-	fresh := usecase.CloudToken{Provider: "yandex", ClientID: "cid2", Access: "A2", Refresh: "R2", Account: "other"}
+	fresh := usecase.CloudToken{Provider: domain.KindYandexDisk, ClientID: "cid2", Access: "A2", Refresh: "R2", Account: "other"}
 
 	tests := []struct {
-		name   string
-		change usecase.TokenChange
-		want   usecase.CloudToken
-		wantOK bool
+		name    string
+		updates []usecase.TokenUpdate
+		want    usecase.CloudToken
+		wantOK  bool
 	}{
-		{"keep", usecase.TokenKeep, old, true},
-		{"set", usecase.TokenSet, fresh, true},
-		{"delete", usecase.TokenDelete, usecase.CloudToken{}, false},
+		{"keep", nil, old, true},
+		{"set", []usecase.TokenUpdate{{Provider: domain.KindYandexDisk, Change: usecase.TokenSet, Token: fresh}}, fresh, true},
+		{"delete", []usecase.TokenUpdate{{Provider: domain.KindYandexDisk, Change: usecase.TokenDelete}}, usecase.CloudToken{}, false},
 	}
 
 	for _, tt := range tests {
@@ -229,7 +229,7 @@ func TestSaveConnectionTokenChanges(t *testing.T) {
 			}
 
 			settings := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "cid2"}
-			if err := s.SaveConnection(ctx, settings, tt.change, fresh); err != nil {
+			if err := s.SaveConnection(ctx, settings, tt.updates); err != nil {
 				t.Fatalf("SaveConnection: %v", err)
 			}
 
@@ -237,7 +237,7 @@ func TestSaveConnectionTokenChanges(t *testing.T) {
 				t.Errorf("LoadSettings = %v, %v", got, err)
 			}
 
-			got, ok, err := s.LoadCloudToken(ctx)
+			got, ok, err := s.LoadCloudToken(ctx, domain.KindYandexDisk)
 			if err != nil || ok != tt.wantOK || !got.Expiry.Equal(tt.want.Expiry) || got.Access != tt.want.Access || got.ClientID != tt.want.ClientID {
 				t.Errorf("LoadCloudToken = %+v, %v, %v; want %+v, %v", got, ok, err, tt.want, tt.wantOK)
 			}
@@ -257,7 +257,7 @@ func TestSaveConnectionAtomic(t *testing.T) {
 	rawExec(t, dir, "DROP TABLE cloud_auth")
 
 	after := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "cid"}
-	if err := s.SaveConnection(ctx, after, usecase.TokenSet, testToken()); err == nil {
+	if err := s.SaveConnection(ctx, after, []usecase.TokenUpdate{setUpdate(testToken())}); err == nil {
 		t.Fatal("SaveConnection succeeded without the token table")
 	}
 
@@ -325,7 +325,7 @@ func TestPendingTempRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.SaveConnection(ctx, domain.ConnectionSettings{}, usecase.TokenKeep, usecase.CloudToken{}); err != nil {
+	if err := s.SaveConnection(ctx, domain.ConnectionSettings{}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -333,7 +333,7 @@ func TestPendingTempRoundTrip(t *testing.T) {
 		t.Error("TokenKeep cleared the pending name")
 	}
 
-	if err := s.SaveConnection(ctx, domain.ConnectionSettings{}, usecase.TokenDelete, usecase.CloudToken{}); err != nil {
+	if err := s.SaveConnection(ctx, domain.ConnectionSettings{}, []usecase.TokenUpdate{deleteUpdate(domain.KindYandexDisk)}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -51,7 +51,8 @@ type AuthOptions struct {
 }
 
 // Authorizer signs in to Yandex ID with OAuth 2.0 Authorization Code and
-// PKCE S256 (spec §6.2, §6.3). It implements usecase.CloudAuthorizer.
+// PKCE S256 (spec §6.2, §6.3). It implements usecase.CloudAuthorizer; of the
+// client it uses the ID only, Yandex has no client secret.
 type Authorizer struct {
 	authorize string    // the authorize URL without parameters
 	token     string    // the token endpoint
@@ -94,7 +95,7 @@ func NewAuthorizer(e Endpoints, opts AuthOptions) *Authorizer {
 // BeginLoopback starts the receiver on LoopbackAddr and returns the login
 // with the redirect URI of the receiver. A busy port, or a listener that is
 // not on a loopback address, is domain.ErrLoopbackUnavailable.
-func (a *Authorizer) BeginLoopback(_ context.Context, clientID string) (usecase.CloudLogin, error) {
+func (a *Authorizer) BeginLoopback(_ context.Context, c usecase.CloudClient) (usecase.CloudLogin, error) {
 	deadline := time.Now().Add(a.timeout)
 
 	ln, err := a.listen("tcp", LoopbackAddr)
@@ -110,7 +111,7 @@ func (a *Authorizer) BeginLoopback(_ context.Context, clientID string) (usecase.
 
 	redirect := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(addr.Port)) + callbackPath
 
-	s, err := a.newSession(clientID, redirect)
+	s, err := a.newSession(c.ID, redirect)
 	if err != nil {
 		_ = ln.Close()
 		return nil, err
@@ -120,8 +121,8 @@ func (a *Authorizer) BeginLoopback(_ context.Context, clientID string) (usecase.
 }
 
 // BeginManual returns a login whose browser page shows a code to paste.
-func (a *Authorizer) BeginManual(_ context.Context, clientID string) (usecase.CloudLogin, error) {
-	s, err := a.newSession(clientID, manualRedirect)
+func (a *Authorizer) BeginManual(_ context.Context, c usecase.CloudClient) (usecase.CloudLogin, error) {
+	s, err := a.newSession(c.ID, manualRedirect)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +200,7 @@ func (s *session) redeem(ctx context.Context, code string) (usecase.CloudToken, 
 	}
 
 	return usecase.CloudToken{
-		Provider: string(domain.KindYandexDisk),
+		Provider: domain.KindYandexDisk,
 		ClientID: s.clientID,
 		Access:   answer.AccessToken,
 		Expiry:   answer.expiry(time.Now()),

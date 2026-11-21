@@ -28,6 +28,7 @@ var (
 	ErrRemoteTooLarge        = errors.New("remote data is too large")
 	ErrRemoteOutcomeUnknown  = errors.New("outcome of the remote operation is unknown")
 	ErrLoopbackUnavailable   = errors.New("local sign-in address is unavailable")
+	ErrManualUnsupported     = errors.New("sign-in with a code is not available for this storage")
 )
 
 // ValidationError reports an invalid field. It matches ErrValidation.

@@ -58,7 +58,7 @@ func newHarnessWith(t *testing.T, edit func(*usecase.CloudToken)) *harness {
 	}
 	edit(&tok)
 
-	h.tokens = usecase.NewMemoryTokenSource(tok, fakeClientID)
+	h.tokens = usecase.NewMemoryTokenSource(tok, fakeClient)
 
 	return h
 }
@@ -1412,7 +1412,7 @@ func TestNetworkError(t *testing.T) {
 func TestStoreFactory(t *testing.T) {
 	d := newFakeDisk(t, testNow)
 	pending := &fakePending{disk: d}
-	tokens := usecase.NewMemoryTokenSource(usecase.CloudToken{ClientID: "builtin"}, "builtin")
+	tokens := usecase.NewMemoryTokenSource(usecase.CloudToken{ClientID: "builtin"}, usecase.CloudClient{Provider: domain.KindYandexDisk, ID: "builtin"})
 
 	tests := []struct {
 		name    string

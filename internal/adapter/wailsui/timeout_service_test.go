@@ -91,7 +91,7 @@ func TestSyncServiceTimeoutByKind(t *testing.T) {
 			syncer, err := usecase.NewSync(usecase.SyncDeps{
 				Local: emptyLocal{}, Settings: store, Remote: remote, Changes: &usecase.ChangeTracker{},
 				IDs: uuid.New, Gate: &usecase.Gate{}, Offer: &usecase.HostKeyOffer{}, Warn: func(error) {},
-				Tokens: store, BuiltinClientID: "builtin",
+				Tokens: store, Builtin: map[domain.StorageKind]usecase.CloudClient{domain.KindYandexDisk: {ID: "builtin"}},
 			})
 			if err != nil {
 				t.Fatal(err)

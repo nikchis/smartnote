@@ -273,14 +273,18 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		sealbox.DefaultKDF(),
 	))
 
+	// The built-in OAuth clients of the clouds.
+	builtin := map[domain.StorageKind]usecase.CloudClient{
+		domain.KindYandexDisk: {Provider: domain.KindYandexDisk, ID: yadisk.BuiltinClientID},
+	}
+
 	syncer, err := usecase.NewSync(usecase.SyncDeps{
 		Local: store, Settings: store, Remote: connector, Changes: changes, IDs: uuid.New, Gate: gate, Offer: offer,
 		OnState: func(s usecase.State) { emit(wailsui.EventSyncState, wailsui.ToStateDTO(s)) },
 		Warn:    func(err error) { wailsui.LogError(env.Log, "sync", err) },
 		Index:   search,
 		Tokens:  store,
-
-		BuiltinClientID: yadisk.BuiltinClientID,
+		Builtin: builtin,
 	})
 	if err != nil {
 		return nil, err
@@ -288,9 +292,11 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 
 	connection, err := usecase.NewConnection(usecase.ConnectionDeps{
 		Settings: store, Store: store, Tokens: store, Remote: connector,
-		Auth: yadisk.NewAuthorizer(yadisk.DefaultEndpoints, yadisk.AuthOptions{}),
+		Auth: map[domain.StorageKind]usecase.CloudAuthorizer{
+			domain.KindYandexDisk: yadisk.NewAuthorizer(yadisk.DefaultEndpoints, yadisk.AuthOptions{}),
+		},
 		Gate: gate, Offer: offer, Changed: syncer.ResetConnection,
-		BuiltinClientID: yadisk.BuiltinClientID, OpenURL: openBrowser,
+		Builtin: builtin, OpenURL: openBrowser,
 	})
 	if err != nil {
 		return nil, err

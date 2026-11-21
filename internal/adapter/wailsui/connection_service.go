@@ -50,7 +50,11 @@ func (s *ConnectionService) Load() (SettingsDTO, error) {
 
 	dto := toSettingsDTO(settings)
 
-	dto.YandexAccount, dto.YandexSignedIn, err = s.conn.Account(s.env.Ctx, settings)
+	// The form shows only the Yandex account, whatever kind is saved.
+	yandex := settings
+	yandex.StorageKind = domain.KindYandexDisk
+
+	dto.YandexAccount, dto.YandexSignedIn, err = s.conn.Account(s.env.Ctx, yandex)
 	if err != nil {
 		// An unreadable token must not keep Settings closed: the account
 		// shows as Not signed in. The error text may carry details of the
@@ -100,7 +104,7 @@ func (s *ConnectionService) SubmitCode(code string) (string, error) {
 func (s *ConnectionService) CancelSignIn() { s.conn.CancelSignIn() }
 
 // SignOut forgets the Yandex Disk token; Save makes it final.
-func (s *ConnectionService) SignOut() { s.conn.SignOut() }
+func (s *ConnectionService) SignOut() { s.conn.SignOut(domain.KindYandexDisk) }
 
 // Test connects with settings without saving them; empty reports that the
 // server has no Smartnote storage yet.

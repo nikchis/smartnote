@@ -20,7 +20,7 @@ import (
 type memSettings struct {
 	s        domain.ConnectionSettings
 	saves    int
-	token    usecase.CloudToken
+	token    usecase.CloudToken // the Yandex token; there is none of other providers
 	hasToken bool
 	tokenErr error // of LoadCloudToken
 }
@@ -38,12 +38,12 @@ func (m *memSettings) SaveSettings(_ context.Context, s domain.ConnectionSetting
 
 // SaveConnection saves the settings as SaveSettings does; the token is not
 // kept, these tests never sign in.
-func (m *memSettings) SaveConnection(ctx context.Context, s domain.ConnectionSettings, _ usecase.TokenChange, _ usecase.CloudToken) error {
+func (m *memSettings) SaveConnection(ctx context.Context, s domain.ConnectionSettings, _ []usecase.TokenUpdate) error {
 	return m.SaveSettings(ctx, s)
 }
 
-func (m *memSettings) LoadCloudToken(context.Context) (usecase.CloudToken, bool, error) {
-	return m.token, m.hasToken, m.tokenErr
+func (m *memSettings) LoadCloudToken(_ context.Context, p domain.StorageKind) (usecase.CloudToken, bool, error) {
+	return m.token, m.hasToken && p == domain.KindYandexDisk, m.tokenErr
 }
 
 func (m *memSettings) SaveCloudToken(context.Context, usecase.CloudToken) error { return nil }
@@ -321,6 +321,25 @@ func TestSettingsDTONoToken(t *testing.T) {
 	}
 }
 
+// TestLoadShowsYandexAccountForOtherKind: until the form asks for the
+// account of its draft, Load reports the Yandex account whatever kind is
+// saved, so that switching the form to Yandex Disk shows it.
+func TestLoadShowsYandexAccountForOtherKind(t *testing.T) {
+	svc, store, _ := newTestConnectionService(t, filledSettings)
+	store.token = usecase.CloudToken{Provider: domain.KindYandexDisk, ClientID: "c", Account: "ivan"}
+	store.hasToken = true
+	store.s.YandexClientID = "c"
+
+	dto, err := svc.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !dto.YandexSignedIn || dto.YandexAccount != "ivan" {
+		t.Errorf("Load = %q, %v; want the Yandex account", dto.YandexAccount, dto.YandexSignedIn)
+	}
+}
+
 // TestLoadWithUnreadableToken: a token that cannot be read still opens
 // Settings, as Not signed in, and only the error's code is logged.
 func TestLoadWithUnreadableToken(t *testing.T) {
@@ -351,13 +370,13 @@ type fakeAuth struct {
 	login    *fakeLogin
 }
 
-func (a *fakeAuth) BeginLoopback(_ context.Context, clientID string) (usecase.CloudLogin, error) {
-	a.clientID = clientID
+func (a *fakeAuth) BeginLoopback(_ context.Context, c usecase.CloudClient) (usecase.CloudLogin, error) {
+	a.clientID = c.ID
 	return a.login, nil
 }
 
-func (a *fakeAuth) BeginManual(_ context.Context, clientID string) (usecase.CloudLogin, error) {
-	a.clientID = clientID
+func (a *fakeAuth) BeginManual(_ context.Context, c usecase.CloudClient) (usecase.CloudLogin, error) {
+	a.clientID = c.ID
 	return a.login, nil
 }
 
@@ -417,7 +436,8 @@ func newYandexService(t *testing.T) (*ConnectionService, *fakeAuth) {
 	auth := &fakeAuth{login: &fakeLogin{}}
 
 	conn, err := usecase.NewConnection(usecase.ConnectionDeps{
-		Settings: store, Store: store, Tokens: store, Remote: &keyServer{}, Auth: auth,
+		Settings: store, Store: store, Tokens: store, Remote: &keyServer{},
+		Auth: map[domain.StorageKind]usecase.CloudAuthorizer{domain.KindYandexDisk: auth},
 		Gate: &usecase.Gate{}, Offer: &usecase.HostKeyOffer{}, Changed: func() {},
 		OpenURL: func(string) error { return nil },
 	})

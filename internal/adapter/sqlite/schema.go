@@ -86,6 +86,14 @@ const (
 );`
 )
 
+// cloudTokenDDL is the token of each cloud provider other than Yandex, whose
+// token stays in cloud_auth (spec §7.2). Like the cloud tables it is created
+// on every Create and Unlock and is not required, so the format stays 2.
+const cloudTokenDDL = `CREATE TABLE IF NOT EXISTS cloud_token (
+	provider TEXT PRIMARY KEY,
+	data     BLOB NOT NULL
+);`
+
 // syncServerDDL is the revision this device last synchronized with each
 // server, so that a server it returns to is compared with its own revision.
 // The current pair stays in connection, which 2.1.0 reads. Like the cloud
@@ -111,9 +119,11 @@ const (
 	tableSSHKey        = "ssh_key"
 	tableNoteEmbedding = "note_embedding"
 	tableCloudAuth     = "cloud_auth"
+	tableCloudToken    = "cloud_token"
 )
 
-// columnData is the sealed payload column shared by cloud_auth and note_embedding.
+// columnData is the sealed payload column shared by cloud_auth, cloud_token
+// and note_embedding.
 const columnData = "data"
 
 // AADs of the sealed fields (spec §4).

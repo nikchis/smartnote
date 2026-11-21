@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
 	"strconv"
 )
 
@@ -24,30 +25,46 @@ const (
 	KindNone        StorageKind = "none"
 	KindSSHPostgres StorageKind = "ssh_postgres"
 	KindYandexDisk  StorageKind = "yandex_disk"
+	KindGoogleDrive StorageKind = "google_drive"
 )
 
-// maxYandexClientIDLen is the longest accepted Yandex OAuth client ID.
-const maxYandexClientIDLen = 64
+// IsCloud reports whether k is a cloud storage, which needs a sign-in token.
+func IsCloud(k StorageKind) bool {
+	return k == KindYandexDisk || k == KindGoogleDrive
+}
+
+// Limits of the own OAuth clients.
+const (
+	maxYandexClientIDLen     = 64
+	maxGoogleClientIDLen     = 128
+	maxGoogleClientSecretLen = 128
+)
+
+// googleClientID is the format of a Google OAuth client ID.
+var googleClientID = regexp.MustCompile(`^\d+-\w+\.apps\.googleusercontent\.com$`)
 
 // ConnectionSettings describe the remote storage: for ssh_postgres the SSH
 // server and the PostgreSQL database reachable from it, for yandex_disk the
-// OAuth client ID. Fields of other kinds are kept so that switching back needs
-// no retyping; SyncPhrase is shared.
+// own OAuth client ID, for google_drive the own OAuth client ID and secret
+// (empty means the built-in client). Fields of other kinds are kept so that
+// switching back needs no retyping; SyncPhrase is shared.
 type ConnectionSettings struct {
-	StorageKind     StorageKind `json:"kind"`
-	YandexClientID  string      `json:"yandex_client_id"`
-	SSHHost         string      `json:"ssh_host"`
-	SSHPort         int         `json:"ssh_port"`
-	SSHUser         string      `json:"ssh_user"`
-	SSHPassword     string      `json:"ssh_password"`
-	DBHost          string      `json:"db_host"`
-	DBPort          int         `json:"db_port"`
-	DBName          string      `json:"db_name"`
-	DBUser          string      `json:"db_user"`
-	DBPassword      string      `json:"db_password"`
-	SyncPhrase      string      `json:"sync_phrase"`
-	TrustedHostKey  string      `json:"trusted_host_key"` // authorized_keys format; empty until trusted
-	TrustedHostAddr string      `json:"trusted_host_addr"`
+	StorageKind        StorageKind `json:"kind"`
+	YandexClientID     string      `json:"yandex_client_id"`
+	GoogleClientID     string      `json:"google_client_id"`
+	GoogleClientSecret string      `json:"google_client_secret"`
+	SSHHost            string      `json:"ssh_host"`
+	SSHPort            int         `json:"ssh_port"`
+	SSHUser            string      `json:"ssh_user"`
+	SSHPassword        string      `json:"ssh_password"`
+	DBHost             string      `json:"db_host"`
+	DBPort             int         `json:"db_port"`
+	DBName             string      `json:"db_name"`
+	DBUser             string      `json:"db_user"`
+	DBPassword         string      `json:"db_password"`
+	SyncPhrase         string      `json:"sync_phrase"`
+	TrustedHostKey     string      `json:"trusted_host_key"` // authorized_keys format; empty until trusted
+	TrustedHostAddr    string      `json:"trusted_host_addr"`
 }
 
 // Kind returns the storage kind. Empty StorageKind of settings saved before
@@ -66,17 +83,19 @@ func (s ConnectionSettings) Kind() StorageKind {
 }
 
 // sshFieldsEmpty reports whether no SSH/DB field and no sync phrase is set.
-// Kind, client ID and the trusted key with its address are not considered.
+// Kind, the cloud clients and the trusted key with its address are not
+// considered.
 func (s ConnectionSettings) sshFieldsEmpty() bool {
 	s.StorageKind, s.YandexClientID = "", ""
+	s.GoogleClientID, s.GoogleClientSecret = "", ""
 	s.TrustedHostKey, s.TrustedHostAddr = "", ""
 
 	return s == ConnectionSettings{}
 }
 
 // IsEmpty reports whether the app works locally only: the kind is none, or
-// it is ssh_postgres and no SSH/DB field or sync phrase is set. yandex_disk
-// and unknown kinds are never empty.
+// it is ssh_postgres and no SSH/DB field or sync phrase is set. The cloud
+// kinds and unknown kinds are never empty.
 func (s ConnectionSettings) IsEmpty() bool {
 	switch s.Kind() {
 	case KindNone:
@@ -91,7 +110,8 @@ func (s ConnectionSettings) IsEmpty() bool {
 // Validate checks the settings by kind. none needs nothing; ssh_postgres
 // checks required fields, ports, the loopback database host and the sync
 // phrase length (nil if all SSH/DB fields are empty); yandex_disk checks the
-// sync phrase length and the client ID format. An unknown kind is invalid.
+// sync phrase length and the client ID format; google_drive checks the sync
+// phrase length and the own client pair. An unknown kind is invalid.
 func (s ConnectionSettings) Validate() error {
 	switch s.Kind() {
 	case KindNone:
@@ -100,6 +120,12 @@ func (s ConnectionSettings) Validate() error {
 		return s.validateSSHPostgres()
 	case KindYandexDisk:
 		return s.validateYandexDisk()
+	case KindGoogleDrive:
+		if err := validSyncPhrase(s.SyncPhrase); err != nil {
+			return err
+		}
+
+		return ValidateGoogleClient(s.GoogleClientID, s.GoogleClientSecret)
 	default:
 		return &ValidationError{Field: "kind", Reason: "unknown storage kind"}
 	}
@@ -122,6 +148,40 @@ func ValidateYandexClientID(id string) error {
 	}
 
 	return nil
+}
+
+// ValidateGoogleClient checks an own Google client: both id and secret empty
+// (the built-in client) or both set; the ID is <digits>-<letters, digits or
+// '_'>.apps.googleusercontent.com of at most 128 characters, the secret is 1
+// to 128 printable ASCII characters. A bad one is a ValidationError for
+// "google_client_id" or "google_client_secret".
+func ValidateGoogleClient(id, secret string) error {
+	switch {
+	case id == "" && secret == "":
+		return nil
+	case len(id) > maxGoogleClientIDLen || !googleClientID.MatchString(id):
+		return &ValidationError{Field: "google_client_id", Reason: "must be a Google OAuth client ID"}
+	case !validGoogleClientSecret(secret):
+		return &ValidationError{Field: "google_client_secret", Reason: "must be 1 to 128 printable ASCII characters"}
+	}
+
+	return nil
+}
+
+// validGoogleClientSecret reports whether secret is 1 to 128 characters
+// from ' ' to '~'.
+func validGoogleClientSecret(secret string) bool {
+	if secret == "" || len(secret) > maxGoogleClientSecretLen {
+		return false
+	}
+
+	for i := 0; i < len(secret); i++ {
+		if secret[i] < ' ' || secret[i] > '~' {
+			return false
+		}
+	}
+
+	return true
 }
 
 // isClientIDChar reports whether c is one of [A-Za-z0-9_-].

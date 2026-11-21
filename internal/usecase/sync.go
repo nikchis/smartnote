@@ -130,10 +130,10 @@ type SyncDeps struct {
 	Warn     func(error)
 	Index    RestoreIndex
 
-	// Tokens and BuiltinClientID serve the cloud storages; both are optional,
-	// and without Tokens the cloud token is domain.ErrReauthRequired.
-	Tokens          CloudTokenStore
-	BuiltinClientID string
+	// Tokens and Builtin serve the cloud storages; both are optional, and
+	// without Tokens the cloud token is domain.ErrReauthRequired.
+	Tokens  CloudTokenStore
+	Builtin map[domain.StorageKind]CloudClient
 }
 
 // localWriteTimeout bounds the local revision write after a server commit,
@@ -354,21 +354,26 @@ func (s *Sync) Connect(ctx context.Context) (ConnectOutcome, error) {
 	return out, nil
 }
 
-// noCloudToken reports whether settings are Yandex Disk without any stored
-// token for their client ID, as after a deliberate Sign out: Connect then
-// stays offline instead of asking to sign in again. A token Yandex rejects
-// is not this case.
+// noCloudToken reports whether settings are of a cloud without any stored
+// token for their provider and client, as after a deliberate Sign out:
+// Connect then stays offline instead of asking to sign in again. A token the
+// provider rejects is not this case.
 func (s *Sync) noCloudToken(ctx context.Context, settings domain.ConnectionSettings) (bool, error) {
-	if settings.Kind() != domain.KindYandexDisk || s.d.Tokens == nil {
+	if !domain.IsCloud(settings.Kind()) || s.d.Tokens == nil {
 		return false, nil
 	}
 
-	tok, ok, err := s.d.Tokens.LoadCloudToken(ctx)
+	client, ok := EffectiveClient(settings, s.d.Builtin)
+	if !ok {
+		return true, nil
+	}
+
+	tok, ok, err := s.d.Tokens.LoadCloudToken(ctx, client.Provider)
 	if err != nil {
 		return false, fmt.Errorf("load cloud token: %w", LocalError{Err: err})
 	}
 
-	return !ok || tok.ClientID != EffectiveClientID(settings, s.d.BuiltinClientID), nil
+	return !ok || tok.ClientID != client.ID, nil
 }
 
 func (s *Sync) connect(ctx context.Context, settings domain.ConnectionSettings) (out ConnectOutcome, err error) {
@@ -641,12 +646,15 @@ func (s *Sync) CommitRestore(ctx context.Context) error {
 	return nil
 }
 
-// target builds the RemoteTarget of settings; only a Yandex Disk target gets
-// a token source.
+// target builds the RemoteTarget of settings; only a cloud target gets a
+// token source, the stored one of its provider and effective client.
 func (s *Sync) target(settings domain.ConnectionSettings) RemoteTarget {
 	t := RemoteTarget{Settings: settings}
-	if settings.Kind() == domain.KindYandexDisk {
-		t.Token = NewStoredTokenSource(s.d.Tokens, EffectiveClientID(settings, s.d.BuiltinClientID))
+	if domain.IsCloud(settings.Kind()) {
+		// Without a client the source has no client ID and asks to sign in.
+		client, _ := EffectiveClient(settings, s.d.Builtin)
+		client.Provider = settings.Kind()
+		t.Token = NewStoredTokenSource(s.d.Tokens, client)
 	}
 
 	return t
