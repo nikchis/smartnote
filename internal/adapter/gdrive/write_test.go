@@ -722,3 +722,91 @@ func TestCreateEmptyListAfterCreateIsUnknown(t *testing.T) {
 		t.Errorf("container files = %q, want the created one", got)
 	}
 }
+
+// ownMissing makes the creation's file file-own, which the lists do not
+// give, as lists behind its commit; other, when it has data, is the file of
+// another device created meanwhile at the createdTime of the own one plus
+// shift.
+func ownMissing(d *fakeDrive, other string, shift time.Duration) {
+	d.set(func(d *fakeDrive) {
+		d.nextFileID, d.hideID = "file-own", "file-own"
+		d.onPut = func(d *fakeDrive, _ *fakeSession) putAnswer {
+			if other != "" {
+				d.add("file-zzz", container, []byte(other), d.clock.Add(shift))
+			}
+
+			return putAnswer{}
+		}
+	})
+}
+
+// TestCreateOwnMissingBeforeLaterIsUnknown: the list after the creation
+// gives only a strictly later file of another device and not the own one.
+// The own file may be the earliest, effective for every device, so nothing
+// is deleted and the outcome is unknown (spec §5.2, §5.3).
+func TestCreateOwnMissingBeforeLaterIsUnknown(t *testing.T) {
+	d := newFakeDrive(t)
+	ownMissing(d, "later", time.Second)
+
+	err := writeErr(t, uploadStore(t, d, &memUploads{}), []byte("mine"), "")
+	if !errors.Is(err, blobremote.ErrOutcomeUnknown) {
+		t.Fatalf("Write: err = %v, want ErrOutcomeUnknown", err)
+	}
+
+	if got := deletedFiles(d); len(got) != 0 {
+		t.Errorf("deleted = %v, want none", got)
+	}
+
+	if got := d.containerData(); len(got) != 2 {
+		t.Errorf("container files = %q, want the own and the other one", got)
+	}
+}
+
+// TestCreateOwnMissingYieldsToEarlier: the own file is not listed, but
+// another file is not later than its createdTime from the upload answer,
+// so the creation yields as if its file were listed.
+func TestCreateOwnMissingYieldsToEarlier(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shift time.Duration
+	}{
+		{"equal createdTime", 0},
+		{"earlier createdTime", -time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newFakeDrive(t)
+			ownMissing(d, "other", tc.shift)
+
+			err := writeErr(t, uploadStore(t, d, &memUploads{}), []byte("mine"), "")
+			if !errors.Is(err, blobremote.ErrVersionMismatch) {
+				t.Fatalf("Write: err = %v, want ErrVersionMismatch", err)
+			}
+
+			if got := deletedFiles(d); len(got) != 1 || got[0] != "file-own" {
+				t.Errorf("deleted = %v, want only the own file", got)
+			}
+
+			if got := d.containerData(); len(got) != 1 || got[0] != "other" {
+				t.Errorf("container files = %q, want only the other device's", got)
+			}
+		})
+	}
+}
+
+// TestCreateOwnMissingWithoutCreatedIsUnknown: without createdTime in the
+// upload answer an own file the list does not give cannot be ordered, so
+// nothing is deleted and the outcome is unknown.
+func TestCreateOwnMissingWithoutCreatedIsUnknown(t *testing.T) {
+	d := newFakeDrive(t)
+	ownMissing(d, "earlier", -time.Second)
+	d.set(func(d *fakeDrive) { d.omitCreated = true })
+
+	err := writeErr(t, uploadStore(t, d, &memUploads{}), []byte("mine"), "")
+	if !errors.Is(err, blobremote.ErrOutcomeUnknown) {
+		t.Fatalf("Write: err = %v, want ErrOutcomeUnknown", err)
+	}
+
+	if got := deletedFiles(d); len(got) != 0 {
+		t.Errorf("deleted = %v, want none", got)
+	}
+}

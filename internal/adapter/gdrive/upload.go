@@ -42,7 +42,7 @@ const (
 const (
 	// uploadFields is the field mask of the answers that give the uploaded
 	// file (spec §5.1).
-	uploadFields = "id,size,md5Checksum,sha256Checksum,headRevisionId"
+	uploadFields = "id,size,createdTime,md5Checksum,sha256Checksum,headRevisionId"
 	contentOctet = "application/octet-stream"
 
 	// localWriteTimeout bounds each write of the record in local.db, which

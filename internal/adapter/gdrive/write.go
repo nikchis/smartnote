@@ -61,9 +61,15 @@ func (s *Store) write(ctx context.Context, name string, data []byte, expect stri
 // strictly later than the own file, the own file is deleted and it is
 // blobremote.ErrVersionMismatch: the order of IDs is not the order of
 // creation, so on equal createdTime the creating device yields even if its
-// ID is the smaller one, and a creation that is not earlier never deletes
-// a file another device already confirmed. An earlier file the list does
-// not give yet is not seen: Drive has no conditional creation (spec §11).
+// ID is the smaller one. A creator that got success saw only its own file,
+// the earliest, so a later creation yields to it and does not delete it.
+// Two creations that see each other with equal createdTime both yield, and
+// until both deletions are done the re-read of either may still find the
+// other's file. An own file the list does not give is never deleted unless
+// a listed file is not later than it: it may be the earliest and effective
+// for every device, so the outcome is blobremote.ErrOutcomeUnknown. An
+// earlier file the list does not give yet is not seen: Drive has no
+// conditional creation (spec §11).
 func (s *Store) create(ctx context.Context, name string, data []byte) error {
 	files, err := s.list(ctx, name)
 	if err != nil {
@@ -86,14 +92,15 @@ func (s *Store) create(ctx context.Context, name string, data []byte) error {
 		return fmt.Errorf("list the created container: %w", blobremote.ErrOutcomeUnknown)
 	}
 
-	if len(files) == 0 {
-		// Not even our own file is listed: an anomaly, not a lost race, so
-		// the file stays; the next Connect compares the sets.
+	yield, known := yields(files, own)
+
+	switch {
+	case !known:
+		// The list is behind our own file: an anomaly, not a lost race, so
+		// nothing is deleted; the next Connect compares the sets.
 		s.log.Error("google drive: created container missing in the list")
 		return fmt.Errorf("list the created container: %w", blobremote.ErrOutcomeUnknown)
-	}
-
-	if yields(files, own.ID) {
+	case yield:
 		// Its duplicate, if not deleted now, goes with a later write.
 		if err := s.deleteFile(ctx, own.ID); err != nil {
 			s.log.Error("google drive: own duplicate of the container not deleted", applog.Err(err))
@@ -107,21 +114,30 @@ func (s *Store) create(ctx context.Context, name string, data []byte) error {
 	return nil
 }
 
-// yields reports whether the creation of the file own gives way: the list
-// files does not give own, or gives another file whose createdTime is
-// earlier than or equal to own's. Only a creation whose every other file is
-// strictly later stays, and its file is then the first of files.
-func yields(files []driveFile, own string) bool {
-	i := slices.IndexFunc(files, func(f driveFile) bool { return f.ID == own })
-	if i < 0 {
-		return true
+// yields reports whether the creation of the file own gives way: files
+// gives another file whose createdTime is earlier than or equal to own's.
+// Only a creation whose every other file is strictly later stays, and its
+// file is then the first of files. The createdTime of own is the listed
+// one, or that of the upload answer when files does not give own; known is
+// false when files does not give own and no file is shown to be not later
+// than it, as for an empty list or an answer without createdTime.
+func yields(files []driveFile, own driveFile) (yield, known bool) {
+	created := own.CreatedTime
+	listed := false
+
+	if i := slices.IndexFunc(files, func(f driveFile) bool { return f.ID == own.ID }); i >= 0 {
+		created, listed = files[i].CreatedTime, true
 	}
 
-	created := files[i].CreatedTime
+	if !listed && created.IsZero() {
+		return false, false
+	}
 
-	return slices.ContainsFunc(files, func(f driveFile) bool {
-		return f.ID != own && !f.CreatedTime.After(created)
+	yield = slices.ContainsFunc(files, func(f driveFile) bool {
+		return f.ID != own.ID && !f.CreatedTime.After(created)
 	})
+
+	return yield, listed || yield
 }
 
 // replace uploads new content of the file of expect,

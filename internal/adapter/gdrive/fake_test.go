@@ -138,6 +138,7 @@ type fakeDrive struct {
 	ignoreOrder  bool   // the list keeps the creation order, whatever orderBy asks
 	listTwice    bool   // the list gives every file twice, as pages do when the set changes between them
 	hideFromList bool   // the list gives no file, as a list behind a commit
+	hideID       string // the list does not give this file, as a list behind its commit
 	denyAll      bool   // the API answers 401 to every token, as for a revoked grant
 	redirectTo   string // the API redirects every request to this URL
 	fail         map[string]fakeFailure
@@ -166,6 +167,9 @@ type fakeDrive struct {
 	// putMD5 and statusMD5 replace the md5Checksum of the file in the
 	// answers of the body PUT and of the status request.
 	putMD5, statusMD5 string
+	// omitCreated drops createdTime from the answers that give the file of
+	// a session, whatever their field mask asks.
+	omitCreated bool
 	// sessionHost replaces the host of the session URIs given in Location.
 	sessionHost string
 }
@@ -464,7 +468,7 @@ func (d *fakeDrive) newSession(op, fileID, name string) (sid, uri string) {
 	d.nextSession++
 	sid = fmt.Sprintf("UPLOAD-SECRET-%03d", d.nextSession)
 	d.sessions[sid] = &fakeSession{
-		id: sid, op: op, name: name, fileID: fileID, mask: fieldMask("id,size,md5Checksum,sha256Checksum,headRevisionId"),
+		id: sid, op: op, name: name, fileID: fileID, mask: fieldMask("id,size,createdTime,md5Checksum,sha256Checksum,headRevisionId"),
 	}
 
 	return sid, d.sessionURI(sid)
@@ -667,6 +671,10 @@ func (d *fakeDrive) writeSessionFile(w http.ResponseWriter, s *fakeSession, md5 
 		out["md5Checksum"] = md5
 	}
 
+	if d.omitCreated {
+		delete(out, "createdTime")
+	}
+
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -714,7 +722,7 @@ func (d *fakeDrive) list(w http.ResponseWriter, q url.Values) {
 	var found []*fakeFile
 
 	for _, f := range d.files {
-		if f.name == name && !f.trashed && !d.hideFromList {
+		if f.name == name && !f.trashed && !d.hideFromList && f.id != d.hideID {
 			found = append(found, f)
 		}
 	}
