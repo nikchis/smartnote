@@ -25,7 +25,7 @@
         {#each versions as v (v.id)}
           <li>
             <button class:active={chosen?.id === v.id} onclick={() => (chosenId = v.id)}>
-              {new Date(v.created).toLocaleString()}
+              {new Date(v.created).toLocaleString(i18n.lang)}
             </button>
           </li>
         {/each}

@@ -3,7 +3,8 @@ import type { SearchHitDTO, SearchStatusDTO } from "./api";
 import { i18n } from "./i18n.svelte";
 import { highlight, isFindShortcut, SearchBox, type SearchApi } from "./search.svelte";
 
-vi.mock("./api", () => ({ PrefsService: { SetLanguage: async () => {} } }));
+// The language switches in place of Go.
+i18n.use({ Language: async () => "en", SetLanguage: async () => {} });
 
 function hit(noteId: string, line: number, text = "word"): SearchHitDTO {
   return { noteId, line, start: 0, end: text.length, text, snippet: text, marks: [[0, text.length]], sources: ["words"] };

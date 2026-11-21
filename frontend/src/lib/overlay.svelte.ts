@@ -2,12 +2,12 @@
 // Backup on close): one for the whole process, not one per call to the server.
 import type { Dialogs } from "./dialogs.svelte";
 import { i18n, type Key, type Msg } from "./i18n.svelte";
-import { progressView, type Progress, type ProgressView } from "./progress";
+import { progressView, type Activity, type Progress, type ProgressView } from "./progress";
 
 /** ProcessKind names a synchronization process; the Backup on close is a "backup". */
 export type ProcessKind = "connect" | "backup" | "restore";
 
-const LABELS: Record<ProcessKind, Key> = { connect: "overlay.connecting", backup: "overlay.synchronizing", restore: "overlay.synchronizing" };
+const LABELS: Record<ProcessKind, Key> = { connect: "overlay.connecting", backup: "overlay.backup", restore: "overlay.restore" };
 
 /**
  * TRANSFERS is how many transfers report their progress in a process, by
@@ -116,7 +116,8 @@ export class SyncOverlay {
   view(): ProgressView | undefined {
     const p = this.progress;
     if (!p) return undefined;
-    return progressView(p, this.restoring, { index: this.step, count: TRANSFERS[this.kind][p.storage] ?? 1 });
+    const activity: Activity = this.restoring ? "restore" : this.kind === "backup" ? "backup" : "sync";
+    return progressView(p, activity, { index: this.step, count: TRANSFERS[this.kind][p.storage] ?? 1 });
   }
 
   /**

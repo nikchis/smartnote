@@ -30,6 +30,13 @@ export type Step = { index: number; count: number };
 
 const ONLY: Step = { index: 0, count: 1 };
 
+/**
+ * Activity is what a transfer serves: "restore" is the Restore download the
+ * user started, "backup" a transfer of a Backup process (also the one on
+ * close), "sync" any other, as the reads of Connect.
+ */
+export type Activity = "sync" | "backup" | "restore";
+
 const YANDEX_DISK = "yandex_disk";
 
 /** CLOUDS name the cloud storages; the names are the same in every language. */
@@ -41,14 +48,22 @@ function megabytes(bytes: number): string {
 }
 
 /**
- * title says what the user is doing: an upload is a Save, a download is
+ * title says what the user is doing: an upload is a Backup, a download is
  * "Downloading" only for the Restore the user started, else a synchronization.
+ * In Russian the reads of a Backup are named after the Backup too, and the
+ * Backup and the Restore are named by their nouns (spec §16.4, glossary).
  */
-function title(p: Progress, restoring: boolean): string {
+function title(p: Progress, activity: Activity): string {
   const provider = CLOUDS[p.storage];
   if (p.direction === "upload") return provider ? i18n.t("progress.uploadCloud", { provider }) : i18n.t("progress.uploadServer");
-  if (restoring) return provider ? i18n.t("progress.downloadCloud", { provider }) : i18n.t("progress.downloadServer");
-  return provider ? i18n.t("progress.syncCloud", { provider }) : i18n.t("progress.syncServer");
+  switch (activity) {
+    case "restore":
+      return provider ? i18n.t("progress.downloadCloud", { provider }) : i18n.t("progress.downloadServer");
+    case "backup":
+      return provider ? i18n.t("progress.backupReadCloud", { provider }) : i18n.t("progress.backupReadServer");
+    case "sync":
+      return provider ? i18n.t("progress.syncCloud", { provider }) : i18n.t("progress.syncServer");
+  }
 }
 
 function amount(p: Progress): string {
@@ -59,9 +74,9 @@ function amount(p: Progress): string {
 
 /**
  * progressView describes p for the overlay; undefined without a transfer.
- * restoring is the Restore download; step is the place of p in its process.
+ * activity is what the transfer serves; step is the place of p in its process.
  */
-export function progressView(p: Progress | undefined, restoring = false, step: Step = ONLY): ProgressView | undefined {
+export function progressView(p: Progress | undefined, activity: Activity = "sync", step: Step = ONLY): ProgressView | undefined {
   if (!p || p.direction === "") return undefined;
   const count = Math.max(step.count, 1);
   const index = Math.min(Math.max(step.index, 0), count - 1);
@@ -73,7 +88,7 @@ export function progressView(p: Progress | undefined, restoring = false, step: S
   const finished = index === count - 1 && p.done >= p.total;
   const text = finished ? i18n.t("progress.finishing") : `${amount(p)} · ${Math.floor((num * 100) / den)}%`;
   return {
-    title: title(p, restoring),
+    title: title(p, activity),
     detail: count > 1 ? i18n.t("progress.step", { index: index + 1, count, text }) : text,
     warning: p.storage === YANDEX_DISK ? i18n.t("progress.slow") : "",
     value: num / den,

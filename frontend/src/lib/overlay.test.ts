@@ -1,11 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { backupFlow, closeFlow, restoreFlow, type SyncApi } from "../flows/sync";
 import type { Dialogs } from "./dialogs.svelte";
 import { i18n, type Msg } from "./i18n.svelte";
 import { SyncOverlay } from "./overlay.svelte";
 import type { Progress } from "./progress";
 
-vi.mock("./api", () => ({ PrefsService: { SetLanguage: async () => {} } }));
+// The language switches in place of Go.
+i18n.use({ Language: async () => "en", SetLanguage: async () => {} });
 
 const zero = { added: 0, updated: 0, deleted: 0 };
 const upload: Progress = { storage: "yandex_disk", direction: "upload", unit: "bytes", done: 5, total: 10 };
@@ -393,5 +394,26 @@ describe("SyncOverlay and the language", () => {
     resume();
     await running;
     expect(overlay.text).toBe("");
+  });
+
+  // Spec §16.4, decision of the customer: in Russian the overlay and the
+  // progress of a Backup and a Restore name them by their nouns; English
+  // keeps "Synchronizing…".
+  it.each([
+    { kind: "backup" as const, restore: false, en: "Synchronizing…", ru: "Создание резервной копии…", title: "Создание резервной копии на Yandex Disk…" },
+    { kind: "restore" as const, restore: true, en: "Synchronizing…", ru: "Восстановление копии…", title: "Восстановление копии с Yandex Disk…" },
+  ])("names the $kind by its noun in Russian", async ({ kind, restore, en, ru, title }) => {
+    const overlay = new SyncOverlay();
+    let resume!: () => void;
+    const running = overlay.process(kind, () => overlay.call(() => new Promise<void>((r) => (resume = r)), restore));
+    overlay.follow(disk("download", 1, 2));
+    expect(overlay.text).toBe(en);
+
+    await i18n.set("ru");
+    expect(overlay.text).toBe(ru);
+    expect(overlay.view()?.title).toBe(title);
+
+    resume();
+    await running;
   });
 });

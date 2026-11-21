@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 import { flushSync, mount, unmount } from "svelte";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import MessageDialog from "../components/MessageDialog.svelte";
 import { answer, currentDialog, dialogs, dismiss } from "./dialogs.svelte";
 import { errorMsg } from "./errors";
 import { i18n, msg } from "./i18n.svelte";
 
-vi.mock("./api", () => ({ PrefsService: { SetLanguage: async () => {} } }));
+// The language switches in place of Go.
+i18n.use({ Language: async () => "en", SetLanguage: async () => {} });
 
 afterEach(async () => {
   while (currentDialog()) dismiss();

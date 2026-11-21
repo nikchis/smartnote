@@ -130,7 +130,7 @@
     void editor.step(delta).then(focusSelected);
   }
 
-  const updated = $derived(editor.mode === "edit" && editor.selected ? new Date(editor.selected.updated).toLocaleString() : "");
+  const updated = $derived(editor.mode === "edit" && editor.selected ? new Date(editor.selected.updated).toLocaleString(i18n.lang) : "");
 </script>
 
 <svelte:window onkeydown={onWindowKey} />

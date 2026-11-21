@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { en } from "./i18n/en";
 import { ru } from "./i18n/ru";
-import { i18n, msg } from "./i18n.svelte";
+import { I18n, i18n, msg } from "./i18n.svelte";
 
 // Go keeps the language (PrefsService); the test answers for it.
-const prefs = vi.hoisted(() => ({ Language: vi.fn(), SetLanguage: vi.fn() }));
-vi.mock("./api", () => ({ PrefsService: prefs }));
+const prefs = { Language: vi.fn(), SetLanguage: vi.fn() };
+i18n.use(prefs);
 
 beforeEach(() => {
   prefs.Language.mockReset();
@@ -65,6 +65,14 @@ describe("I18n", () => {
     prefs.Language.mockRejectedValue(new Error("no Go"));
     await i18n.start(system);
     expect(i18n.lang).toBe(lang);
+  });
+
+  it("without the store of the choice starts from the system language and cannot switch", async () => {
+    const alone = new I18n();
+    await alone.start("ru-RU");
+    expect(alone.lang).toBe("ru");
+    await expect(alone.set("en")).rejects.toThrow();
+    expect(alone.lang).toBe("ru");
   });
 
   it("switches after Go saved the language", async () => {

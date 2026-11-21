@@ -1,6 +1,7 @@
 // The language of the interface (spec §16.4): the catalogs, the current
 // language and the texts in it. Go keeps the choice (PrefsService), so the
-// interface asks it at start and tells it each switch.
+// interface asks it at start and tells it each switch; main.ts connects it
+// with use, tests connect a fake.
 import { en } from "./i18n/en";
 import { ru } from "./i18n/ru";
 
@@ -46,15 +47,21 @@ function fromSystem(system: string): Lang {
 export class I18n {
   lang: Lang = $state("en");
 
-  constructor(private readonly prefs: PrefsApi) {}
+  private prefs: PrefsApi | undefined;
+
+  /** use connects the store of the choice; start and set need it. */
+  use(prefs: PrefsApi): void {
+    this.prefs = prefs;
+  }
 
   /**
    * start takes the saved language, or the one of system while none is
    * saved; Go makes it current for its own texts. Without an answer from Go
-   * the language of system is shown.
+   * (or without use) the language of system is shown.
    */
   async start(system: string): Promise<void> {
     try {
+      if (!this.prefs) throw new Error("i18n: use was not called");
       const lang = await this.prefs.Language(system);
       this.lang = lang === "ru" ? "ru" : "en";
     } catch {
@@ -64,6 +71,7 @@ export class I18n {
 
   /** set switches to lang once Go has saved it; when Go fails the language stays and the error is thrown. */
   async set(lang: Lang): Promise<void> {
+    if (!this.prefs) throw new Error("i18n: use was not called");
     await this.prefs.SetLanguage(lang);
     this.lang = lang;
   }
@@ -94,12 +102,7 @@ export class I18n {
   }
 }
 
-// The bindings load on the first call, not with the catalogs: importing the
-// Wails runtime starts talking to Go, which the tests of a component that
-// only shows texts have no use for.
-const prefs = async () => (await import("./api")).PrefsService;
-
-export const i18n = new I18n({
-  Language: async (system) => (await prefs()).Language(system),
-  SetLanguage: async (lang) => (await prefs()).SetLanguage(lang),
-});
+// The catalogs do not import the bindings: the Wails runtime starts talking to
+// Go when it is imported, which the tests of a component that only shows
+// texts have no use for.
+export const i18n = new I18n();

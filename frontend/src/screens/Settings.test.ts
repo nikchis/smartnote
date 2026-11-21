@@ -31,7 +31,6 @@ vi.mock("../lib/api", () => ({
     Test: go.test,
   },
   KeyService: { HasKey: async () => true },
-  PrefsService: { SetLanguage: async () => {} },
 }));
 vi.mock("../lib/dialogs.svelte", () => ({
   dialogs: { error: go.error, info: vi.fn(async () => {}), ask: vi.fn(async () => true) },
@@ -39,6 +38,7 @@ vi.mock("../lib/dialogs.svelte", () => ({
 vi.mock("@wailsio/runtime", () => ({ Browser: { OpenURL: go.openURL } }));
 
 const { default: Settings } = await import("./Settings.svelte");
+i18n.use({ Language: async () => "en", SetLanguage: async () => {} });
 
 const settle = async () => {
   for (let i = 0; i < 3; i++) {

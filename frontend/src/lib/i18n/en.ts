@@ -72,7 +72,8 @@ export const en = {
   "strength.4": "Very strong",
 
   "overlay.connecting": "Connecting…",
-  "overlay.synchronizing": "Synchronizing…",
+  "overlay.backup": "Synchronizing…",
+  "overlay.restore": "Synchronizing…",
 
   "progress.uploadCloud": "Uploading to {provider}…",
   "progress.downloadCloud": "Downloading from {provider}…",
@@ -80,6 +81,8 @@ export const en = {
   "progress.uploadServer": "Uploading to the server…",
   "progress.downloadServer": "Downloading from the server…",
   "progress.syncServer": "Synchronizing with the server…",
+  "progress.backupReadCloud": "Synchronizing with {provider}…",
+  "progress.backupReadServer": "Synchronizing with the server…",
   "progress.megabytes": "{done} of {total} MB",
   "progress.notes": "{done} of {total} notes",
   "progress.finishing": "Finishing…",

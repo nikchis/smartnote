@@ -20,16 +20,19 @@ vi.mock("../lib/api", () => ({
     Search: (q: string) => state.search(q),
     Status: async () => ({ notes: 2, queued: 0, lexical: "ready", semantic: "ready" }),
   },
-  PrefsService: {
-    SetLanguage: (lang: string) => {
-      state.languages.push(lang);
-      return state.setLanguage(lang);
-    },
-  },
 }));
 vi.mock("@wailsio/runtime", () => ({ Events: { On: () => () => {} } }));
 
 const { default: Main } = await import("./Main.svelte");
+
+// Go saves the language; state answers for it.
+i18n.use({
+  Language: async () => "en",
+  SetLanguage: (lang: string) => {
+    state.languages.push(lang);
+    return state.setLanguage(lang);
+  },
+});
 
 function hit(noteId: string, start: number, text: string): SearchHitDTO {
   return { noteId, line: 1, start, end: start + text.length, text, snippet: text, marks: [], sources: ["words"] };
@@ -196,5 +199,15 @@ describe("Main", () => {
 
     expect(toggle().textContent?.trim()).toBe("EN");
     expect(currentDialog()).toEqual({ kind: "error", message: { messages } });
+  });
+
+  it("shows the date of the note in the language of the interface", async () => {
+    const updated = () => target.querySelector<HTMLInputElement>("input.updated")!.value;
+    expect(updated()).toBe(new Date(1).toLocaleString("en"));
+
+    toggle().click();
+    await settle();
+
+    expect(updated()).toBe(new Date(1).toLocaleString("ru"));
   });
 });
