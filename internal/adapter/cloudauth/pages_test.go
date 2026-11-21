@@ -1,4 +1,4 @@
-package yadisk
+package cloudauth
 
 import (
 	"crypto/sha256"
@@ -8,12 +8,14 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/nikchis/smartnote/internal/i18n"
 )
 
 const closeHint = "You can close this tab."
 
 func TestPageCSPHashesTheInlineStyle(t *testing.T) {
-	body := pageSignedIn.body()
+	body := pageSignedIn.body(i18n.EN, testProvider())
 
 	m := regexp.MustCompile(`(?s)<style>(.*?)</style>`).FindStringSubmatch(body)
 	if m == nil || strings.Count(body, "<style") != 1 {
@@ -143,7 +145,7 @@ func serveCallback(t *testing.T, l *loginURL, q url.Values) (status int, header 
 
 	rec := &recorder{header: http.Header{}, status: http.StatusOK}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, callbackPath+"?"+q.Encode(), http.NoBody)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/callback"+"?"+q.Encode(), http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +213,7 @@ func wantPage(t *testing.T, header http.Header, body, title, text, mark string) 
 func wantNoRequestData(t *testing.T, body string, l *loginURL) {
 	t.Helper()
 
-	for _, secret := range []string{fakeAuthCode, fakeDescription, l.query.Get("state"), "foreign", "second", "server_error", "access_denied", "favicon", callbackPath} {
+	for _, secret := range []string{fakeAuthCode, fakeDescription, l.query.Get("state"), "foreign", "second", "server_error", "access_denied", "favicon", "/callback"} {
 		if strings.Contains(body, secret) {
 			t.Errorf("page contains request data %q", secret)
 		}

@@ -1,4 +1,4 @@
-package yadisk
+package cloudauth
 
 import (
 	"context"
@@ -19,19 +19,25 @@ import (
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
-// fakeClient is the Yandex client of the tests.
+// fakeClient is the client of the tests.
 var fakeClient = usecase.CloudClient{Provider: domain.KindYandexDisk, ID: fakeClientID}
 
 const (
+	fakeClientID    = "client-1"
+	fakeProvider    = "yandex_disk"
+	fakeAuthCode    = "code-1"
+	fakeRefresh     = "ref-1"
+	fakeDescription = "SECRET-DESCRIPTION-of-the-answer" // never reaches an error text
+
 	verificationRedirect = "https://oauth.yandex.ru/verification_code"
 	waitLimit            = 10 * time.Second // a Wait that takes longer fails the test
 )
 
-// authHarness is an Authorizer over the emulator with a real receiver on a
-// free loopback port.
+// authHarness is an Authorizer over a fake OAuth server with a real receiver
+// on a free loopback port.
 type authHarness struct {
-	t    *testing.T
-	disk *fakeDisk
+	t     *testing.T
+	oauth *fakeOAuth
 
 	mu     sync.Mutex
 	listen []string // network and address of each Listen call
@@ -40,11 +46,11 @@ type authHarness struct {
 func newAuthHarness(t *testing.T) *authHarness {
 	t.Helper()
 
-	return &authHarness{t: t, disk: newFakeDisk(t, testNow)}
+	return &authHarness{t: t, oauth: newFakeOAuth(t)}
 }
 
-func (h *authHarness) options() AuthOptions {
-	return AuthOptions{HTTP: h.disk.api.Client(), Listen: h.listenFree}
+func (h *authHarness) options() Options {
+	return Options{HTTP: h.oauth.srv.Client(), Listen: h.listenFree}
 }
 
 func (h *authHarness) listenFree(network, addr string) (net.Listener, error) {
@@ -61,8 +67,8 @@ func listenLocal(t *testing.T, addr string) (net.Listener, error) {
 	return lc.Listen(t.Context(), "tcp", addr)
 }
 
-func (h *authHarness) authorizer(opts AuthOptions) *Authorizer {
-	return NewAuthorizer(h.disk.endpoints(), opts)
+func (h *authHarness) authorizer(opts Options) *Authorizer {
+	return NewAuthorizer(h.oauth.provider(), opts)
 }
 
 // loopback begins a loopback login with the harness options.
@@ -227,10 +233,10 @@ func s256(verifier string) string {
 
 // wantCodeForm checks the one token request: the authorization code grant
 // with the verifier of challenge and no client secret.
-func wantCodeForm(t *testing.T, d *fakeDisk, challenge string) {
+func wantCodeForm(t *testing.T, o *fakeOAuth, challenge string) {
 	t.Helper()
 
-	forms := d.forms()
+	forms := o.forms()
 	if len(forms) != 1 {
 		t.Fatalf("token requests = %d, want 1", len(forms))
 	}
@@ -278,7 +284,7 @@ func TestLoopbackURL(t *testing.T) {
 	h := newAuthHarness(t)
 	l := h.loopback()
 
-	if got, want := l.base.String(), h.disk.oauth.URL+"/authorize"; got != want {
+	if got, want := l.base.String(), h.oauth.srv.URL+"/authorize"; got != want {
 		t.Errorf("authorize URL = %s, want %s", got, want)
 	}
 
@@ -286,8 +292,8 @@ func TestLoopbackURL(t *testing.T) {
 	calls := h.listen
 	h.mu.Unlock()
 
-	if len(calls) != 1 || calls[0] != "tcp "+LoopbackAddr {
-		t.Errorf("Listen calls = %v, want tcp %s", calls, LoopbackAddr)
+	if len(calls) != 1 || calls[0] != "tcp "+testLoopbackAddr {
+		t.Errorf("Listen calls = %v, want tcp %s", calls, testLoopbackAddr)
 	}
 
 	q := l.query
@@ -375,7 +381,7 @@ func TestLoopbackSuccess(t *testing.T) {
 	}
 
 	wantToken(t, r.tok, before)
-	wantCodeForm(t, h.disk, l.query.Get("code_challenge"))
+	wantCodeForm(t, h.oauth, l.query.Get("code_challenge"))
 	l.wantClosed(t)
 }
 
@@ -398,7 +404,7 @@ func TestLoopbackWrongState(t *testing.T) {
 		t.Fatalf("Wait: %v", r.err)
 	}
 
-	wantCodeForm(t, h.disk, l.query.Get("code_challenge"))
+	wantCodeForm(t, h.oauth, l.query.Get("code_challenge"))
 }
 
 func TestLoopbackMissingState(t *testing.T) {
@@ -437,7 +443,7 @@ func TestLoopbackMissingState(t *testing.T) {
 				t.Errorf("Wait after Close = %v, want context.Canceled", r.err)
 			}
 
-			if n := len(h.disk.forms()); n != 0 {
+			if n := len(h.oauth.forms()); n != 0 {
 				t.Errorf("token requests = %d, want none", n)
 			}
 		})
@@ -476,7 +482,7 @@ func TestAccessDeniedOwnState(t *testing.T) {
 		t.Fatalf("Wait = %v, want context.Canceled", r.err)
 	}
 
-	if n := len(h.disk.forms()); n != 0 {
+	if n := len(h.oauth.forms()); n != 0 {
 		t.Errorf("token requests = %d, want none", n)
 	}
 
@@ -487,7 +493,7 @@ func TestOtherOAuthError(t *testing.T) {
 	cases := []struct{ name, error, wantCode string }{
 		{name: "known name", error: "server_error", wantCode: "server_error"},
 		{name: "invalid scope", error: "invalid_scope", wantCode: "invalid_scope"},
-		{name: "unknown name", error: "something " + fakeDescription, wantCode: codeOther},
+		{name: "unknown name", error: "something " + fakeDescription, wantCode: "other"},
 	}
 
 	for _, tc := range cases {
@@ -534,7 +540,7 @@ func TestLoopbackOnlyCallbackPath(t *testing.T) {
 
 	stillWaiting(t, ch)
 
-	if n := len(h.disk.forms()); n != 0 {
+	if n := len(h.oauth.forms()); n != 0 {
 		t.Errorf("token requests = %d, want none", n)
 	}
 
@@ -588,7 +594,7 @@ func TestLoopbackExchange(t *testing.T) {
 		t.Errorf("Exchange on a loopback login = %v, want ErrNoPendingOperation", err)
 	}
 
-	if n := len(h.disk.forms()); n != 0 {
+	if n := len(h.oauth.forms()); n != 0 {
 		t.Errorf("token requests = %d, want none", n)
 	}
 }
@@ -663,12 +669,12 @@ func TestManualExchange(t *testing.T) {
 	}
 
 	_, err := l.Exchange(t.Context(), "wrong")
-	if ce := cloudError(t, err); ce.Status != http.StatusBadRequest || ce.Code != codeInvalidGrant {
+	if ce := cloudError(t, err); ce.Status != http.StatusBadRequest || ce.Code != "invalid_grant" {
 		t.Errorf("rejected code = %+v, want 400 invalid_grant", ce)
 	}
 
 	wantNoSecrets(t, err, l)
-	h.disk.set(func(d *fakeDisk) { d.tokenForms = nil })
+	h.oauth.reset()
 
 	tok, err := l.Exchange(t.Context(), "  "+fakeAuthCode+"\n")
 	if err != nil {
@@ -676,7 +682,7 @@ func TestManualExchange(t *testing.T) {
 	}
 
 	wantToken(t, tok, before)
-	wantCodeForm(t, h.disk, l.query.Get("code_challenge"))
+	wantCodeForm(t, h.oauth, l.query.Get("code_challenge"))
 }
 
 // TestNoAccountRequest: the sign-in does not read the account (the
@@ -694,8 +700,8 @@ func TestNoAccountRequest(t *testing.T) {
 		t.Errorf("token = %s, want acc-2 without account and refresh token", describeToken(tok))
 	}
 
-	if n := h.disk.count("api", http.MethodGet, "/v1/disk"); n != 0 {
-		t.Errorf("account requests = %d, want 0", n)
+	if n := len(h.oauth.requests()); n != 1 {
+		t.Errorf("requests to the server = %d, want only the token request", n)
 	}
 }
 
@@ -736,13 +742,9 @@ func TestCloseDuringExchange(t *testing.T) {
 
 	var once sync.Once
 
-	h.disk.set(func(d *fakeDisk) {
-		d.hold = func(got string) {
-			if got == epToken {
-				once.Do(func() { close(started) })
-				<-release
-			}
-		}
+	h.oauth.setHold(func() {
+		once.Do(func() { close(started) })
+		<-release
 	})
 
 	ch := waitAsync(t.Context(), l)
@@ -764,6 +766,6 @@ func TestCloseDuringExchange(t *testing.T) {
 	}
 
 	if _, ok := errors.AsType[cloudhttp.CloudError](r.err); ok {
-		t.Errorf("a cancelled exchange reads as a Disk error: %v", r.err)
+		t.Errorf("a cancelled exchange reads as a cloud error: %v", r.err)
 	}
 }

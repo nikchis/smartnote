@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/nikchis/smartnote/internal/adapter/cloudhttp"
 	"github.com/nikchis/smartnote/internal/domain"
@@ -34,13 +33,6 @@ const (
 	maxRedirects = 10
 
 	schemeHTTPS = "https"
-
-	maxExpiresIn = 10 * 365 * 86400 // seconds; a larger expires_in is capped
-
-	// Parameters of the OAuth requests.
-	paramGrantType = "grant_type"
-	paramClientID  = "client_id"
-	paramCode      = "code"
 
 	// OAuth errors of a refused grant or client.
 	codeInvalidGrant       = "invalid_grant"
@@ -95,7 +87,6 @@ var (
 	errBadLink      = errors.New("link cannot be parsed")
 	errRedirects    = errors.New("too many redirects")
 	errTooLarge     = errors.New("object exceeds the size limit")
-	errNoAccess     = errors.New("token answer without access_token")
 )
 
 func knownCode(name string) string {
@@ -313,21 +304,6 @@ func (c hrefClient) secureLink(href string) (string, error) {
 	return u.String(), nil
 }
 
-// httpsLink parses an endpoint of the OAuth server and requires https. Its
-// errors are errBadLink and errInsecureLink.
-func httpsLink(href string) (string, error) {
-	u, err := url.Parse(href)
-	if err != nil {
-		return "", errBadLink // the parse error quotes the link
-	}
-
-	if u.Scheme != schemeHTTPS || u.Host == "" {
-		return "", errInsecureLink
-	}
-
-	return u.String(), nil
-}
-
 // get downloads href, counting the bytes of the body with m; more than limit
 // bytes is errTooLarge.
 func (c hrefClient) get(ctx context.Context, href string, limit int64, m *cloudhttp.Meter) ([]byte, error) {
@@ -395,49 +371,4 @@ func (c hrefClient) put(ctx context.Context, href string, data []byte, m *cloudh
 	_, err = roundTrip(c.http, req, stepUpload, nil)
 
 	return err
-}
-
-// tokenAnswer is a successful answer of the OAuth token endpoint.
-type tokenAnswer struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int64  `json:"expires_in"`
-}
-
-// expiry is the end of the token's life counted from now; zero when the
-// answer gives none.
-func (a tokenAnswer) expiry(now time.Time) time.Time {
-	if a.ExpiresIn <= 0 {
-		return time.Time{}
-	}
-
-	return now.Add(time.Duration(min(a.ExpiresIn, maxExpiresIn)) * time.Second)
-}
-
-// postToken sends form to the OAuth token endpoint, only over https, with hc,
-// which must not follow redirects. An error answer is a CloudError with the
-// OAuth error name; so is an answer without access_token.
-func postToken(ctx context.Context, hc *http.Client, endpoint string, form url.Values) (tokenAnswer, error) {
-	link, err := httpsLink(endpoint)
-	if err != nil {
-		return tokenAnswer{}, otherError(0, "", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, link, strings.NewReader(form.Encode()))
-	if err != nil {
-		return tokenAnswer{}, otherError(0, "", errBadLink)
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-
-	var answer tokenAnswer
-	if _, err := roundTrip(hc, req, "", &answer); err != nil {
-		return tokenAnswer{}, err
-	}
-
-	if answer.AccessToken == "" {
-		return tokenAnswer{}, otherError(http.StatusOK, "", errNoAccess)
-	}
-
-	return answer, nil
 }

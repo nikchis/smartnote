@@ -21,6 +21,7 @@ import (
 
 	"github.com/nikchis/smartnote/frontend"
 	"github.com/nikchis/smartnote/internal/adapter/blobremote"
+	"github.com/nikchis/smartnote/internal/adapter/cloudauth"
 	"github.com/nikchis/smartnote/internal/adapter/remote"
 	"github.com/nikchis/smartnote/internal/adapter/sqlite"
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
@@ -28,6 +29,7 @@ import (
 	"github.com/nikchis/smartnote/internal/adapter/yadisk"
 	"github.com/nikchis/smartnote/internal/applog"
 	"github.com/nikchis/smartnote/internal/domain"
+	"github.com/nikchis/smartnote/internal/i18n"
 	"github.com/nikchis/smartnote/internal/platform"
 	"github.com/nikchis/smartnote/internal/sealbox"
 	"github.com/nikchis/smartnote/internal/usecase"
@@ -290,10 +292,14 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		return nil, err
 	}
 
+	// The language of the browser sign-in pages; always English until the
+	// interface language is switchable.
+	lang := i18n.NewCurrent(i18n.EN)
+
 	connection, err := usecase.NewConnection(usecase.ConnectionDeps{
 		Settings: store, Store: store, Tokens: store, Remote: connector,
 		Auth: map[domain.StorageKind]usecase.CloudAuthorizer{
-			domain.KindYandexDisk: yadisk.NewAuthorizer(yadisk.DefaultEndpoints, yadisk.AuthOptions{}),
+			domain.KindYandexDisk: cloudauth.NewAuthorizer(yadisk.OAuthProvider(), cloudauth.Options{Lang: lang.Get}),
 		},
 		Gate: gate, Offer: offer, Changed: syncer.ResetConnection,
 		Builtin: builtin, OpenURL: openBrowser,
