@@ -67,15 +67,17 @@ SOFTWARE.
 
 The search worker loads ONNX Runtime 1.31.0, the official CPU build of Microsoft
 (`libonnxruntime.so.1.31.0`, `libonnxruntime.1.31.0.dylib` or `onnxruntime.dll`, unmodified, from
-<https://github.com/microsoft/onnxruntime/releases/tag/v1.31.0>).
+the NuGet package `Microsoft.ML.OnnxRuntime` 1.31.0,
+<https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.31.0>, where the first two are named
+`libonnxruntime.so` and `libonnxruntime.dylib`).
 
 - Copyright (c) Microsoft Corporation, MIT License: `licenses/onnxruntime/LICENSE`.
 - The components built into ONNX Runtime and their licences, among them protobuf
   (BSD-3-Clause), abseil-cpp (Apache-2.0), re2 (BSD-3-Clause), flatbuffers (Apache-2.0), cpuinfo
   (BSD-2-Clause), XNNPACK (BSD) and Eigen (MPL-2.0; its source files are available at
   <https://gitlab.com/libeigen/eigen>):
-  `licenses/onnxruntime/ThirdPartyNotices.txt`, the file of the same name from the release
-  archive.
+  `licenses/onnxruntime/ThirdPartyNotices.txt`, the file of the same name from the NuGet
+  package.
 
 ## 3. Rust crates
 

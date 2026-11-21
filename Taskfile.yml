@@ -114,8 +114,8 @@ tasks:
 
   ort:fetch:
     summary: |
-      Downloads the official ONNX Runtime archive of the current OS and architecture listed in ort.lock.json,
-      checks its SHA-256, extracts the runtime library and its licence notices into build/ort and checks
+      Downloads the official ONNX Runtime archive listed in ort.lock.json for the current OS and architecture
+      (the NuGet package Microsoft.ML.OnnxRuntime), checks its SHA-256, extracts the runtime library and its licence notices into build/ort and checks
       the library's SHA-256. The target is GOOS and ARCH (the host's by default).
     run: once
     vars:

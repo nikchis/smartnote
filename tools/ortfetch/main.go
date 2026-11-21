@@ -1,9 +1,10 @@
-// Command ortfetch downloads the ONNX Runtime archive of one target listed in ort.lock.json,
-// checks its SHA-256, extracts the runtime library and the notice files (the lock's "notices",
-// next to the library's directory in the archive, e.g. LICENSE) into a directory and checks the
-// library's SHA-256; the notices are covered by the archive digest. A library already present
-// with the expected digest is kept when every notice file is present too; otherwise the archive
-// is fetched again, and nothing that fails a check is left behind.
+// Command ortfetch downloads the ONNX Runtime archive of one target listed in ort.lock.json
+// (a .tgz, a .zip or a NuGet package, which is a zip), checks its SHA-256, extracts the runtime
+// library (under the target's lib_name) and the notice files (the lock's "notices", e.g. LICENSE,
+// from the target's notices_dir in the archive) into a directory and checks the library's
+// SHA-256; the notices are covered by the archive digest. A library already present with the
+// expected digest is kept when every notice file is present too; otherwise the archive is
+// fetched again, and nothing that fails a check is left behind.
 //
 // Usage: go run ./tools/ortfetch [-lock ort.lock.json] [-out build/ort] [-target linux-amd64]
 //
@@ -35,7 +36,7 @@ import (
 )
 
 const (
-	// downloadTimeout bounds the archive download; the Windows archive is about 80 MB.
+	// downloadTimeout bounds the archive download; the NuGet package is about 160 MB.
 	downloadTimeout = 30 * time.Minute
 	// maxLibrary bounds each extracted file (the library is about 45 MB on macOS) against
 	// archive bombs.
@@ -51,12 +52,37 @@ type target struct {
 	SHA256    string `json:"sha256"`
 	Lib       string `json:"lib"`
 	LibSHA256 string `json:"lib_sha256"`
+	// LibName is the file name of the library in the output directory; empty means the base
+	// name of Lib. A NuGet package names the library without the version
+	// (runtimes/linux-x64/native/libonnxruntime.so), the consumers expect the versioned name.
+	LibName string `json:"lib_name,omitempty"`
+	// NoticesDir is the directory of the archive with the notice files, "." for the archive
+	// root (as in a NuGet package); empty means the top directory of Lib.
+	NoticesDir string `json:"notices_dir,omitempty"`
+}
+
+// libName is the file name of the library in the output directory.
+func (t target) libName() string {
+	if t.LibName != "" {
+		return t.LibName
+	}
+
+	return path.Base(t.Lib)
+}
+
+// noticesDir is the directory of the archive with the notice files ("." for the root).
+func (t target) noticesDir() string {
+	if t.NoticesDir != "" {
+		return t.NoticesDir
+	}
+
+	return strings.SplitN(t.Lib, "/", 2)[0]
 }
 
 type lockFile struct {
 	Version string `json:"version"`
-	// Notices are file names in the top directory of every archive (the first element of the
-	// lib path) that are extracted beside the library: the licence texts shipped with it.
+	// Notices are file names in the notices directory of every archive (see
+	// target.NoticesDir) that are extracted beside the library: the licence texts shipped with it.
 	Notices []string          `json:"notices"`
 	Targets map[string]target `json:"targets"`
 }
@@ -100,7 +126,7 @@ func run(ctx context.Context, lockPath, outDir, name string) error {
 		return err
 	}
 
-	libPath := filepath.Join(outDir, path.Base(entry.Lib))
+	libPath := filepath.Join(outDir, entry.libName())
 	if got, err := fileSHA256(libPath); err == nil && got == entry.LibSHA256 && filesExist(outDir, lock.Notices) {
 		fmt.Println("ok", libPath)
 
@@ -160,7 +186,7 @@ func readLock(lockPath string) (lockFile, error) {
 
 func checkTarget(entry target, notices []string) error {
 	if archiveKind(entry.URL) == "" {
-		return fmt.Errorf("unsupported archive %q (want .tgz, .tar.gz or .zip)", entry.URL)
+		return fmt.Errorf("unsupported archive %q (want .tgz, .tar.gz, .zip or .nupkg)", entry.URL)
 	}
 
 	if !isDigest(entry.SHA256) {
@@ -175,9 +201,19 @@ func checkTarget(entry target, notices []string) error {
 		return fmt.Errorf("lib %q must be a clean relative path inside a directory", entry.Lib)
 	}
 
-	seen := map[string]bool{path.Base(entry.Lib): true}
+	if entry.LibName != "" && !isFileName(entry.LibName) {
+		return fmt.Errorf("lib_name %q must be a plain file name", entry.LibName)
+	}
+
+	if entry.NoticesDir != "" {
+		if clean, ok := safeName(entry.NoticesDir); !ok || clean != entry.NoticesDir {
+			return fmt.Errorf("notices_dir %q must be a clean relative path inside the archive", entry.NoticesDir)
+		}
+	}
+
+	seen := map[string]bool{entry.libName(): true}
 	for _, notice := range notices {
-		if !filepath.IsLocal(notice) || notice == "." || strings.ContainsAny(notice, `/\`) || seen[notice] {
+		if !isFileName(notice) || seen[notice] || path.Join(entry.noticesDir(), notice) == entry.Lib {
 			return fmt.Errorf("notice %q must be a distinct plain file name", notice)
 		}
 
@@ -185,6 +221,11 @@ func checkTarget(entry target, notices []string) error {
 	}
 
 	return nil
+}
+
+// isFileName reports whether name is a plain file name: no directory, not "." or "..".
+func isFileName(name string) bool {
+	return filepath.IsLocal(name) && name != "." && !strings.ContainsAny(name, `/\`)
 }
 
 func isDigest(s string) bool {
@@ -195,12 +236,13 @@ func isDigest(s string) bool {
 	return strings.Trim(s, "0123456789abcdef") == ""
 }
 
-// archiveKind is kindTgz or kindZip by the URL's extension, or "" for another one.
+// archiveKind is kindTgz or kindZip by the URL's extension, or "" for another one. A NuGet
+// package (.nupkg) is a zip.
 func archiveKind(rawURL string) string {
 	switch {
 	case strings.HasSuffix(rawURL, ".tgz"), strings.HasSuffix(rawURL, ".tar.gz"):
 		return kindTgz
-	case strings.HasSuffix(rawURL, ".zip"):
+	case strings.HasSuffix(rawURL, ".zip"), strings.HasSuffix(rawURL, ".nupkg"):
 		return kindZip
 	default:
 		return ""
@@ -249,9 +291,9 @@ func fetchLibrary(ctx context.Context, entry target, notices []string, outDir, l
 	// Every file is extracted to <dst>.part and renamed only after all checks passed.
 	wanted := map[string]string{entry.Lib: libPath}
 
-	root := strings.SplitN(entry.Lib, "/", 2)[0]
+	dir := entry.noticesDir()
 	for _, notice := range notices {
-		wanted[root+"/"+notice] = filepath.Join(outDir, notice)
+		wanted[path.Join(dir, notice)] = filepath.Join(outDir, notice)
 	}
 
 	err = extract(archive, archiveKind(entry.URL), wanted)

@@ -62,8 +62,15 @@ tests and is not shipped), and the licence notices: `THIRD_PARTY_NOTICES.md` wit
   checks this with a broken dependency of the library on Linux). These DLLs are not copied
   into the package: they would be unpinned binaries.
 - `task ort:fetch` fetches the library of `GOOS`/`ARCH` and also extracts `LICENSE` and
-  `ThirdPartyNotices.txt` from the release archive (the `notices` of `ort.lock.json`; the archive
-  SHA-256 covers them, a later run only checks that they are present) into `build/ort`. A target
+  `ThirdPartyNotices.txt` (the `notices` of `ort.lock.json`; the archive SHA-256 covers them, a
+  later run only checks that they are present) into `build/ort`. The source is the official NuGet
+  package `Microsoft.ML.OnnxRuntime` 1.31.0 from nuget.org (one zip with the libraries of all
+  targets under `runtimes/<rid>/native/` and the notices at its root): the repository
+  `microsoft/onnxruntime` and its release archives are no longer on GitHub. `ort.lock.json` pins
+  the SHA-256 of the package and of each library; `lib_name` keeps the versioned file names
+  (`libonnxruntime.so.1.31.0`, `libonnxruntime.1.31.0.dylib`). The Linux and Windows libraries are
+  byte-identical to those of the former release archives; the macOS library of the package is a
+  different build, so its pinned SHA-256 changed (`83973572...` instead of `2a50a63e...`). A target
   without a pinned library (darwin/amd64, linux/arm64) stops here with a message; so do
   `darwin:package:universal` (the worker and the library are arm64 only) and the MSIX package
   (`FORMAT=msix`, which would not contain the search files).
