@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -318,6 +319,97 @@ func TestEndToEndUnknownOutcome(t *testing.T) {
 
 	if got := second.local.content()[garden.ID]; got != [2]string{"Garden", "late edit"} {
 		t.Errorf("second device note = %v, want the late edit", got)
+	}
+}
+
+// TestEndToEndCreateRaceEqualTimes: two devices connect to an empty Drive
+// at once and each sees both created files with the same createdTime, so
+// both yield (spec §5.3, creation step 2): each deletes its own file, the
+// re-read finds no container and Connect ends with ErrRemoteChanged, the
+// local notes untouched. The next Connect creates the storage as usual.
+func TestEndToEndCreateRaceEqualTimes(t *testing.T) {
+	d := newFakeDrive(t)
+	devs := []*e2eDevice{newE2EDevice(t, d), newE2EDevice(t, d)}
+
+	for i, dev := range devs {
+		dev.edit(domain.Note{ID: uuid.New(), Name: []string{"Garden", "Journal"}[i], Info: "local", Updated: testNow})
+	}
+
+	before := []map[uuid.UUID][2]string{devs[0].local.content(), devs[1].local.content()}
+
+	meetingPuts(t, d)
+
+	var commits atomic.Int32
+
+	both := make(chan struct{})
+
+	d.set(func(d *fakeDrive) {
+		d.sameCreated = true
+		d.onPut = func(*fakeDrive, *fakeSession) putAnswer {
+			if commits.Add(1) == 2 {
+				close(both)
+			}
+
+			return putAnswer{}
+		}
+		// A list after a creation waits for the other device's file.
+		d.beforeList = func() {
+			if commits.Load() == 0 {
+				return
+			}
+
+			select {
+			case <-both:
+			case <-time.After(5 * time.Second):
+				t.Error("the second creation did not come")
+			}
+		}
+	})
+
+	errs := make([]error, len(devs))
+
+	var wg sync.WaitGroup
+
+	for i, dev := range devs {
+		wg.Go(func() { _, errs[i] = dev.sync.Connect(t.Context()) })
+	}
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if !errors.Is(err, domain.ErrRemoteChanged) {
+			t.Errorf("Connect %d: err = %v, want ErrRemoteChanged", i, err)
+		}
+
+		if got := devs[i].local.content(); !maps.Equal(got, before[i]) {
+			t.Errorf("device %d notes = %v, want them untouched", i, got)
+		}
+
+		if devs[i].sync.State().Connected {
+			t.Errorf("device %d is connected after the lost creation", i)
+		}
+	}
+
+	if n := containerFiles(d); n != 0 {
+		t.Fatalf("container files = %d after both yielded, want 0", n)
+	}
+
+	d.set(func(d *fakeDrive) { d.beforePut, d.beforeList, d.onPut, d.sameCreated = nil, nil, nil, false })
+
+	if out := devs[0].connect(t); out.Status != usecase.StatusCreated {
+		t.Fatalf("next Connect = %+v, want created", out)
+	}
+
+	if out := devs[1].connect(t); out.Status == usecase.StatusCreated {
+		t.Errorf("other device Connect = %+v, want the created storage", out)
+	}
+
+	if n := containerFiles(d); n != 1 {
+		t.Errorf("container files = %d at the end, want 1", n)
+	}
+
+	if got := devs[1].local.content(); !maps.Equal(got, before[1]) {
+		t.Errorf("other device notes = %v, want them untouched", got)
 	}
 }
 

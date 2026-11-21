@@ -147,12 +147,17 @@ type fakeDrive struct {
 	sessions    map[string]*fakeSession
 	nextSession int
 	clock       time.Time // createdTime of the next created file; one second later for each
+	sameCreated bool      // the created files all get clock, as creations within one millisecond
+	nextFileID  string    // the ID of the next created file instead of file-NNN; used once
 	// onPut decides the answer to the body PUT of a session; it runs under
 	// the lock. nil commits and answers 200.
 	onPut func(d *fakeDrive, s *fakeSession) putAnswer
 	// beforePut runs without the lock before a body PUT is served, so that
 	// concurrent uploads can meet.
 	beforePut func()
+	// beforeList runs without the lock before a list is served, so that the
+	// lists of concurrent creations can wait for each other's files.
+	beforeList func()
 	// statusAnswers and deleteAnswers are taken one per status request or
 	// DELETE of a session: a status code answers with it and an empty body,
 	// answerServe serves normally and answerDrop applies the request and
@@ -281,7 +286,7 @@ func (d *fakeDrive) record(server string, r *http.Request) {
 
 func (d *fakeDrive) serveAPI(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
-	before := d.beforePut
+	before, beforeList := d.beforePut, d.beforeList
 	d.mu.Unlock()
 
 	q := r.URL.Query()
@@ -289,6 +294,10 @@ func (d *fakeDrive) serveAPI(w http.ResponseWriter, r *http.Request) {
 
 	if session && before != nil && r.Method == http.MethodPut && r.Header.Get("Content-Range") == "" {
 		before()
+	}
+
+	if !session && beforeList != nil && r.Method == http.MethodGet && r.URL.Path == fakeAPIPath+"/files" {
+		beforeList()
 	}
 
 	d.mu.Lock()
@@ -494,8 +503,14 @@ func (d *fakeDrive) forgetSessions() {
 func (d *fakeDrive) commit(s *fakeSession, data []byte) bool {
 	if s.op == "create" {
 		d.nextID++
-		s.fileID = d.add(fmt.Sprintf("file-%03d", d.nextID), s.name, data, d.clock)
-		d.clock = d.clock.Add(time.Second)
+
+		id := cmp.Or(d.nextFileID, fmt.Sprintf("file-%03d", d.nextID))
+		d.nextFileID = ""
+		s.fileID = d.add(id, s.name, data, d.clock)
+
+		if !d.sameCreated {
+			d.clock = d.clock.Add(time.Second)
+		}
 	} else {
 		if d.file(s.fileID) == nil {
 			return false

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/nikchis/smartnote/internal/adapter/blobremote"
@@ -56,9 +57,13 @@ func (s *Store) write(ctx context.Context, name string, data []byte, expect stri
 }
 
 // create uploads a new file of name when there is none (spec §5.3,
-// creation). When another device created one meanwhile and its file is the
-// effective one, the own file is deleted and it is
-// blobremote.ErrVersionMismatch.
+// creation). When another device created one meanwhile that is not
+// strictly later than the own file, the own file is deleted and it is
+// blobremote.ErrVersionMismatch: the order of IDs is not the order of
+// creation, so on equal createdTime the creating device yields even if its
+// ID is the smaller one, and a creation that is not earlier never deletes
+// a file another device already confirmed. An earlier file the list does
+// not give yet is not seen: Drive has no conditional creation (spec §11).
 func (s *Store) create(ctx context.Context, name string, data []byte) error {
 	files, err := s.list(ctx, name)
 	if err != nil {
@@ -88,7 +93,7 @@ func (s *Store) create(ctx context.Context, name string, data []byte) error {
 		return fmt.Errorf("list the created container: %w", blobremote.ErrOutcomeUnknown)
 	}
 
-	if files[0].ID != own.ID {
+	if yields(files, own.ID) {
 		// Its duplicate, if not deleted now, goes with a later write.
 		if err := s.deleteFile(ctx, own.ID); err != nil {
 			s.log.Error("google drive: own duplicate of the container not deleted", applog.Err(err))
@@ -100,6 +105,23 @@ func (s *Store) create(ctx context.Context, name string, data []byte) error {
 	s.removeDuplicates(ctx, files)
 
 	return nil
+}
+
+// yields reports whether the creation of the file own gives way: the list
+// files does not give own, or gives another file whose createdTime is
+// earlier than or equal to own's. Only a creation whose every other file is
+// strictly later stays, and its file is then the first of files.
+func yields(files []driveFile, own string) bool {
+	i := slices.IndexFunc(files, func(f driveFile) bool { return f.ID == own })
+	if i < 0 {
+		return true
+	}
+
+	created := files[i].CreatedTime
+
+	return slices.ContainsFunc(files, func(f driveFile) bool {
+		return f.ID != own && !f.CreatedTime.After(created)
+	})
 }
 
 // replace uploads new content of the file of expect,

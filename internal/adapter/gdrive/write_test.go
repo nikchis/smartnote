@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -365,6 +367,127 @@ func TestCreateRaceLoserDeletesOwn(t *testing.T) {
 	want := []string{"device-a", "device-b"}[winner]
 	if got := d.containerData(); len(got) != 1 || got[0] != want {
 		t.Errorf("container files = %q, want only %q", got, want)
+	}
+}
+
+// TestCreateYieldsToEqualCreatedTime: device A creates the container alone
+// and succeeds; device B, whose check of absence came before A's file,
+// creates a file with the same createdTime and a smaller ID afterwards. B
+// yields: it deletes its own file and gets ErrVersionMismatch, and A's
+// confirmed file stays and is read (spec §5.3, creation step 2).
+func TestCreateYieldsToEqualCreatedTime(t *testing.T) {
+	d := newFakeDrive(t)
+	a, b := uploadStore(t, d, &memUploads{}), uploadStore(t, d, &memUploads{})
+
+	var puts atomic.Int32
+
+	bWaits, aDone := make(chan struct{}), make(chan struct{})
+
+	d.set(func(d *fakeDrive) {
+		// B's body PUT comes first and waits until A has created alone.
+		d.beforePut = func() {
+			if puts.Add(1) != 1 {
+				return
+			}
+
+			close(bWaits)
+
+			select {
+			case <-aDone:
+			case <-time.After(5 * time.Second):
+				t.Error("device A did not finish")
+			}
+		}
+	})
+
+	var (
+		wg   sync.WaitGroup
+		bErr error
+	)
+
+	wg.Go(func() { bErr = writeErr(t, b, []byte("device-b"), "") })
+
+	select {
+	case <-bWaits:
+	case <-time.After(5 * time.Second):
+		t.Fatal("device B did not upload")
+	}
+
+	aErr := writeErr(t, a, []byte("device-a"), "")
+
+	// B's file gets the createdTime of A's and an ID before it.
+	d.set(func(d *fakeDrive) { d.clock, d.nextFileID = fakeUploadTime, "file-000" })
+	close(aDone)
+	wg.Wait()
+
+	if aErr != nil {
+		t.Fatalf("Write of A: %v", aErr)
+	}
+
+	if !errors.Is(bErr, blobremote.ErrVersionMismatch) {
+		t.Errorf("Write of B: err = %v, want ErrVersionMismatch", bErr)
+	}
+
+	if got := deletedFiles(d); len(got) != 1 || got[0] != "file-000" {
+		t.Errorf("deleted = %v, want only B's own file-000", got)
+	}
+
+	if got := d.containerData(); len(got) != 1 || got[0] != "device-a" {
+		t.Errorf("container files = %q, want only A's", got)
+	}
+
+	data, version, _ := mustRead(t, uploadStore(t, d, &memUploads{}))
+	if string(data) != "device-a" || !strings.HasPrefix(version, "file-001:") {
+		t.Errorf("Read = %q, version %q; want A's file-001", data, version)
+	}
+}
+
+// TestCreateYieldsWithOwnSmallerID: a file of another device with the same
+// createdTime makes the creating device yield even when its own ID is the
+// smaller one (spec §5.3, creation step 2).
+func TestCreateYieldsWithOwnSmallerID(t *testing.T) {
+	d := newFakeDrive(t)
+
+	d.set(func(d *fakeDrive) {
+		d.nextFileID = "file-000"
+		d.onPut = func(d *fakeDrive, _ *fakeSession) putAnswer {
+			// The other device's file, missed by the check of absence.
+			d.add("file-zzz", container, []byte("other"), d.clock)
+			return putAnswer{}
+		}
+	})
+
+	err := writeErr(t, uploadStore(t, d, &memUploads{}), []byte("mine"), "")
+	if !errors.Is(err, blobremote.ErrVersionMismatch) {
+		t.Fatalf("Write: err = %v, want ErrVersionMismatch", err)
+	}
+
+	if got := d.containerData(); len(got) != 1 || got[0] != "other" {
+		t.Errorf("container files = %q, want only the other device's", got)
+	}
+}
+
+// TestCreateStaysBeforeLaterFiles: files of other devices that are all
+// strictly later leave the own file effective; they are removed as its
+// duplicates.
+func TestCreateStaysBeforeLaterFiles(t *testing.T) {
+	d := newFakeDrive(t)
+
+	d.set(func(d *fakeDrive) {
+		d.onPut = func(d *fakeDrive, _ *fakeSession) putAnswer {
+			d.add("file-000", container, []byte("later"), d.clock.Add(time.Millisecond))
+			return putAnswer{}
+		}
+	})
+
+	mustWrite(t, uploadStore(t, d, &memUploads{}), []byte("mine"), "")
+
+	if got := deletedFiles(d); len(got) != 1 || got[0] != "file-000" {
+		t.Errorf("deleted = %v, want only the later file-000", got)
+	}
+
+	if got := d.containerData(); len(got) != 1 || got[0] != "mine" {
+		t.Errorf("container files = %q, want only the own one", got)
 	}
 }
 
