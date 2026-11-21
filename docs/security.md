@@ -65,8 +65,9 @@ encrypted in the same way, in the same container.
   They are sent only over HTTPS to `www.googleapis.com` and `oauth2.googleapis.com`; Smartnote does
   not follow redirects. Tokens, codes, `state`, verifiers and the client secret are never written to
   the log.
-- An unfinished upload is resumed or settled through the address of its upload session, which
-  Google accepts without the token. Smartnote keeps that address encrypted in `local.db` until the
+- An unfinished upload is settled through the address of its upload session, which Google
+  accepts without the token: Smartnote asks for the status of the session and cancels it if the
+  upload is not complete; it never resumes it. Smartnote keeps that address encrypted in `local.db` until the
   result of the upload is known and never writes it to the log.
 - The package holds the client ID and the client secret of the author's Desktop OAuth client. Google
   requires the secret both for exchanging the sign-in code and for renewing the access, even with

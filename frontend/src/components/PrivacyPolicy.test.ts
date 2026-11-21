@@ -93,6 +93,12 @@ describe("PrivacyPolicy", () => {
     expect(closed).toBe(2);
   });
 
+  it("shows the effective date in both languages", () => {
+    expect(en).toContain("Effective November 21, 2026");
+    expect(ru).toContain("Действует с 21 ноября 2026 г.");
+    expect(target.textContent).toContain("Effective November 21, 2026");
+  });
+
   it("has no dashes", () => {
     for (const html of [en, ru]) expect(html).not.toMatch(/[–—]/);
   });

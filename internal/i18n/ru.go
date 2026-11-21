@@ -39,6 +39,7 @@ var ru = map[Key]string{ //nolint:gosec // catalog texts, not credentials
 	ErrRemoteTooLarge:       "Заметки не помещаются в удалённое хранилище (64 МиБ).",
 	ErrRemoteOutcomeUnknown: "Неизвестно, создана ли резервная копия. Подключитесь снова, чтобы проверить удалённое хранилище.",
 	ErrLoopbackUnavailable:  "Локальный адрес для входа недоступен. Введите код вручную.",
+	ErrLoopbackNoCode:       "Не удалось начать вход на этом компьютере. Повторите попытку.",
 	ErrSearchUnavailable:    "Поиск недоступен",
 	ErrTimeout:              "Время ожидания операции истекло.",
 	ErrCanceled:             "Операция отменена.",

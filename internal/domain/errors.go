@@ -80,3 +80,27 @@ func (e *ReauthRequiredError) Is(target error) bool { return target == ErrReauth
 
 // ReauthRequired returns the error that asks for a new sign-in to k.
 func ReauthRequired(k StorageKind) error { return &ReauthRequiredError{Kind: k} }
+
+// LoopbackUnavailableError is a local sign-in receiver that could not start
+// for the cloud of Kind. ManualCode tells whether the cloud has a sign-in
+// with a pasted code, so the text can advise it. It matches
+// ErrLoopbackUnavailable and unwraps to the cause, if any.
+type LoopbackUnavailableError struct {
+	Kind       StorageKind
+	ManualCode bool
+	Err        error
+}
+
+func (e *LoopbackUnavailableError) Error() string {
+	if e.Err == nil {
+		return ErrLoopbackUnavailable.Error()
+	}
+
+	return ErrLoopbackUnavailable.Error() + ": " + e.Err.Error()
+}
+
+// Is reports whether target is ErrLoopbackUnavailable.
+func (e *LoopbackUnavailableError) Is(target error) bool { return target == ErrLoopbackUnavailable }
+
+// Unwrap returns the cause.
+func (e *LoopbackUnavailableError) Unwrap() error { return e.Err }

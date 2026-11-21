@@ -166,6 +166,10 @@ func classify(err error) *UIError {
 		return newUIError(codeReauthRequired, texts(i18n.ErrReauthRequired, argProvider, storageName(re.Kind)))
 	}
 
+	if le, ok := errors.AsType[*domain.LoopbackUnavailableError](err); ok && !le.ManualCode {
+		return newUIError(codeLoopbackUnavailable, texts(i18n.ErrLoopbackNoCode))
+	}
+
 	for _, s := range sentinels {
 		if errors.Is(err, s.err) {
 			return newUIError(s.code, texts(s.key, s.args...))

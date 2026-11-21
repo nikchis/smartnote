@@ -128,6 +128,12 @@ func NewAuthorizer(p Provider, o Options) *Authorizer {
 	return a
 }
 
+// loopbackUnavailable is the error of a receiver that did not start; it says
+// whether the provider has a sign-in with a code to fall back to.
+func (a *Authorizer) loopbackUnavailable(cause error) error {
+	return &domain.LoopbackUnavailableError{Kind: a.p.Kind, ManualCode: a.p.ManualRedirect != "", Err: cause}
+}
+
 // BeginLoopback starts the receiver on LoopbackAddr and returns the login
 // with the redirect URI of the receiver, with its real port when the address
 // asks for any. A busy port, or a listener that is not on a loopback address,
@@ -137,13 +143,13 @@ func (a *Authorizer) BeginLoopback(_ context.Context, c usecase.CloudClient) (us
 
 	ln, err := a.listen("tcp", a.p.LoopbackAddr)
 	if err != nil {
-		return nil, fmt.Errorf("start the sign-in receiver: %w: %w", domain.ErrLoopbackUnavailable, err)
+		return nil, fmt.Errorf("start the sign-in receiver: %w", a.loopbackUnavailable(err))
 	}
 
 	addr, ok := ln.Addr().(*net.TCPAddr)
 	if !ok || !addr.IP.IsLoopback() {
 		_ = ln.Close()
-		return nil, fmt.Errorf("start the sign-in receiver: %w", domain.ErrLoopbackUnavailable)
+		return nil, fmt.Errorf("start the sign-in receiver: %w", a.loopbackUnavailable(nil))
 	}
 
 	redirect := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(addr.Port)) + a.p.CallbackPath

@@ -621,6 +621,23 @@ func TestLoopbackPortBusy(t *testing.T) {
 	}
 }
 
+func TestLoopbackUnavailableKnowsTheProvider(t *testing.T) {
+	for _, manual := range []string{"", "https://example.com/manual"} {
+		h := newAuthHarness(t)
+		opts := h.options()
+		opts.Listen = func(string, string) (net.Listener, error) { return nil, errors.New("busy") }
+		a := h.authorizer(opts)
+		a.p.ManualRedirect = manual
+
+		_, err := a.BeginLoopback(t.Context(), fakeClient)
+
+		le, ok := errors.AsType[*domain.LoopbackUnavailableError](err)
+		if !ok || !errors.Is(err, domain.ErrLoopbackUnavailable) || le.Kind != a.p.Kind || le.ManualCode != (manual != "") {
+			t.Errorf("manual %q: BeginLoopback = %v, want LoopbackUnavailableError with ManualCode %v", manual, err, manual != "")
+		}
+	}
+}
+
 func TestLoopbackNotLoopback(t *testing.T) {
 	h := newAuthHarness(t)
 	opts := h.options()

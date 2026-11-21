@@ -250,6 +250,28 @@ func TestToUIErrorCloud(t *testing.T) {
 	}
 }
 
+func TestLoopbackUnavailableTextByProvider(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		en, ru string
+	}{
+		{"yandex has a manual code", &domain.LoopbackUnavailableError{Kind: domain.KindYandexDisk, ManualCode: true},
+			"The local sign-in address is unavailable. Enter the code manually.", "Локальный адрес для входа недоступен. Введите код вручную."},
+		{"google has none", &domain.LoopbackUnavailableError{Kind: domain.KindGoogleDrive, Err: errors.New("busy")},
+			"Could not start sign-in on this computer. Try again.", "Не удалось начать вход на этом компьютере. Повторите попытку."},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ui := classify(fmt.Errorf("op: %w", tc.err))
+			if ui.Code != "loopback_unavailable" || ui.Messages[i18n.EN] != tc.en || ui.Messages[i18n.RU] != tc.ru {
+				t.Errorf("classify = %q %q %q, want %q %q", ui.Code, ui.Messages[i18n.EN], ui.Messages[i18n.RU], tc.en, tc.ru)
+			}
+		})
+	}
+}
+
 func TestToUIErrorNewSentinels(t *testing.T) {
 	tests := []struct {
 		err        error
