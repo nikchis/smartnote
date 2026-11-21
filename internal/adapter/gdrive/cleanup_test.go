@@ -124,3 +124,65 @@ func TestCleanupNeverDeletesEarliest(t *testing.T) {
 		t.Errorf("container files = %q, want only the earliest with the replacement", got)
 	}
 }
+
+// TestCleanupIgnoresRepeatedID: a file that two pages of the list both give
+// is one candidate, so the cleanup after a replacement does not delete the
+// effective file (spec §5.2).
+func TestCleanupIgnoresRepeatedID(t *testing.T) {
+	d := newFakeDrive(t)
+	d.set(func(d *fakeDrive) {
+		d.pageLimit = 1
+		d.listTwice = true
+	})
+
+	effective := d.put(container, []byte("v1"), testNow)
+	s := uploadStore(t, d, &memUploads{})
+
+	_, version, _ := mustRead(t, s)
+	mustWrite(t, s, []byte("v2"), version)
+
+	if deleted := deletedFiles(d); len(deleted) != 0 {
+		t.Errorf("deleted = %v, want none (the effective file is %s)", deleted, effective)
+	}
+
+	if got := d.containerData(); len(got) != 1 || got[0] != "v2" {
+		t.Errorf("container files = %q, want only the effective one with the replacement", got)
+	}
+}
+
+// TestCreateIgnoresRepeatedID: the own created file that two pages of the
+// list both give is the effective one and is not deleted as its own
+// duplicate.
+func TestCreateIgnoresRepeatedID(t *testing.T) {
+	d := newFakeDrive(t)
+	d.set(func(d *fakeDrive) {
+		d.pageLimit = 1
+		d.listTwice = true
+	})
+
+	s := uploadStore(t, d, &memUploads{})
+	mustWrite(t, s, []byte("v1"), "")
+
+	if deleted := deletedFiles(d); len(deleted) != 0 {
+		t.Errorf("deleted = %v, want none", deleted)
+	}
+
+	if got := d.containerData(); len(got) != 1 || got[0] != "v1" {
+		t.Errorf("container files = %q, want the created one", got)
+	}
+}
+
+// TestRemoveDuplicatesSkipsEffectiveID: the cleanup never deletes the ID of
+// the effective file, even when the list it gets repeats it.
+func TestRemoveDuplicatesSkipsEffectiveID(t *testing.T) {
+	d := newFakeDrive(t)
+	d.putID("file-a", container, []byte("v1"), testNow)
+	d.putID("file-b", container, []byte("dup"), testNow.Add(time.Minute))
+
+	s := uploadStore(t, d, &memUploads{})
+	s.removeDuplicates(t.Context(), []driveFile{{ID: "file-a"}, {ID: "file-a"}, {ID: "file-b"}})
+
+	if got := deletedFiles(d); len(got) != 1 || got[0] != "file-b" {
+		t.Errorf("deleted = %v, want only file-b", got)
+	}
+}

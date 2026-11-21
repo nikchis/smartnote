@@ -41,8 +41,8 @@ type driveFile struct {
 // list returns the files of name in appDataFolder that are not in the
 // trash, the effective one first (spec §5.2): the earliest by createdTime,
 // on equal createdTime the smaller ID, chosen among the files of all pages.
-// The rest are duplicates nobody reads; their number is logged, without
-// IDs. More than listMaxPages pages is domain.ErrRemoteDamaged.
+// A file that several pages give is one candidate. The rest are duplicates
+// nobody reads; their number is logged, without IDs. More than listMaxPages pages is domain.ErrRemoteDamaged.
 func (s *Store) list(ctx context.Context, name string) ([]driveFile, error) {
 	q := url.Values{
 		"spaces":   {appDataFolder},
@@ -78,7 +78,7 @@ func (s *Store) list(ctx context.Context, name string) ([]driveFile, error) {
 			}
 		}
 
-		files = append(files, page.Files...)
+		files = appendNew(files, page.Files)
 
 		if page.NextPageToken == "" {
 			s.sortCandidates(files)
@@ -89,6 +89,19 @@ func (s *Store) list(ctx context.Context, name string) ([]driveFile, error) {
 	}
 
 	return nil, fmt.Errorf("list %s: more than %d pages: %w", name, listMaxPages, domain.ErrRemoteDamaged)
+}
+
+// appendNew appends to files the files of page whose IDs it does not have
+// yet: pages may repeat a file when the set changes between them, and a
+// repeat of the effective file is not its duplicate.
+func appendNew(files, page []driveFile) []driveFile {
+	for _, f := range page {
+		if !slices.ContainsFunc(files, func(g driveFile) bool { return g.ID == f.ID }) {
+			files = append(files, f)
+		}
+	}
+
+	return files
 }
 
 // sortCandidates puts the effective file first and logs the number of

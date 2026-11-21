@@ -15,13 +15,20 @@ const maxCleanups = 10
 // removeDuplicates deletes the files of a list just read that have an
 // earlier one: all but the first, at most maxCleanups (spec §5.2). Nobody
 // reads them, so deleting them is safe for any device; the earliest file is
-// never deleted. Failures are only logged: a later write retries.
+// never deleted, even when the list repeats its ID. Failures are only
+// logged: a later write retries.
 func (s *Store) removeDuplicates(ctx context.Context, files []driveFile) {
 	if len(files) < 2 {
 		return
 	}
 
+	effective := files[0].ID
+
 	for _, f := range files[1:min(len(files), maxCleanups+1)] {
+		if f.ID == effective {
+			continue
+		}
+
 		if err := s.deleteFile(ctx, f.ID); err != nil {
 			s.log.Error("google drive: duplicate of the container not deleted", applog.Err(err))
 		}

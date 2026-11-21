@@ -136,6 +136,7 @@ type fakeDrive struct {
 	// Modes.
 	pageLimit    int    // the largest page the list gives, below the asked pageSize; 0 the asked size
 	ignoreOrder  bool   // the list keeps the creation order, whatever orderBy asks
+	listTwice    bool   // the list gives every file twice, as pages do when the set changes between them
 	hideFromList bool   // the list gives no file, as a list behind a commit
 	denyAll      bool   // the API answers 401 to every token, as for a revoked grant
 	redirectTo   string // the API redirects every request to this URL
@@ -701,6 +702,10 @@ func (d *fakeDrive) list(w http.ResponseWriter, q url.Values) {
 		if f.name == name && !f.trashed && !d.hideFromList {
 			found = append(found, f)
 		}
+	}
+
+	if d.listTwice {
+		found = slices.Concat(found, found)
 	}
 
 	if q.Get("orderBy") == "createdTime" && !d.ignoreOrder {
