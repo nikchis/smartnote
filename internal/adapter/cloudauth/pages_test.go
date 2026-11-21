@@ -122,6 +122,7 @@ func TestPagesOfTheReceiver(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newAuthHarness(t)
 			l := h.loopback()
+			waitAsync(t.Context(), l) // the browser waits for the exchange that Wait runs
 
 			status, header, body := tc.act(t, l)
 
@@ -243,6 +244,7 @@ func TestLoopbackPagesFollowLanguage(t *testing.T) {
 	opts := h.options()
 	opts.Lang = lang.Get
 	l := h.begin(h.authorizer(opts), false)
+	ch := waitAsync(t.Context(), l)
 
 	lang.Set(i18n.RU)
 
@@ -271,4 +273,6 @@ func TestLoopbackPagesFollowLanguage(t *testing.T) {
 	if header.Get("Content-Security-Policy") != pageCSP {
 		t.Errorf("CSP = %q", header.Get("Content-Security-Policy"))
 	}
+
+	got(t, ch)
 }

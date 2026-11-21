@@ -765,7 +765,7 @@ func TestCloseDuringExchange(t *testing.T) {
 	})
 
 	ch := waitAsync(t.Context(), l)
-	l.callback(t, "", l.withState("code", fakeAuthCode))
+	answer := callbackAsync(t, l, l.withState("code", fakeAuthCode)) // answered after the exchange
 
 	select {
 	case <-started:
@@ -785,4 +785,6 @@ func TestCloseDuringExchange(t *testing.T) {
 	if _, ok := errors.AsType[cloudhttp.CloudError](r.err); ok {
 		t.Errorf("a cancelled exchange reads as a cloud error: %v", r.err)
 	}
+
+	gotAnswer(t, answer)
 }

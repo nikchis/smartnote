@@ -67,9 +67,13 @@ func TestRandomPortRedirect(t *testing.T) {
 		t.Errorf("query = %v, want the scope and the extra parameters", p.query)
 	}
 
+	ch := waitAsync(t.Context(), l)
+
 	if status, _, _ := p.callback(t, "", p.withState("code", "x")); status != http.StatusOK {
 		t.Errorf("receiver on the random port answered %d, want 200", status)
 	}
+
+	got(t, ch) // the fake server refuses the code
 }
 
 func TestExtraDoesNotOverrideProtocolParameters(t *testing.T) {

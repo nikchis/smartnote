@@ -19,6 +19,11 @@ import (
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
+// receiverWriteTimeout is the write timeout of the receiver's server; the
+// page of a code extends it while it waits for the exchange. A variable for
+// the tests.
+var receiverWriteTimeout = 10 * time.Second
+
 // callback is the outcome of the first callback with the right state.
 type callback struct {
 	code string
@@ -32,10 +37,16 @@ type loopbackLogin struct {
 	session
 
 	deadline time.Time // of the wait for the browser
-	srv      *http.Server
-	ln       net.Listener
-	served   chan struct{} // closed when Serve returns
-	result   chan callback // the first right callback; buffered, sent once
+
+	// exchangeWait bounds how long the browser waits for the outcome of the
+	// exchange: the exchange has its own timeout, this is a little longer.
+	exchangeWait time.Duration
+
+	srv       *http.Server
+	ln        net.Listener
+	served    chan struct{} // closed when Serve returns
+	result    chan callback // the first right callback; buffered, sent once
+	exchanged chan error    // the outcome of the exchange for the browser; buffered, sent once
 
 	// life is the lifetime of the login, not of a request: Close ends it,
 	// which cancels a running Wait together with its exchange.
@@ -49,18 +60,20 @@ type loopbackLogin struct {
 
 func startLoopback(s session, ln net.Listener, deadline time.Time) *loopbackLogin {
 	l := &loopbackLogin{
-		session:  s,
-		deadline: deadline,
-		ln:       ln,
-		served:   make(chan struct{}),
-		result:   make(chan callback, 1),
+		session:      s,
+		deadline:     deadline,
+		exchangeWait: exchangeTimeout + shutdownTimeout,
+		ln:           ln,
+		served:       make(chan struct{}),
+		result:       make(chan callback, 1),
+		exchanged:    make(chan error, 1),
 	}
 	l.life, l.end = context.WithCancel(context.Background())
 	l.srv = &http.Server{
 		Handler:           l,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
+		WriteTimeout:      receiverWriteTimeout,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 		ErrorLog:          log.New(io.Discard, "", 0), // its messages may quote requests
@@ -76,10 +89,10 @@ func startLoopback(s session, ln net.Listener, deadline time.Time) *loopbackLogi
 }
 
 // Wait waits for the callback, at most until the deadline counted from
-// BeginLoopback, then exchanges the code. A refusal in the browser and a
-// Close return context.Canceled. Only the first Wait waits; later ones
-// return domain.ErrNoPendingOperation. The receiver is stopped when Wait
-// returns.
+// BeginLoopback, then exchanges the code and gives its outcome to the
+// browser, which waits for it. A refusal in the browser and a Close return
+// context.Canceled. Only the first Wait waits; later ones return
+// domain.ErrNoPendingOperation. The receiver is stopped when Wait returns.
 func (l *loopbackLogin) Wait(ctx context.Context) (usecase.CloudToken, error) {
 	if l.life.Err() != nil {
 		return usecase.CloudToken{}, context.Canceled
@@ -95,8 +108,17 @@ func (l *loopbackLogin) Wait(ctx context.Context) (usecase.CloudToken, error) {
 	stopAfter := context.AfterFunc(l.life, cancel)
 	defer stopAfter()
 
+	defer l.stop()
+
+	tok, err := l.signIn(ctx)
+	l.exchanged <- err // a waiting browser shows it before stop ends its request
+
+	return tok, err
+}
+
+// signIn receives the callback and exchanges its code.
+func (l *loopbackLogin) signIn(ctx context.Context) (usecase.CloudToken, error) {
 	cb, err := l.receive(ctx)
-	l.stop()
 
 	switch {
 	case err != nil:
@@ -163,6 +185,8 @@ func (l *loopbackLogin) stop() {
 // time, for every callback: a wrong or missing one is 400 and the wait goes
 // on, so another page cannot end the sign-in (spec §6.2, §10). The first
 // right callback with a code or an error ends it and closes the listener.
+// The page of a code tells the outcome of its exchange, so the browser
+// waits for it, at most exchangeWait.
 func (l *loopbackLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet || r.URL.Path != l.a.p.CallbackPath {
 		pageNotFound.write(w, l.a, false)
@@ -183,16 +207,53 @@ func (l *loopbackLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	l.result <- cb
 
-	switch {
-	case cb.err == nil:
-		pageSignedIn.write(w, l.a, true)
-	case errors.Is(cb.err, context.Canceled):
-		pageCancelled.write(w, l.a, true)
-	default:
-		pageFailed.write(w, l.a, true)
+	_ = l.ln.Close() // no more connections; stop ends the open ones
+
+	err := cb.err
+	if err == nil {
+		err = l.exchangeOutcome(w, r)
 	}
 
-	_ = l.ln.Close() // no more connections; stop ends the open ones
+	pageOf(err).write(w, l.a, true)
+}
+
+// exchangeOutcome waits for the outcome of the exchange that Wait runs: nil
+// for a token, context.Canceled for a closed login, another error for a
+// failure or no outcome within exchangeWait.
+func (l *loopbackLogin) exchangeOutcome(w http.ResponseWriter, r *http.Request) error {
+	// The answer is written after the wait, which is longer than the
+	// server's write timeout. A writer without deadlines needs none.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(l.exchangeWait + shutdownTimeout))
+
+	timer := time.NewTimer(l.exchangeWait)
+	defer timer.Stop()
+
+	select {
+	case err := <-l.exchanged:
+		return err
+	case <-l.life.Done():
+		return context.Canceled
+	case <-r.Context().Done():
+		return r.Context().Err() // the browser is gone; nobody reads the page
+	case <-timer.C:
+		return errNoOutcome
+	}
+}
+
+// errNoOutcome is the outcome of an exchange that did not end in time for
+// the browser.
+var errNoOutcome = errors.New("no outcome of the code exchange")
+
+// pageOf returns the page of the outcome of a sign-in.
+func pageOf(err error) page {
+	switch {
+	case err == nil:
+		return pageSignedIn
+	case errors.Is(err, context.Canceled):
+		return pageCancelled
+	default:
+		return pageFailed
+	}
 }
 
 // callbackOf reads the outcome of a callback with the right state: a code,
