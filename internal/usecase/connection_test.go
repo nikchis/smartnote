@@ -1649,3 +1649,43 @@ func TestSignOutOfOtherProviderKeepsSignIn(t *testing.T) {
 		t.Errorf("SignIn = %v", r.err)
 	}
 }
+
+// TestSaveKeepsPendingTokenOfOtherProvider: OK saves the pending token of
+// every provider whose client in the saved settings is the one it was issued
+// for, so switching between the clouds needs no new sign-in.
+func TestSaveKeepsPendingTokenOfOtherProvider(t *testing.T) {
+	withOwnGoogle := yandexSettings("a")
+	withOwnGoogle.GoogleClientID, withOwnGoogle.GoogleClientSecret = ownGoogleID, "own-secret"
+
+	tests := []struct {
+		name    string
+		after   func(f *connFixture)
+		saved   domain.ConnectionSettings
+		updates []TokenUpdate
+	}{
+		{name: "same client", saved: yandexSettings("a"), updates: []TokenUpdate{setOf(googlePending(issued))}},
+		{name: "own client in the saved settings", saved: withOwnGoogle},
+		{name: "signed out after the sign-in", after: func(f *connFixture) { f.c.SignOut(domain.KindGoogleDrive) },
+			saved: yandexSettings("a"), updates: []TokenUpdate{deleteOf(domain.KindGoogleDrive)}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+			f.withStored()
+
+			// Sign in to Google with the built-in client, then switch the draft to Yandex.
+			f.signIn(t, googleSettings("", ""), issued)
+
+			if tc.after != nil {
+				tc.after(f)
+			}
+
+			if err := f.c.Save(context.Background(), tc.saved); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+
+			f.assertSaved(t, tc.updates...)
+		})
+	}
+}

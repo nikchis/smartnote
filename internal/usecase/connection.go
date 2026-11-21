@@ -717,6 +717,16 @@ func (c *Connection) requireStoredToken(ctx context.Context, client CloudClient)
 	return nil
 }
 
+// issuedFor reports whether tok was issued for the effective client of its
+// provider in s, whatever the kind of s: switching the clouds keeps the
+// client fields of the other one.
+func (c *Connection) issuedFor(tok CloudToken, s domain.ConnectionSettings) bool {
+	s.StorageKind = tok.Provider
+	client, ok := EffectiveClient(s, c.builtin)
+
+	return ok && client.ID == tok.ClientID
+}
+
 // pendingSource is the source of the pending token tok of client made at
 // generation gen: Test uses it, and a refresh updates the pending token
 // itself through refreshPending, never local.db.
@@ -733,11 +743,11 @@ type tokenPlan struct {
 	gen     uint64 // the sign-in state generation the plan was made from
 }
 
-// tokenPlan decides the token updates for saving s, ordered by provider: the
-// pending token of s's provider is set; a Sign out of any provider deletes
-// its token; a pending token of another provider than s's is not saved. Cloud
-// settings with neither a pending token nor a Sign out need a saved token of
-// their client.
+// tokenPlan decides the token updates for saving s, ordered by provider:
+// the pending token of any provider is set if it was issued for the
+// effective client of that provider in s, and dropped otherwise; a Sign out
+// of any provider deletes its token. Cloud settings with neither a pending
+// token nor a Sign out need a saved token of their client.
 func (c *Connection) tokenPlan(ctx context.Context, s domain.ConnectionSettings) (tokenPlan, error) {
 	kind := s.Kind()
 	cloud := domain.IsCloud(kind)
@@ -761,7 +771,7 @@ func (c *Connection) tokenPlan(ctx context.Context, s domain.ConnectionSettings)
 
 	for _, p := range slices.Sorted(maps.Keys(c.signIns)) {
 		switch st := c.signIns[p]; {
-		case p == kind && st.pending != nil:
+		case st.pending != nil && c.issuedFor(*st.pending, s):
 			plan.updates = append(plan.updates, TokenUpdate{Provider: p, Change: TokenSet, Token: *st.pending})
 		case st.signOut:
 			// Sign out then OK: the token is deleted; the notes in the
