@@ -24,6 +24,12 @@
   и `build/docker/Dockerfile.server` удалены: серверный режим Wails отдаёт привязанные сервисы по
   HTTP без аутентификации и проверки Origin, а в спецификации такого режима нет. Неиспользуемый
   `build/linux/appimage/build.sh` тоже удалён; AppImage собирает `wails3 generate appimage`.
+- Политика конфиденциальности в приложении (`frontend/src/lib/privacy/en.html`, `ru.html`) - копия
+  страниц `privacy.html` и `privacy.ru.html` сайта (ветка `gh-pages`) от блока «In short» («Коротко»)
+  до раздела «Contact» («Связь»). Когда политика меняется на сайте, обновите копию в приложении в том
+  же выпуске. Относительные ссылки сайта становятся абсолютными: `privacy.html` превращается в
+  `https://nikchis.github.io/smartnote/privacy.html`; тест проверяет, что каждая ссылка начинается с
+  `https://`.
 
 ## Проверка 1: привязки и ошибки
 

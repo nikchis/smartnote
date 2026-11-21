@@ -13,6 +13,8 @@ export const en = {
   "language.code": "EN",
   "language.label": "Language: English",
 
+  "privacy.title": "Privacy Policy",
+
   "dialog.warning": "Warning",
   "dialog.error": "Error",
   "dialog.question": "Question",

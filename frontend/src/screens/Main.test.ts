@@ -82,6 +82,8 @@ const field = () => target.querySelector<HTMLInputElement>('[role="search"] inpu
 const text = () => target.querySelector("textarea")!;
 const toggle = () => target.querySelector<HTMLButtonElement>('button[aria-label^="Language"], button[aria-label^="Язык"]')!;
 
+const privacy = () => target.querySelector<HTMLButtonElement>('.tools button[aria-label="Privacy Policy"], .tools button[aria-label="Политика конфиденциальности"]')!;
+
 async function search(q: string): Promise<void> {
   field().focus();
   field().value = q;
@@ -170,6 +172,24 @@ describe("Main", () => {
     const top = target.querySelector(".find")!;
     const search = top.querySelector('[role="search"]')!;
     expect(search.nextElementSibling?.firstElementChild).toBe(toggle());
+  });
+
+  it("top bar order", () => {
+    const tools = target.querySelector(".find")!.querySelector('[role="search"]')!.nextElementSibling!;
+    expect([...tools.children]).toEqual([toggle(), privacy()]);
+    expect(target.querySelector(".find")!.lastElementChild).toBe(tools);
+  });
+
+  it("privacy button is icon-only and last", async () => {
+    expect(privacy().getAttribute("aria-label")).toBe("Privacy Policy");
+    expect(privacy().textContent?.trim()).toBe("");
+    expect(privacy().querySelector("img")).not.toBeNull();
+    privacy().click();
+    await settle();
+    expect(target.querySelector('[role="dialog"]')).not.toBeNull();
+    toggle().click();
+    await settle();
+    expect(privacy().getAttribute("aria-label")).toBe("Политика конфиденциальности");
   });
 
   it("language toggle shows current and switches", async () => {

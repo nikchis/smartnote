@@ -13,6 +13,8 @@ export const ru: Record<keyof typeof en, string> = {
   "language.code": "RU",
   "language.label": "Язык: русский",
 
+  "privacy.title": "Политика конфиденциальности",
+
   "dialog.warning": "Предупреждение",
   "dialog.error": "Ошибка",
   "dialog.question": "Вопрос",

@@ -24,6 +24,12 @@ packages in [Packaging](packaging.md).
   and `build/docker/Dockerfile.server` are removed: Wails server mode serves the bound services
   over HTTP with no authentication or Origin check, and the spec has no such mode. The unused
   `build/linux/appimage/build.sh` is removed too; `wails3 generate appimage` builds the AppImage.
+- The privacy policy in the application (`frontend/src/lib/privacy/en.html`, `ru.html`) is a copy of
+  the pages `privacy.html` and `privacy.ru.html` of the site (branch `gh-pages`), from the "In short"
+  block to the Contact section. When the policy changes on the site, update the in-app copy in the
+  same release. The relative links of the site become absolute: `privacy.html` turns into
+  `https://nikchis.github.io/smartnote/privacy.html`; a test checks that every link starts with
+  `https://`.
 
 ## Check 1: bindings and errors
 

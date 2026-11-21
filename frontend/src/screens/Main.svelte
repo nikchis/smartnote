@@ -9,8 +9,10 @@
   import removeIcon from "../assets/icons/remove.png";
   import restoreIcon from "../assets/icons/restore.png";
   import saveIcon from "../assets/icons/save.png";
+  import shieldIcon from "../assets/icons/shield.png";
   import { Events } from "@wailsio/runtime";
   import LanguageToggle from "../components/LanguageToggle.svelte";
+  import PrivacyPolicy from "../components/PrivacyPolicy.svelte";
   import SearchBar from "../components/SearchBar.svelte";
   import { NotesService, SearchService, type SearchHitDTO, type StateDTO } from "../lib/api";
   import { dialogs } from "../lib/dialogs.svelte";
@@ -34,6 +36,7 @@
   const b = $derived(editor.buttons);
   let showHistory = $state(false);
   let changingPassword = $state(false);
+  let privacyOpen = $state(false);
   let list: HTMLElement | undefined = $state();
   let searchBar: ReturnType<typeof SearchBar> | undefined = $state();
   let nameField: HTMLInputElement | undefined = $state();
@@ -149,6 +152,9 @@
     <!-- The buttons at the right end of the row, the language first (spec §16.4). -->
     <div class="tools">
       <LanguageToggle />
+      <button type="button" title={i18n.t("privacy.title")} aria-label={i18n.t("privacy.title")} onclick={() => (privacyOpen = true)}>
+        <img class="mono" src={shieldIcon} alt="" />
+      </button>
     </div>
   </div>
   <div class="content">
@@ -224,6 +230,10 @@
 
 {#if changingPassword}
   <ChangePassword onClose={() => (changingPassword = false)} />
+{/if}
+
+{#if privacyOpen}
+  <PrivacyPolicy onClose={() => (privacyOpen = false)} />
 {/if}
 
 <style>
