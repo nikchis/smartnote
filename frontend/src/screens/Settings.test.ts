@@ -53,6 +53,7 @@ const uiError = (code: string, message = code, field?: string) => new Error(JSON
 
 const base: SettingsDTO = {
   kind: "yandex_disk", yandexClientId: "", yandexAccount: "", yandexSignedIn: false,
+  googleClientId: "", googleClientSecret: "",
   sshHost: "", sshPort: 0, sshUser: "", sshPassword: "", dbHost: "", dbPort: 0, dbName: "", dbUser: "", dbPassword: "",
   syncPhrase: "", trustedFingerprint: "",
 };
@@ -320,7 +321,7 @@ describe("Settings Yandex account", () => {
     await open({ yandexSignedIn: true, yandexAccount: "ivan" });
     go.signOut.mockResolvedValue(undefined);
     await press("Sign out");
-    expect(go.signOut).toHaveBeenCalledOnce();
+    expect(go.signOut).toHaveBeenCalledExactlyOnceWith("yandex_disk");
     expect(has("Not signed in")).toBe(true);
   });
 

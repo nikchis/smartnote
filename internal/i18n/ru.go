@@ -47,6 +47,7 @@ var ru = map[Key]string{ //nolint:gosec // catalog texts, not credentials
 	ErrSignInFirst:          "Сначала войдите в {provider} или выберите «Нет (только локально)».",
 	ErrCloudNoSpace:         "Недостаточно места на {provider}.",
 	ErrCloudTooLarge:        "Файл больше, чем позволяет ваш тариф {provider}.",
+	ErrCloudBusy:            "Сервис {provider} занят. Повторите попытку позже.",
 	ErrCloudStatus:          "Ошибка {provider}: {status} {code}.",
 	ErrCloudCode:            "Ошибка {provider}: {code}.",
 

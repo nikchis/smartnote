@@ -765,6 +765,27 @@ func TestSignOutThenSave(t *testing.T) {
 	}
 }
 
+// TestSignOutIgnoresNotCloud: the kind of SignOut comes from the form; a
+// kind that is not a cloud changes nothing, so it never reaches a Save.
+func TestSignOutIgnoresNotCloud(t *testing.T) {
+	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
+	f.withStored()
+
+	for _, p := range []domain.StorageKind{domain.KindSSHPostgres, domain.KindNone, "dropbox"} {
+		f.c.SignOut(p)
+	}
+
+	if account, ok, err := f.c.Account(context.Background(), yandexSettings("a")); err != nil || !ok || account == "" {
+		t.Errorf("Account = %q, %v, %v; want the stored Yandex account", account, ok, err)
+	}
+
+	if err := f.c.Save(context.Background(), completeSettings()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	f.assertSaved(t)
+}
+
 func TestSaveAfterSignOutDeletesToken(t *testing.T) {
 	f := newConnFixture(t, domain.ConnectionSettings{}, &fakeServer{})
 	f.withStored()

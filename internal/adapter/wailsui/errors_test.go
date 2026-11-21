@@ -558,3 +558,84 @@ func TestTechnicalErrorSameInBoth(t *testing.T) {
 		}
 	}
 }
+
+// TestCloudMessagesNameProvider: the text of a cloud error is chosen by its
+// reason and names its provider; the Yandex texts are those of 2.2.2.
+func TestCloudMessagesNameProvider(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    cloudhttp.CloudError
+		en, ru string
+	}{
+		{"yandex no space", cloudhttp.NewAnswerError(domain.KindYandexDisk, 507, "x", cloudhttp.ReasonNoSpace),
+			"Not enough space on Yandex Disk.", "Недостаточно места на Yandex Disk."},
+		{"yandex too large", cloudhttp.NewAnswerError(domain.KindYandexDisk, 413, "x", cloudhttp.ReasonTooLarge),
+			"The file is larger than your Yandex Disk plan allows.", "Файл больше, чем позволяет ваш тариф Yandex Disk."},
+		{"yandex other", cloudhttp.NewAnswerError(domain.KindYandexDisk, 503, "DiskInternalError", cloudhttp.ReasonNone),
+			"Yandex Disk error: 503 DiskInternalError.", "Ошибка Yandex Disk: 503 DiskInternalError."},
+		{"google no space", cloudhttp.NewAnswerError(domain.KindGoogleDrive, 403, "storageQuotaExceeded", cloudhttp.ReasonNoSpace),
+			"Not enough space on Google Drive.", "Недостаточно места на Google Drive."},
+		{"google busy", cloudhttp.NewAnswerError(domain.KindGoogleDrive, 403, "userRateLimitExceeded", cloudhttp.ReasonBusy),
+			"Google Drive is busy. Try again later.", "Сервис Google Drive занят. Повторите попытку позже."},
+		{"google busy 429", cloudhttp.NewAnswerError(domain.KindGoogleDrive, 429, "rateLimitExceeded", cloudhttp.ReasonBusy),
+			"Google Drive is busy. Try again later.", "Сервис Google Drive занят. Повторите попытку позже."},
+		{"google other", cloudhttp.NewAnswerError(domain.KindGoogleDrive, 500, "backendError", cloudhttp.ReasonNone),
+			"Google Drive error: 500 backendError.", "Ошибка Google Drive: 500 backendError."},
+		{"google network", cloudhttp.CloudError{Provider: domain.KindGoogleDrive, Code: "network", Net: "reset"},
+			"Google Drive error: network.", "Ошибка Google Drive: network."},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ui := classify(fmt.Errorf("op: %w", tc.err))
+			if ui.Code != codeCloud || ui.Messages[i18n.EN] != tc.en || ui.Messages[i18n.RU] != tc.ru {
+				t.Errorf("classify = %q %q, want cloud en %q, ru %q", ui.Code, ui.Messages, tc.en, tc.ru)
+			}
+		})
+	}
+}
+
+// TestLogErrorNoSecrets: whatever text wraps a cloud, sign-in or upload
+// error, the log keeps only the closed list of attributes: no token, client
+// secret (built-in or own) or upload session URI.
+func TestLogErrorNoSecrets(t *testing.T) {
+	const (
+		access  = "ya29.ACCESS-TOKEN-MARKER"
+		refresh = "1//REFRESH-TOKEN-MARKER"
+		builtin = "GOCSPX-BUILTIN-SECRET-MARKER"
+		own     = "GOCSPX-OWN-SECRET-MARKER"
+		session = "https://www.googleapis.com/upload/drive/v3/files?upload_id=SESSION-MARKER"
+	)
+
+	secrets := []string{access, refresh, builtin, own, session, "upload_id", "Bearer"}
+	wrap := func(err error) error {
+		return fmt.Errorf("PUT %s (Bearer %s, refresh %s, client_secret=%s, own %s): %w", session, access, refresh, builtin, own, err)
+	}
+
+	errs := map[string]error{
+		"google cloud":   cloudhttp.CloudError{Provider: domain.KindGoogleDrive, Status: 503, Code: "backendError", Step: "upload"},
+		"google network": cloudhttp.CloudError{Provider: domain.KindGoogleDrive, Code: "network", Step: "upload", Net: "reset"},
+		"google busy":    cloudhttp.NewAnswerError(domain.KindGoogleDrive, 429, "rateLimitExceeded", cloudhttp.ReasonBusy),
+		"reauth google":  domain.ReauthRequired(domain.KindGoogleDrive),
+		"reauth yandex":  domain.ReauthRequired(domain.KindYandexDisk),
+		"outcome":        domain.ErrRemoteOutcomeUnknown,
+		"damaged":        domain.ErrRemoteDamaged,
+		"timeout":        context.DeadlineExceeded,
+		"validation":     &domain.ValidationError{Field: "google_client_secret", Reason: "is required"},
+		"canceled":       context.Canceled,
+	}
+
+	for name, e := range errs {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+
+			LogError(slog.New(slog.NewTextHandler(&buf, nil)), "backup", wrap(e))
+
+			for _, s := range secrets {
+				if strings.Contains(buf.String(), s) {
+					t.Errorf("log %q contains a secret", buf.String())
+				}
+			}
+		})
+	}
+}

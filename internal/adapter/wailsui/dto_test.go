@@ -129,3 +129,35 @@ func TestSettingsDTOKindNormalized(t *testing.T) {
 		t.Errorf("Kind of a 2.1.0 settings = %q, want ssh_postgres", got)
 	}
 }
+
+// TestSettingsDTOOwnSecretRoundTrip: the own Google client, secret
+// included, crosses to the interface and back, as the passwords do.
+func TestSettingsDTOOwnSecretRoundTrip(t *testing.T) {
+	s := domain.ConnectionSettings{
+		StorageKind: domain.KindGoogleDrive, YandexClientID: "yandex-id", SyncPhrase: "sixteen chars ok",
+		GoogleClientID: "1-abc.apps.googleusercontent.com", GoogleClientSecret: "GOCSPX-own-secret",
+	}
+
+	dto := toSettingsDTO(s)
+	if dto.Kind != "google_drive" || dto.GoogleClientID != s.GoogleClientID || dto.GoogleClientSecret != s.GoogleClientSecret {
+		t.Errorf("dto = kind %q, client %q, secret set %v; want the own client", dto.Kind, dto.GoogleClientID, dto.GoogleClientSecret != "")
+	}
+
+	b, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(b), `"googleClientId":"1-abc.apps.googleusercontent.com"`) || !strings.Contains(string(b), `"googleClientSecret":"GOCSPX-own-secret"`) {
+		t.Errorf("JSON = %s, want googleClientId and googleClientSecret", b)
+	}
+
+	var back SettingsDTO
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := back.settings(); got != s {
+		t.Errorf("round trip = %+v, want %+v", got, s)
+	}
+}

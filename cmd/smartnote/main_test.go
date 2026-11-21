@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,9 +10,13 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/nikchis/smartnote/internal/adapter/gdrive"
 	"github.com/nikchis/smartnote/internal/adapter/sqlite"
 	"github.com/nikchis/smartnote/internal/adapter/wailsui"
+	"github.com/nikchis/smartnote/internal/adapter/yadisk"
+	"github.com/nikchis/smartnote/internal/domain"
 	"github.com/nikchis/smartnote/internal/i18n"
+	"github.com/nikchis/smartnote/internal/usecase"
 )
 
 func TestLogStartError(t *testing.T) {
@@ -109,5 +114,120 @@ func TestNewServicesSharesLanguage(t *testing.T) {
 
 	if lang.Get() != i18n.RU {
 		t.Errorf("shared language = %q, want ru", lang.Get())
+	}
+}
+
+// TestMainWiresThreeConnectors: each storage kind reaches its own
+// connector, and both clouds have their authorizer and built-in client.
+// Without a token each cloud asks to sign in to itself; the SSH connector
+// never does.
+func TestMainWiresThreeConnectors(t *testing.T) {
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = store.Close() })
+
+	env := wailsui.Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler), Lang: i18n.NewCurrent(i18n.EN)}
+
+	r, err := newRemote(env, store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, kind := range []domain.StorageKind{domain.KindYandexDisk, domain.KindGoogleDrive} {
+		_, err := r.connector.Open(t.Context(), usecase.RemoteTarget{Settings: domain.ConnectionSettings{StorageKind: kind}}, usecase.OpenCheck)
+		if re, ok := errors.AsType[*domain.ReauthRequiredError](err); !ok || re.Kind != kind {
+			t.Errorf("Open(%s) without a token = %v, want a sign-in to %s", kind, err, kind)
+		}
+
+		if r.auth[kind] == nil {
+			t.Errorf("no authorizer of %s", kind)
+		}
+
+		if c := r.builtin[kind]; c.Provider != kind || c.ID == "" {
+			t.Errorf("built-in client of %s = provider %q, ID %q", kind, c.Provider, c.ID)
+		}
+	}
+
+	_, err = r.connector.Open(t.Context(), usecase.RemoteTarget{Settings: domain.ConnectionSettings{StorageKind: domain.KindSSHPostgres}}, usecase.OpenCheck)
+	if err == nil || errors.Is(err, domain.ErrReauthRequired) || errors.Is(err, domain.ErrUnsupportedFormat) {
+		t.Errorf("Open(ssh_postgres) = %v, want an error of the SSH connector", err)
+	}
+
+	if r.builtin[domain.KindYandexDisk].ID != yadisk.BuiltinClientID || r.builtin[domain.KindYandexDisk].Secret != "" {
+		t.Error("built-in Yandex client is not the client of yadisk")
+	}
+
+	// Compared, never printed.
+	if g := r.builtin[domain.KindGoogleDrive]; g.ID != gdrive.BuiltinClientID || g.Secret != gdrive.BuiltinClientSecret {
+		t.Error("built-in Google client is not the client of gdrive")
+	}
+}
+
+// TestBuiltinSecretNeverInDTO: the built-in Google client secret reaches
+// neither the settings nor the account the form gets (spec §1.2, criterion
+// 3), even for Google Drive settings with the built-in client.
+func TestBuiltinSecretNeverInDTO(t *testing.T) {
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = store.Close() })
+
+	logger := slog.New(slog.DiscardHandler)
+	engine, status := newSearchEngine(logger, findSearch)
+
+	t.Cleanup(func() { _ = engine.Close() })
+
+	services, err := newServices(wailsui.Env{Ctx: t.Context(), Log: logger, Lang: i18n.NewCurrent(i18n.EN)}, t.TempDir(), store, wailsui.NewLifecycle(func() {}, func() {}), searchParts{
+		engine: engine, status: status, run: newSearchRunner(t.Context(), logger),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Create(t.Context(), "a long local password"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SaveSettings(t.Context(), domain.ConnectionSettings{StorageKind: domain.KindGoogleDrive, SyncPhrase: "sixteen chars ok"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var conn *wailsui.ConnectionService
+
+	for _, s := range services {
+		if c, ok := s.Instance().(*wailsui.ConnectionService); ok {
+			conn = c
+		}
+	}
+
+	if conn == nil {
+		t.Fatal("ConnectionService is not registered")
+	}
+
+	dto, err := conn.Load()
+	if err != nil || dto.Kind != string(domain.KindGoogleDrive) {
+		t.Fatalf("Load = kind %q, %v; want the saved Google Drive settings", dto.Kind, err)
+	}
+
+	acc, err := conn.Account(dto)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, v := range []any{dto, acc} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Checked, never printed.
+		if strings.Contains(string(b), gdrive.BuiltinClientSecret) {
+			t.Errorf("%T carries the built-in client secret", v)
+		}
 	}
 }

@@ -336,6 +336,8 @@ func cloudTexts(ce cloudhttp.CloudError) map[i18n.Lang]string {
 		return texts(i18n.ErrCloudNoSpace, argProvider, name)
 	case ce.Reason == cloudhttp.ReasonTooLarge:
 		return texts(i18n.ErrCloudTooLarge, argProvider, name)
+	case ce.Reason == cloudhttp.ReasonBusy:
+		return texts(i18n.ErrCloudBusy, argProvider, name)
 	case ce.Status == 0:
 		return texts(i18n.ErrCloudCode, argProvider, name, "code", ce.Code)
 	default:
@@ -360,8 +362,8 @@ func isDatabase(err error) bool {
 
 // LogError writes err to log when its code is worth a record: internal with
 // its text; ssh, database and timeout without it, since those texts name the
-// user, the database and the host (spec §3.5). A Yandex Disk error is logged
-// by its status, code, step and network class, without its text, and
+// user, the database and the host (spec §3.5). A cloud error is logged by
+// its provider, status, code, step and network class, without its text, and
 // reauth_required, remote_outcome_unknown and remote_damaged by the code
 // alone (spec §9). Codes the interface explains to the user are not logged.
 func LogError(log *slog.Logger, msg string, err error) {

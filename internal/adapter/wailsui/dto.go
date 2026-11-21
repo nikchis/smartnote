@@ -30,13 +30,17 @@ type VersionDTO struct {
 // SettingsDTO are the connection settings. The server key never crosses to
 // the interface (spec §6.1): TrustedFingerprint names it both ways. On the way
 // back it must name the saved key or the key trusted with TrustOfferedKey;
-// empty resets the trust. Tokens never cross: YandexAccount and
-// YandexSignedIn only report the sign-in and are ignored on the way back.
+// empty resets the trust. The own Google client secret crosses both ways,
+// as the passwords do (spec §7.2); tokens and the built-in client secret
+// never cross. YandexAccount and YandexSignedIn only report the sign-in and
+// are ignored on the way back.
 type SettingsDTO struct {
 	Kind               string `json:"kind"`
 	YandexClientID     string `json:"yandexClientId"`
 	YandexAccount      string `json:"yandexAccount"`
 	YandexSignedIn     bool   `json:"yandexSignedIn"`
+	GoogleClientID     string `json:"googleClientId"`
+	GoogleClientSecret string `json:"googleClientSecret"`
 	SSHHost            string `json:"sshHost"`
 	SSHPort            int    `json:"sshPort"`
 	SSHUser            string `json:"sshUser"`
@@ -159,6 +163,7 @@ func ToStateDTO(s usecase.State) StateDTO {
 func toSettingsDTO(s domain.ConnectionSettings) SettingsDTO {
 	return SettingsDTO{
 		Kind: string(s.Kind()), YandexClientID: s.YandexClientID,
+		GoogleClientID: s.GoogleClientID, GoogleClientSecret: s.GoogleClientSecret,
 		SSHHost: s.SSHHost, SSHPort: s.SSHPort, SSHUser: s.SSHUser, SSHPassword: s.SSHPassword,
 		DBHost: s.DBHost, DBPort: s.DBPort, DBName: s.DBName, DBUser: s.DBUser, DBPassword: s.DBPassword,
 		SyncPhrase: s.SyncPhrase, TrustedFingerprint: trustRef(s.TrustedHostKey),
@@ -170,6 +175,7 @@ func toSettingsDTO(s domain.ConnectionSettings) SettingsDTO {
 func (d SettingsDTO) settings() domain.ConnectionSettings {
 	return domain.ConnectionSettings{
 		StorageKind: domain.StorageKind(d.Kind), YandexClientID: d.YandexClientID,
+		GoogleClientID: d.GoogleClientID, GoogleClientSecret: d.GoogleClientSecret,
 		SSHHost: d.SSHHost, SSHPort: d.SSHPort, SSHUser: d.SSHUser, SSHPassword: d.SSHPassword,
 		DBHost: d.DBHost, DBPort: d.DBPort, DBName: d.DBName, DBUser: d.DBUser, DBPassword: d.DBPassword,
 		SyncPhrase: d.SyncPhrase,

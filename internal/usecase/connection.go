@@ -391,8 +391,13 @@ func (c *Connection) DiscardPending() {
 
 // SignOut ends the active sign-in to p, forgets the pending token of p and
 // marks the saved token of p for deletion by Save. Other providers keep
-// their state.
+// their state. p comes from the form: a kind that is not a cloud changes
+// nothing.
 func (c *Connection) SignOut(p domain.StorageKind) {
+	if !domain.IsCloud(p) {
+		return
+	}
+
 	c.mu.Lock()
 
 	sess := c.current

@@ -20,9 +20,10 @@ import (
 type memSettings struct {
 	s        domain.ConnectionSettings
 	saves    int
-	token    usecase.CloudToken // the Yandex token; there is none of other providers
+	token    usecase.CloudToken // the Yandex token
 	hasToken bool
-	tokenErr error // of LoadCloudToken
+	google   *usecase.CloudToken // the Google token, if any
+	tokenErr error               // of LoadCloudToken
 }
 
 func (m *memSettings) LoadSettings(context.Context) (domain.ConnectionSettings, error) {
@@ -43,6 +44,10 @@ func (m *memSettings) SaveConnection(ctx context.Context, s domain.ConnectionSet
 }
 
 func (m *memSettings) LoadCloudToken(_ context.Context, p domain.StorageKind) (usecase.CloudToken, bool, error) {
+	if p == domain.KindGoogleDrive && m.google != nil {
+		return *m.google, true, m.tokenErr
+	}
+
 	return m.token, m.hasToken && p == domain.KindYandexDisk, m.tokenErr
 }
 
@@ -297,7 +302,7 @@ func TestSaveRejectsAnotherKeyInsteadOfTheSavedOne(t *testing.T) {
 	}
 }
 
-func TestSettingsDTONoToken(t *testing.T) {
+func TestSettingsDTONeverHasTokens(t *testing.T) {
 	typ := reflect.TypeFor[SettingsDTO]()
 	for f := range typ.Fields() {
 		name := strings.ToLower(f.Name)
@@ -416,7 +421,7 @@ func TestSignInManualAndSubmit(t *testing.T) {
 		t.Errorf("SubmitCode = %q, %v; client ID %q", account, err, auth.clientID)
 	}
 
-	svc.SignOut()
+	svc.SignOut(string(domain.KindYandexDisk))
 	svc.CancelSignIn()
 }
 
@@ -490,4 +495,186 @@ func TestConnectionTestEndsProgress(t *testing.T) {
 	}
 
 	wantEnd("success")
+}
+
+// ownGoogle is a draft of the Google Drive settings with an own client.
+var ownGoogle = SettingsDTO{
+	Kind: string(domain.KindGoogleDrive), SyncPhrase: "sixteen chars ok",
+	GoogleClientID: "1-abc.apps.googleusercontent.com", GoogleClientSecret: "GOCSPX-OWN-SECRET",
+}
+
+// TestSettingsDTONeverHasGoogleTokens: neither the settings nor the
+// account of a Google draft carry a token.
+func TestSettingsDTONeverHasGoogleTokens(t *testing.T) {
+	svc, store, _ := newTestConnectionService(t, ownGoogle.settings())
+	store.google = &usecase.CloudToken{Provider: domain.KindGoogleDrive, ClientID: ownGoogle.GoogleClientID, Access: "ACCESS-SECRET", Refresh: "REFRESH-SECRET"}
+
+	dto, err := svc.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	acc, err := svc.Account(dto)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, v := range []any{dto, acc} {
+		b, _ := json.Marshal(v)
+		if strings.Contains(string(b), "ACCESS-SECRET") || strings.Contains(string(b), "REFRESH-SECRET") {
+			t.Errorf("JSON %s carries a token", b)
+		}
+	}
+
+	if !acc.SignedIn {
+		t.Errorf("Account = %+v, want signed in with the saved token", acc)
+	}
+}
+
+// TestAccountByDraftKind: Account reports the sign-in of the kind and the
+// client of the draft, not of the saved settings.
+func TestAccountByDraftKind(t *testing.T) {
+	svc, store, _ := newTestConnectionService(t, domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "c", SyncPhrase: "sixteen chars ok"})
+	store.token = usecase.CloudToken{Provider: domain.KindYandexDisk, ClientID: "c", Account: "ivan"}
+	store.hasToken = true
+
+	got, err := svc.Account(ownGoogle)
+	if err != nil || got != (AccountDTO{}) {
+		t.Errorf("Account(google draft) = %+v, %v; want not signed in", got, err)
+	}
+
+	got, err = svc.Account(SettingsDTO{Kind: string(domain.KindYandexDisk), YandexClientID: "c"})
+	if err != nil || got != (AccountDTO{Account: "ivan", SignedIn: true}) {
+		t.Errorf("Account(yandex draft) = %+v, %v; want ivan", got, err)
+	}
+
+	got, err = svc.Account(SettingsDTO{Kind: string(domain.KindYandexDisk), YandexClientID: "other"})
+	if err != nil || got.SignedIn {
+		t.Errorf("Account(yandex draft, other client) = %+v, %v; want not signed in", got, err)
+	}
+}
+
+// TestAccountKeepsPendingSignIn: unlike Load, Account keeps the token of a
+// sign-in waiting for OK.
+func TestAccountKeepsPendingSignIn(t *testing.T) {
+	svc, _ := newYandexService(t)
+	form := SettingsDTO{Kind: string(domain.KindYandexDisk), YandexClientID: "form-id", SyncPhrase: "sixteen chars ok"}
+
+	if _, err := svc.SignIn(form); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		got, err := svc.Account(form)
+		if err != nil || got != (AccountDTO{Account: "ivan", SignedIn: true}) {
+			t.Fatalf("Account after the sign-in = %+v, %v; want the pending ivan", got, err)
+		}
+	}
+
+	if _, err := svc.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := svc.Account(form); err != nil || got.SignedIn {
+		t.Errorf("Account after Load = %+v, %v; want the pending sign-in discarded", got, err)
+	}
+}
+
+// TestAccountWithUnreadableToken: a token that cannot be read is Not
+// signed in, and only the code of the error is logged.
+func TestAccountWithUnreadableToken(t *testing.T) {
+	svc, store, _ := newTestConnectionService(t, domain.ConnectionSettings{})
+	store.tokenErr = errors.New("cipher: message authentication failed SECRET-DETAIL")
+
+	var logged strings.Builder
+
+	svc.env.Log = slog.New(slog.NewTextHandler(&logged, nil))
+
+	got, err := svc.Account(SettingsDTO{Kind: string(domain.KindYandexDisk), YandexClientID: "c"})
+	if err != nil || got.SignedIn {
+		t.Errorf("Account = %+v, %v; want not signed in without an error", got, err)
+	}
+
+	if out := logged.String(); !strings.Contains(out, "code=") || strings.Contains(out, "SECRET-DETAIL") {
+		t.Errorf("log = %q, want the code only", out)
+	}
+}
+
+// TestSignInByDraftKind: the sign-in goes to the authorizer of the draft's
+// kind with the own client of the form.
+func TestSignInByDraftKind(t *testing.T) {
+	store := &memSettings{}
+	yandex, google := &fakeAuth{login: &fakeLogin{}}, &fakeAuth{login: &fakeLogin{}}
+
+	conn, err := usecase.NewConnection(usecase.ConnectionDeps{
+		Settings: store, Store: store, Tokens: store, Remote: &keyServer{},
+		Auth: map[domain.StorageKind]usecase.CloudAuthorizer{domain.KindYandexDisk: yandex, domain.KindGoogleDrive: google},
+		Gate: &usecase.Gate{}, Offer: &usecase.HostKeyOffer{}, Changed: func() {},
+		OpenURL: func(string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewConnectionService(Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}, conn, nil)
+
+	if _, err := svc.SignIn(ownGoogle); err != nil {
+		t.Fatal(err)
+	}
+
+	if google.clientID != ownGoogle.GoogleClientID || yandex.clientID != "" {
+		t.Errorf("client IDs: google %q, yandex %q; want the own Google client only", google.clientID, yandex.clientID)
+	}
+}
+
+// TestSignOutOfDraftKind: SignOut forgets the token of the kind it names
+// only; Save deletes it.
+func TestSignOutOfDraftKind(t *testing.T) {
+	svc, store, _ := newTestConnectionService(t, domain.ConnectionSettings{})
+	store.token = usecase.CloudToken{Provider: domain.KindYandexDisk, ClientID: "c", Account: "ivan"}
+	store.hasToken = true
+	store.google = &usecase.CloudToken{Provider: domain.KindGoogleDrive, ClientID: ownGoogle.GoogleClientID}
+
+	svc.SignOut(string(domain.KindGoogleDrive))
+
+	if got, _ := svc.Account(ownGoogle); got.SignedIn {
+		t.Error("Google is still signed in after its Sign out")
+	}
+
+	if got, _ := svc.Account(SettingsDTO{Kind: string(domain.KindYandexDisk), YandexClientID: "c"}); !got.SignedIn {
+		t.Error("the Sign out of Google signed Yandex out")
+	}
+}
+
+// TestReauthMessageNamesErrorProvider: with Yandex Disk saved, Test of a
+// Google draft whose token Google rejects asks to sign in to Google Drive.
+func TestReauthMessageNamesErrorProvider(t *testing.T) {
+	saved := domain.ConnectionSettings{StorageKind: domain.KindYandexDisk, YandexClientID: "c", SyncPhrase: "sixteen chars ok"}
+	store := &memSettings{s: saved, token: usecase.CloudToken{Provider: domain.KindYandexDisk, ClientID: "c"}, hasToken: true}
+	store.google = &usecase.CloudToken{Provider: domain.KindGoogleDrive, ClientID: ownGoogle.GoogleClientID, Refresh: "r"}
+
+	conn, err := usecase.NewConnection(usecase.ConnectionDeps{
+		Settings: store, Store: store, Tokens: store, Remote: rejectingCloud{},
+		Gate: &usecase.Gate{}, Offer: &usecase.HostKeyOffer{}, Changed: func() {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewConnectionService(Env{Ctx: t.Context(), Log: slog.New(slog.DiscardHandler)}, conn, nil)
+
+	_, err = svc.Test(ownGoogle)
+
+	ui, ok := errors.AsType[*UIError](err)
+	if !ok || ui.Code != codeReauthRequired || ui.Message != "Sign in to Google Drive again." {
+		t.Errorf("Test = %v, want reauth_required \"Sign in to Google Drive again.\"", err)
+	}
+}
+
+// rejectingCloud is a cloud whose provider rejects the token, as the store
+// of the target's kind reports it.
+type rejectingCloud struct{}
+
+func (rejectingCloud) Open(_ context.Context, t usecase.RemoteTarget, _ usecase.OpenMode) (usecase.RemoteSession, error) {
+	return nil, domain.ReauthRequired(t.Settings.Kind())
 }

@@ -92,7 +92,7 @@
     if (signingOut) return;
     signingOut = true;
     try {
-      await ConnectionService.SignOut();
+      await ConnectionService.SignOut("yandex_disk");
       form.yandexSignedIn = false;
       form.yandexAccount = "";
     } catch (e) {

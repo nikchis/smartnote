@@ -49,6 +49,7 @@ const (
 	ErrSignInFirst          Key = "error.sign_in_first"
 	ErrCloudNoSpace         Key = "error.cloud.no_space"
 	ErrCloudTooLarge        Key = "error.cloud.too_large"
+	ErrCloudBusy            Key = "error.cloud.busy"
 	ErrCloudStatus          Key = "error.cloud.status" // {status}, {code}
 	ErrCloudCode            Key = "error.cloud.code"   // {code}
 )
@@ -146,6 +147,7 @@ var en = map[Key]string{ //nolint:gosec // catalog texts, not credentials
 	ErrSignInFirst:          "Sign in to {provider} first, or choose None (local only).",
 	ErrCloudNoSpace:         "Not enough space on {provider}.",
 	ErrCloudTooLarge:        "The file is larger than your {provider} plan allows.",
+	ErrCloudBusy:            "{provider} is busy. Try again later.",
 	ErrCloudStatus:          "{provider} error: {status} {code}.",
 	ErrCloudCode:            "{provider} error: {code}.",
 

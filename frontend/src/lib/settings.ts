@@ -5,6 +5,7 @@ import type { SettingsDTO } from "./api";
 
 export const emptySettings: SettingsDTO = {
   kind: "none", yandexClientId: "", yandexAccount: "", yandexSignedIn: false,
+  googleClientId: "", googleClientSecret: "",
   sshHost: "", sshPort: 0, sshUser: "", sshPassword: "",
   dbHost: "", dbPort: 0, dbName: "", dbUser: "", dbPassword: "",
   syncPhrase: "", trustedFingerprint: "",
