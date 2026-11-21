@@ -208,7 +208,6 @@
     <span class="spacer"></span>
     <span class="credit">{i18n.t("main.license")}</span>
     <span class="credit">© Nikita Chisnikov, 2015-2026</span>
-    <span class="credit">github.com/nikchis/smartnote</span>
     <span class="spacer"></span>
     <button title={i18n.t("main.password")} aria-label={i18n.t("main.password")} onclick={() => (changingPassword = true)}>
       <img src={passwordIcon} alt="" />
@@ -347,10 +346,13 @@
     padding: 0.6rem;
     border: 1px solid var(--border);
   }
+  /* The title never collapses: when the width is short, the date, the length and
+     History wrap to a second line instead of squeezing it. */
   .fields {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.5rem 0.75rem;
   }
   .fields label {
     flex-direction: row;
@@ -359,13 +361,13 @@
     white-space: nowrap;
   }
   .fields .name {
-    flex: 1;
-    min-width: 0;
+    flex: 1 1 18rem;
+    min-width: 16rem;
     color: inherit;
   }
   .name input {
     flex: 1;
-    min-width: 0;
+    min-width: 10rem;
   }
   .updated,
   .length {
@@ -373,7 +375,7 @@
     text-align: center;
   }
   .updated {
-    width: 11rem;
+    width: 10rem;
   }
   .length {
     width: 6rem;
@@ -406,6 +408,7 @@
   }
   .credit {
     padding: 0 0.75rem;
+    white-space: nowrap;
     color: var(--muted);
   }
   .credit + .credit {

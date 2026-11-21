@@ -192,6 +192,11 @@ describe("Main", () => {
     expect(privacy().getAttribute("aria-label")).toBe("Политика конфиденциальности");
   });
 
+  it("has no github link in the bottom bar", () => {
+    expect(target.querySelector("footer")?.textContent).not.toContain("github");
+    expect(target.querySelectorAll("footer .credit").length).toBe(2);
+  });
+
   it("language toggle shows current and switches", async () => {
     expect(toggle().textContent?.trim()).toBe("EN");
     expect(toggle().getAttribute("title")).toBe("Language: English");
