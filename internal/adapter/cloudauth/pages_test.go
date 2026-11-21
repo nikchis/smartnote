@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -217,5 +218,57 @@ func wantNoRequestData(t *testing.T, body string, l *loginURL) {
 		if strings.Contains(body, secret) {
 			t.Errorf("page contains request data %q", secret)
 		}
+	}
+}
+
+func TestPagesSourceNoDashes(t *testing.T) {
+	b, err := os.ReadFile("pages.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, line := range strings.Split(string(b), "\n") {
+		if strings.ContainsAny(line, "\u2013\u2014") {
+			t.Errorf("pages.go:%d has an en or em dash: %s", i+1, line)
+		}
+	}
+}
+
+// The page is in the language of the moment it is shown, not of the moment
+// the sign-in began.
+func TestLoopbackPagesFollowLanguage(t *testing.T) {
+	h := newAuthHarness(t)
+	lang := i18n.NewCurrent(i18n.EN)
+
+	opts := h.options()
+	opts.Lang = lang.Get
+	l := h.begin(h.authorizer(opts), false)
+
+	lang.Set(i18n.RU)
+
+	status, header, body := l.callback(t, "", l.withState("code", fakeAuthCode))
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+
+	if !strings.Contains(body, `<html lang="ru">`) {
+		t.Errorf("page is not marked as Russian")
+	}
+
+	title := i18n.T(i18n.RU, i18n.AuthSignedInTitle, "provider", testProvider().Name)
+	text := i18n.T(i18n.RU, i18n.AuthSignedInText)
+
+	if title == i18n.T(i18n.EN, i18n.AuthSignedInTitle, "provider", testProvider().Name) {
+		t.Fatalf("no Russian title: %q", title)
+	}
+
+	for _, want := range []string{"<h1>" + title + "</h1>", "<p>" + text + "</p>", i18n.T(i18n.RU, i18n.AuthCloseHint)} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+
+	if header.Get("Content-Security-Policy") != pageCSP {
+		t.Errorf("CSP = %q", header.Get("Content-Security-Policy"))
 	}
 }

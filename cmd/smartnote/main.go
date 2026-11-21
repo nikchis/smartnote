@@ -127,7 +127,11 @@ func run(logger *slog.Logger) error {
 
 	app.OnShutdown(finish)
 
-	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger, SavedKind: savedKind(store)}, store, lifecycle, searchParts{
+	// The language of the interface: PrefsService sets it, the sign-in pages
+	// and the file dialogs read it. English until the interface reports it.
+	lang := i18n.NewCurrent(i18n.EN)
+
+	services, err := newServices(wailsui.Env{Ctx: ctx, Log: logger, SavedKind: savedKind(store), Lang: lang}, dataDir, store, lifecycle, searchParts{
 		engine: engine, status: searchStatus, run: searchRun,
 	})
 	if err != nil {
@@ -232,8 +236,9 @@ func savedKind(store *sqlite.Store) func(context.Context) (domain.StorageKind, e
 	}
 }
 
-// newServices wires the use cases over store into the Wails services.
-func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecycle, sp searchParts) ([]application.Service, error) {
+// newServices wires the use cases over store into the Wails services;
+// dataDir keeps the preferences and env.Lang is the language they set.
+func newServices(env wailsui.Env, dataDir string, store *sqlite.Store, lifecycle *wailsui.Lifecycle, sp searchParts) ([]application.Service, error) {
 	// The local storage keeps milliseconds; a finer clock would make a saved
 	// note differ from the one returned to the interface.
 	clock := func() time.Time { return time.Now().UTC().Truncate(time.Millisecond) }
@@ -292,14 +297,10 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		return nil, err
 	}
 
-	// The language of the browser sign-in pages; always English until the
-	// interface language is switchable.
-	lang := i18n.NewCurrent(i18n.EN)
-
 	connection, err := usecase.NewConnection(usecase.ConnectionDeps{
 		Settings: store, Store: store, Tokens: store, Remote: connector,
 		Auth: map[domain.StorageKind]usecase.CloudAuthorizer{
-			domain.KindYandexDisk: cloudauth.NewAuthorizer(yadisk.OAuthProvider(), cloudauth.Options{Lang: lang.Get}),
+			domain.KindYandexDisk: cloudauth.NewAuthorizer(yadisk.OAuthProvider(), cloudauth.Options{Lang: env.Lang.Get}),
 		},
 		Gate: gate, Offer: offer, Changed: syncer.ResetConnection,
 		Builtin: builtin, OpenURL: openBrowser,
@@ -322,6 +323,7 @@ func newServices(env wailsui.Env, store *sqlite.Store, lifecycle *wailsui.Lifecy
 		application.NewService(wailsui.NewKeyService(env, keys, wailsui.WailsFiles{})),
 		application.NewService(wailsui.NewSearchService(env, search, searchStatus)),
 		application.NewService(wailsui.NewAppService(lifecycle)),
+		application.NewService(wailsui.NewPrefsService(env, dataDir)),
 	}, nil
 }
 

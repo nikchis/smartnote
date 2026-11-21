@@ -10,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/nikchis/smartnote/internal/domain"
+	"github.com/nikchis/smartnote/internal/i18n"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
@@ -68,7 +69,7 @@ func (s *KeyService) ImportFromFile(passphrase string) (bool, error) {
 	s.pending = nil
 
 	if data == nil {
-		path, err := s.files.OpenFile("Import SSH private key")
+		path, err := s.files.OpenFile(s.env.text(i18n.DialogImportKey))
 		if err != nil || path == "" {
 			return false, s.env.fail("import ssh key: open dialog", err)
 		}
@@ -115,7 +116,7 @@ func (s *KeyService) ExportPublicToFile() (bool, error) {
 		return false, s.env.fail("export public key: clipboard", err)
 	}
 
-	path, err := s.files.SaveFile("Export SSH public key", "smartnote.pub")
+	path, err := s.files.SaveFile(s.env.text(i18n.DialogExportKey), "smartnote.pub")
 	if err != nil || path == "" {
 		return false, s.env.fail("export public key: save dialog", err)
 	}

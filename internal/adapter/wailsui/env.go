@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nikchis/smartnote/internal/domain"
+	"github.com/nikchis/smartnote/internal/i18n"
 )
 
 const (
@@ -25,6 +26,20 @@ type Env struct {
 	// SavedKind returns the kind of the saved connection settings; nil means
 	// the default timeout for every operation.
 	SavedKind func(context.Context) (domain.StorageKind, error)
+
+	// Lang is the current language of the interface, which titles the file
+	// dialogs and which PrefsService sets; nil means English.
+	Lang *i18n.Current
+}
+
+// text is the text of k in the current language.
+func (e Env) text(k i18n.Key) string {
+	l := i18n.EN
+	if e.Lang != nil {
+		l = e.Lang.Get()
+	}
+
+	return i18n.T(l, k)
 }
 
 // timeoutFor returns the limit of one operation with the storage of kind.

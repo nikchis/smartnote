@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"strconv"
+	"regexp"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -13,20 +14,26 @@ import (
 	"github.com/nikchis/smartnote/internal/adapter/ssh"
 	"github.com/nikchis/smartnote/internal/applog"
 	"github.com/nikchis/smartnote/internal/domain"
+	"github.com/nikchis/smartnote/internal/i18n"
 	"github.com/nikchis/smartnote/internal/usecase"
 )
 
 // UIError is an error as the interface sees it: a code from spec §3.5, the
-// text to show, and the details some codes carry. The server key itself
-// never goes to the interface, only its fingerprint and address.
+// text to show in each language of the interface, and the details some codes
+// carry. Message is the English text, as in 2.2.2; Messages holds the text
+// in every language, so the interface can redraw it when the language
+// changes (spec §16.4). The technical text of SSH, PostgreSQL and internal
+// errors is the same in every language. The server key itself never goes to
+// the interface, only its fingerprint and address.
 type UIError struct {
-	Code        string `json:"code"`
-	Message     string `json:"message"`
-	Field       string `json:"field,omitempty"`
-	Fingerprint string `json:"fingerprint,omitempty"`
-	Expected    string `json:"expected,omitempty"`
-	Got         string `json:"got,omitempty"`
-	Address     string `json:"address,omitempty"` // host:port that offered the key
+	Code        string               `json:"code"`
+	Message     string               `json:"message"`
+	Messages    map[i18n.Lang]string `json:"messages"`
+	Field       string               `json:"field,omitempty"`
+	Fingerprint string               `json:"fingerprint,omitempty"`
+	Expected    string               `json:"expected,omitempty"`
+	Got         string               `json:"got,omitempty"`
+	Address     string               `json:"address,omitempty"` // host:port that offered the key
 }
 
 // Error returns e as a JSON object. Wails rejects the call's promise with an
@@ -72,44 +79,41 @@ const (
 	codeSearchUnavailable = "search_unavailable"
 )
 
-// Messages of the codes whose text the spec does not fix.
-const (
-	msgCorruptStorage        = "Local storage is damaged and cannot be opened."
-	msgWrongSyncPhrase       = "The sync phrase does not match the remote storage."
-	msgNotConnected          = "Remote storage is not configured."
-	msgKeyPassphraseRequired = "The key is protected with a passphrase." //nolint:gosec // a message, not a credential
-	msgBusy                  = "Another operation with the remote storage is in progress."
-	msgTimeout               = "The operation timed out."
-	msgCanceled              = "The operation was canceled."
-	msgLoopbackUnavailable   = "The local sign-in address is unavailable. Enter the code manually."
-	msgSignInFirst           = "Sign in to Yandex Disk first, or choose None (local only)."
-)
+// argProvider is the placeholder of the name of a cloud in the texts.
+const argProvider = "provider"
 
-// fieldYandexAccount is the field of the validation error of a Yandex Disk
-// storage without a sign-in; the interface marks the account block.
-const fieldYandexAccount = "yandex_account"
+// The fields of the validation errors of a cloud storage without a sign-in;
+// the interface marks the account block.
+var accountFields = map[string]domain.StorageKind{
+	"yandex_account": domain.KindYandexDisk,
+	"google_account": domain.KindGoogleDrive,
+}
 
-// sentinels maps domain and use case errors to their code and text, in the order they are checked.
+// sentinels maps domain and use case errors to their code and the catalog
+// key of their text, in the order they are checked.
 var sentinels = []struct {
-	err           error
-	code, message string
+	err  error
+	code string
+	key  i18n.Key
+	args []any
 }{
-	{domain.ErrWrongPassword, codeWrongPassword, "Access to local storage denied."},
-	{domain.ErrCorruptStorage, codeCorruptStorage, msgCorruptStorage},
-	{domain.ErrUnsupportedFormat, codeUnsupportedFormat, "Data was created by a newer version of Smartnote."},
-	{domain.ErrWrongSyncPhrase, codeWrongSyncPhrase, msgWrongSyncPhrase},
-	{domain.ErrNotConnected, codeNotConnected, msgNotConnected},
-	{domain.ErrRemoteChanged, codeRemoteChanged, "Remote data changed during the operation. Please try again."},
-	{domain.ErrLocalChanged, codeLocalChanged, "Local data changed during the operation. Please try again."},
-	{domain.ErrKeyMissing, codeKeyMissing, "There is no SSH key. Generate or import a key first."},
-	{domain.ErrKeyPassphraseRequired, codeKeyPassphraseRequired, msgKeyPassphraseRequired},
-	{domain.ErrBusy, codeBusy, msgBusy},
-	{domain.ErrReauthRequired, codeReauthRequired, "Sign in to Yandex Disk again."},
-	{domain.ErrRemoteDamaged, codeRemoteDamaged, "Data in the remote storage is damaged."},
-	{domain.ErrRemoteTooLarge, codeRemoteTooLarge, "Notes do not fit into the remote storage (64 MiB)."},
-	{domain.ErrRemoteOutcomeUnknown, codeRemoteOutcomeUnknown, "The result of the backup is unknown. Connect again to check the remote storage."},
-	{domain.ErrLoopbackUnavailable, codeLoopbackUnavailable, msgLoopbackUnavailable},
-	{usecase.ErrSearchUnavailable, codeSearchUnavailable, "Search unavailable"},
+	{err: domain.ErrWrongPassword, code: codeWrongPassword, key: i18n.ErrWrongPassword},
+	{err: domain.ErrCorruptStorage, code: codeCorruptStorage, key: i18n.ErrCorruptStorage},
+	{err: domain.ErrUnsupportedFormat, code: codeUnsupportedFormat, key: i18n.ErrUnsupportedFormat},
+	{err: domain.ErrWrongSyncPhrase, code: codeWrongSyncPhrase, key: i18n.ErrWrongSyncPhrase},
+	{err: domain.ErrNotConnected, code: codeNotConnected, key: i18n.ErrNotConnected},
+	{err: domain.ErrRemoteChanged, code: codeRemoteChanged, key: i18n.ErrRemoteChanged},
+	{err: domain.ErrLocalChanged, code: codeLocalChanged, key: i18n.ErrLocalChanged},
+	{err: domain.ErrKeyMissing, code: codeKeyMissing, key: i18n.ErrKeyMissing},
+	{err: domain.ErrKeyPassphraseRequired, code: codeKeyPassphraseRequired, key: i18n.ErrKeyPassphrase},
+	{err: domain.ErrBusy, code: codeBusy, key: i18n.ErrBusy},
+	// Without the kind in the error, the cloud of 2.2.2.
+	{err: domain.ErrReauthRequired, code: codeReauthRequired, key: i18n.ErrReauthRequired, args: []any{argProvider, storageName(domain.KindYandexDisk)}},
+	{err: domain.ErrRemoteDamaged, code: codeRemoteDamaged, key: i18n.ErrRemoteDamaged},
+	{err: domain.ErrRemoteTooLarge, code: codeRemoteTooLarge, key: i18n.ErrRemoteTooLarge},
+	{err: domain.ErrRemoteOutcomeUnknown, code: codeRemoteOutcomeUnknown, key: i18n.ErrRemoteOutcomeUnknown},
+	{err: domain.ErrLoopbackUnavailable, code: codeLoopbackUnavailable, key: i18n.ErrLoopbackUnavailable},
+	{err: usecase.ErrSearchUnavailable, code: codeSearchUnavailable, key: i18n.ErrSearchUnavailable},
 }
 
 // ToUIError converts err into a *UIError by the table of spec §3.5; nil stays
@@ -131,9 +135,9 @@ func classify(err error) *UIError {
 
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return &UIError{Code: codeTimeout, Message: msgTimeout}
+		return newUIError(codeTimeout, texts(i18n.ErrTimeout))
 	case errors.Is(err, context.Canceled):
-		return &UIError{Code: codeCanceled, Message: msgCanceled}
+		return newUIError(codeCanceled, texts(i18n.ErrCanceled))
 	}
 
 	if ve, ok := errors.AsType[*domain.ValidationError](err); ok {
@@ -141,71 +145,199 @@ func classify(err error) *UIError {
 	}
 
 	if hk, ok := errors.AsType[*domain.HostKeyUnknownError](err); ok {
-		return &UIError{Code: codeHostKeyUnknown, Message: hk.Error(), Fingerprint: hk.Fingerprint, Address: hk.Addr}
+		ui := newUIError(codeHostKeyUnknown, texts(i18n.ErrHostKeyUnknown, "fingerprint", hk.Fingerprint))
+		ui.Fingerprint, ui.Address = hk.Fingerprint, hk.Addr
+
+		return ui
 	}
 
 	if hk, ok := errors.AsType[*domain.HostKeyMismatchError](err); ok {
-		return &UIError{Code: codeHostKeyMismatch, Message: hk.Error(), Expected: hk.Expected, Got: hk.Got}
+		ui := newUIError(codeHostKeyMismatch, texts(i18n.ErrHostKeyMismatch, "expected", hk.Expected, "got", hk.Got))
+		ui.Expected, ui.Got = hk.Expected, hk.Got
+
+		return ui
 	}
 
 	if ce, ok := errors.AsType[cloudhttp.CloudError](err); ok {
-		return &UIError{Code: codeCloud, Message: cloudMessage(ce)}
+		return newUIError(codeCloud, cloudTexts(ce))
 	}
 
 	if re, ok := errors.AsType[*domain.ReauthRequiredError](err); ok {
-		return &UIError{Code: codeReauthRequired, Message: "Sign in to " + storageName(re.Kind) + " again."}
+		return newUIError(codeReauthRequired, texts(i18n.ErrReauthRequired, argProvider, storageName(re.Kind)))
 	}
 
 	for _, s := range sentinels {
 		if errors.Is(err, s.err) {
-			return &UIError{Code: s.code, Message: s.message}
+			return newUIError(s.code, texts(s.key, s.args...))
 		}
 	}
 
 	switch {
 	case isSSH(err):
-		return &UIError{Code: codeSSH, Message: err.Error()}
+		return newUIError(codeSSH, technical(err.Error()))
 	case isDatabase(err):
-		return &UIError{Code: codeDatabase, Message: err.Error()}
+		return newUIError(codeDatabase, technical(err.Error()))
 	default:
-		return &UIError{Code: codeInternal, Message: err.Error()}
+		return newUIError(codeInternal, technical(err.Error()))
 	}
 }
 
-// validationError is the UIError of ve: its own text, except for the account
-// of Yandex Disk, whose text tells what to do.
+// newUIError is the UIError of code with the texts m; its message is the
+// English text.
+func newUIError(code string, m map[i18n.Lang]string) *UIError {
+	return &UIError{Code: code, Message: m[i18n.EN], Messages: m}
+}
+
+// localized is the text of every language of the interface, made by text.
+func localized(text func(l i18n.Lang) string) map[i18n.Lang]string {
+	m := make(map[i18n.Lang]string, len(i18n.Langs()))
+	for _, l := range i18n.Langs() {
+		m[l] = text(l)
+	}
+
+	return m
+}
+
+// texts is the text of k in every language, with the pairs of args.
+func texts(k i18n.Key, args ...any) map[i18n.Lang]string {
+	return localized(func(l i18n.Lang) string { return i18n.T(l, k, args...) })
+}
+
+// technical is a text that is the same in every language: the text of a
+// library or of an unexpected error.
+func technical(text string) map[i18n.Lang]string {
+	return localized(func(i18n.Lang) string { return text })
+}
+
+// validationError is the UIError of ve. The account of a cloud has a text
+// that tells what to do. A known field with a known reason is translated;
+// anything else keeps the English text of ve in every language.
 func validationError(ve *domain.ValidationError) *UIError {
-	if ve.Field == fieldYandexAccount {
-		return &UIError{Code: codeValidation, Message: msgSignInFirst, Field: ve.Field}
+	var m map[i18n.Lang]string
+
+	if kind, ok := accountFields[ve.Field]; ok {
+		m = texts(i18n.ErrSignInFirst, argProvider, storageName(kind))
+	} else {
+		m = validationTexts(ve)
 	}
 
-	return &UIError{Code: codeValidation, Message: ve.Error(), Field: ve.Field}
+	ui := newUIError(codeValidation, m)
+	ui.Field = ve.Field
+
+	return ui
 }
 
-// storageName is the name of the cloud in the texts for the user; the kind
-// itself for a cloud without a name here.
+// reasonRules recognize the reasons of the validation errors by the English
+// texts of their keys, which are the texts of domain.ValidationError.
+var reasonRules = compileReasons(
+	i18n.InvalidRequired, i18n.InvalidRequiredShort, i18n.InvalidControl, i18n.InvalidMinChars,
+	i18n.InvalidMaxChars, i18n.InvalidNameTaken, i18n.InvalidConfirm, i18n.InvalidUUID, i18n.InvalidKind,
+	i18n.InvalidNotCloud, i18n.InvalidYandexClientID, i18n.InvalidGoogleClientID, i18n.InvalidClientSecret,
+	i18n.InvalidDBHost, i18n.InvalidPort, i18n.InvalidNotOffered, i18n.InvalidOfferedOther, i18n.InvalidOwnClient,
+	i18n.InvalidKeyTooLarge, i18n.InvalidKeyDSA, i18n.InvalidKeyRSA, i18n.InvalidLanguage,
+)
+
+// reasonRule matches the reason of one key; params name its groups.
+type reasonRule struct {
+	key    i18n.Key
+	re     *regexp.Regexp
+	params []string
+}
+
+// validationPrefix starts the English text of every reason key, as
+// domain.ValidationError.Error starts.
+const validationPrefix = "invalid {field}: "
+
+// placeholder is a {name} of a catalog text.
+var placeholder = regexp.MustCompile(`\{(\w+)\}`)
+
+// compileReasons makes the rule of each key from its English text after
+// validationPrefix: the text itself, each {name} a number.
+func compileReasons(keys ...i18n.Key) []reasonRule {
+	rules := make([]reasonRule, 0, len(keys))
+
+	for _, k := range keys {
+		reason, ok := strings.CutPrefix(i18n.T(i18n.EN, k), validationPrefix)
+		if !ok {
+			panic("wailsui: the English text of " + string(k) + " does not start with " + validationPrefix)
+		}
+
+		var (
+			pattern strings.Builder
+			params  []string
+			last    int
+		)
+
+		pattern.WriteString("^")
+
+		for _, loc := range placeholder.FindAllStringSubmatchIndex(reason, -1) {
+			pattern.WriteString(regexp.QuoteMeta(reason[last:loc[0]]) + "([0-9]+)")
+			params = append(params, reason[loc[2]:loc[3]])
+			last = loc[1]
+		}
+
+		pattern.WriteString(regexp.QuoteMeta(reason[last:]) + "$")
+		rules = append(rules, reasonRule{key: k, re: regexp.MustCompile(pattern.String()), params: params})
+	}
+
+	return rules
+}
+
+// validationTexts is the text of ve in every language: the text of its
+// reason with the name of its field, or the English text of ve in every
+// language for an unknown field or reason.
+func validationTexts(ve *domain.ValidationError) map[i18n.Lang]string {
+	field := i18n.Key("field." + ve.Field)
+	if i18n.T(i18n.EN, field) != ve.Field {
+		return technical(ve.Error())
+	}
+
+	for _, r := range reasonRules {
+		m := r.re.FindStringSubmatch(ve.Reason)
+		if m == nil {
+			continue
+		}
+
+		args := make([]any, 0, 2*len(r.params))
+		for i, name := range r.params {
+			args = append(args, name, m[i+1])
+		}
+
+		return localized(func(l i18n.Lang) string {
+			return i18n.T(l, r.key, append([]any{"field", i18n.T(l, field)}, args...)...)
+		})
+	}
+
+	return technical(ve.Error())
+}
+
+// storageName is the name of the cloud in the texts for the user, the same in
+// every language; the kind itself for a cloud without a name here.
 func storageName(k domain.StorageKind) string {
-	if k == domain.KindYandexDisk {
+	switch k {
+	case domain.KindYandexDisk:
 		return "Yandex Disk"
+	case domain.KindGoogleDrive:
+		return "Google Drive"
+	default:
+		return string(k)
 	}
-
-	return string(k)
 }
 
-// cloudMessage is the text of a cloud error: the known reasons, otherwise the
+// cloudTexts is the text of a cloud error: the known reasons, otherwise the
 // status, if any, and the code from the closed list of the provider.
-func cloudMessage(ce cloudhttp.CloudError) string {
+func cloudTexts(ce cloudhttp.CloudError) map[i18n.Lang]string {
 	name := storageName(ce.Provider)
 
 	switch {
 	case ce.Reason == cloudhttp.ReasonNoSpace:
-		return "Not enough space on " + name + "."
+		return texts(i18n.ErrCloudNoSpace, argProvider, name)
 	case ce.Reason == cloudhttp.ReasonTooLarge:
-		return "The file is larger than your " + name + " plan allows."
+		return texts(i18n.ErrCloudTooLarge, argProvider, name)
 	case ce.Status == 0:
-		return name + " error: " + ce.Code + "."
+		return texts(i18n.ErrCloudCode, argProvider, name, "code", ce.Code)
 	default:
-		return name + " error: " + strconv.Itoa(ce.Status) + " " + ce.Code + "."
+		return texts(i18n.ErrCloudStatus, argProvider, name, "status", ce.Status, "code", ce.Code)
 	}
 }
 

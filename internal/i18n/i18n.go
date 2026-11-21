@@ -19,12 +19,25 @@ const (
 	RU Lang = "ru"
 )
 
+// Langs returns the languages of the interface, English first.
+func Langs() []Lang { return []Lang{EN, RU} }
+
+// Parse returns the language named s, exactly "en" or "ru".
+func Parse(s string) (Lang, bool) {
+	switch l := Lang(s); l {
+	case EN, RU:
+		return l, true
+	default:
+		return "", false
+	}
+}
+
 // Key names a text of a catalog.
 type Key string
 
 // catalogs holds the text of each key per language. A language without a
 // catalog, or a key without a translation, falls back to English.
-var catalogs = map[Lang]map[Key]string{EN: en}
+var catalogs = map[Lang]map[Key]string{EN: en, RU: ru}
 
 // T returns the text of k in l. Each pair of args (a name and a value)
 // replaces {name} in the text. A language without a catalog or a key without
