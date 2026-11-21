@@ -339,29 +339,33 @@ func TestEndToEndCreateRaceEqualTimes(t *testing.T) {
 
 	meetingPuts(t, d)
 
-	var commits atomic.Int32
+	var commits, lists atomic.Int32
 
-	both := make(chan struct{})
+	// Pin the interleaving of the yield: both lists after the creations are
+	// served before either device deletes its file, and both re-reads after
+	// the deletions are served once both files are deleted. A device cannot
+	// list again before its list is answered, so the first two lists after
+	// the commits are the lists of the creations and the next two are the
+	// re-reads, each issued after the deletion of its device.
+	afterCreate, afterDelete := newMeeting(t, "lists after the creations"), newMeeting(t, "re-reads")
 
 	d.set(func(d *fakeDrive) {
 		d.sameCreated = true
 		d.onPut = func(*fakeDrive, *fakeSession) putAnswer {
-			if commits.Add(1) == 2 {
-				close(both)
-			}
+			commits.Add(1)
 
 			return putAnswer{}
 		}
-		// A list after a creation waits for the other device's file.
 		d.beforeList = func() {
 			if commits.Load() == 0 {
 				return
 			}
 
-			select {
-			case <-both:
-			case <-time.After(5 * time.Second):
-				t.Error("the second creation did not come")
+			switch n := lists.Add(1); {
+			case n <= 2:
+				afterCreate.arrive()
+			case n <= 4:
+				afterDelete.arrive()
 			}
 		}
 	})
@@ -410,6 +414,32 @@ func TestEndToEndCreateRaceEqualTimes(t *testing.T) {
 
 	if got := devs[1].local.content(); !maps.Equal(got, before[1]) {
 		t.Errorf("other device notes = %v, want them untouched", got)
+	}
+}
+
+// meeting blocks the first two callers of arrive until both have come.
+type meeting struct {
+	t    *testing.T
+	what string
+	n    atomic.Int32
+	both chan struct{}
+}
+
+func newMeeting(t *testing.T, what string) *meeting {
+	t.Helper()
+
+	return &meeting{t: t, what: what, both: make(chan struct{})}
+}
+
+func (m *meeting) arrive() {
+	if m.n.Add(1) == 2 {
+		close(m.both)
+	}
+
+	select {
+	case <-m.both:
+	case <-time.After(5 * time.Second):
+		m.t.Errorf("the second of %s did not come", m.what)
 	}
 }
 
